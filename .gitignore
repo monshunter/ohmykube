@@ -1,0 +1,100 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+sdist/
+var/
+parts/
+inst/
+bin/.buildout/
+lib*/
+buildout.cfg
+*.mo
+*.pot
+*.log
+local/
+*.lock
+
+# Generic VCS files
+.hgignore
+.bzrignore
+
+# Django stuff:
+*.log
+*.pot
+*.mo
+
+# Flask stuff:
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Specific to Windows environments
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Specific to macOS environments
+.DS_Store
+
+# Specific to Linux environments
+*.swp
+.directory
+
+# Virtualenv
+.venv/
+venv/
+env/
+ENV/
+virenv/
+virtualenv/
+virtual-env/
+.virtualenvs/
+
+# Pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Environment variables
+.env
+.flaskenv
+
+# Other common files
+*.sublime-workspace
+*.sublime-project
+*.mine
+# extra
+localk8s
+/ohmykube
