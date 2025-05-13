@@ -61,13 +61,13 @@ var upCmd = &cobra.Command{
 func init() {
 	// 添加命令行参数
 	upCmd.Flags().StringVar(&clusterName, "name", "ohmykube", "集群名称")
-	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 0, "工作节点数量")
+	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 2, "工作节点数量")
 	upCmd.Flags().IntVar(&masterMemory, "master-memory", 4096, "Master节点内存(MB)")
 	upCmd.Flags().IntVar(&masterCPU, "master-cpu", 2, "Master节点CPU核心数")
 	upCmd.Flags().IntVar(&workerMemory, "worker-memory", 2048, "Worker节点内存(MB)")
 	upCmd.Flags().IntVar(&workerCPU, "worker-cpu", 2, "Worker节点CPU核心数")
 	upCmd.Flags().IntVar(&masterDisk, "master-disk", 20, "Master节点磁盘大小(GB)")
 	upCmd.Flags().IntVar(&workerDisk, "worker-disk", 20, "Worker节点磁盘大小(GB)")
-	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "1.33.0", "Kubernetes版本")
+	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes版本")
 	upCmd.Flags().StringVar(&vmImage, "vm-image", "24.04", "虚拟机镜像")
 }
