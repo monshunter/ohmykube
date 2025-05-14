@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/monshunter/ohmykube/pkg/environment"
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/multipass"
 	"github.com/monshunter/ohmykube/pkg/ssh"
@@ -122,6 +124,7 @@ type Manager struct {
 	KubeadmConfig   *kubeadm.KubeadmConfig
 	SSHClients      map[string]*ssh.Client
 	ClusterInfo     *ClusterInfo
+	InitOptions     environment.InitOptions
 }
 
 // NewManager 创建新的集群管理器
@@ -168,7 +171,13 @@ func NewManager(config *ClusterConfig) (*Manager, error) {
 		KubeadmConfig:   kubeadmCfg,
 		SSHClients:      make(map[string]*ssh.Client),
 		ClusterInfo:     clusterInfo,
+		InitOptions:     environment.DefaultInitOptions(),
 	}, nil
+}
+
+// SetInitOptions 设置环境初始化选项
+func (m *Manager) SetInitOptions(options environment.InitOptions) {
+	m.InitOptions = options
 }
 
 // GetNodeIP 获取节点IP地址
@@ -349,29 +358,27 @@ func (m *Manager) RunSSHCommand(nodeName, command string) (string, error) {
 func (m *Manager) CreateCluster() error {
 	fmt.Println("开始创建 Kubernetes 集群...")
 
-	// 1. 创建 master 节点
-	fmt.Println("创建 Master 节点...")
-	err := m.CreateMasterNode()
+	// 1. 创建所有节点（并行）
+	fmt.Println("创建集群节点...")
+	err := m.CreateClusterNodes()
 	if err != nil {
-		return fmt.Errorf("创建 Master 节点失败: %w", err)
+		return fmt.Errorf("创建集群节点失败: %w", err)
 	}
 
-	// 2. 创建 worker 节点
-	fmt.Println("创建 Worker 节点...")
-	err = m.CreateWorkerNodes()
-	if err != nil {
-		return fmt.Errorf("创建 Worker 节点失败: %w", err)
-	}
-
-	// 3. 更新集群信息
+	// 2. 更新集群信息
 	fmt.Println("获取集群节点信息...")
 	err = m.UpdateClusterInfo()
 	if err != nil {
 		return fmt.Errorf("更新集群信息失败: %w", err)
 	}
-	return nil
+
 	fmt.Println("使用root用户通过SSH连接节点...")
 
+	// 3. 初始化环境
+	err = m.InitializeEnvironment()
+	if err != nil {
+		return fmt.Errorf("初始化环境失败: %w", err)
+	}
 	// 4. 配置 master 节点
 	fmt.Println("配置 Kubernetes Master 节点...")
 	joinCommand, err := m.InitializeMaster()
@@ -421,49 +428,70 @@ func (m *Manager) CreateCluster() error {
 	return nil
 }
 
-// DeleteCluster 删除集群
-func (m *Manager) DeleteCluster() error {
-	fmt.Println("正在删除 Kubernetes 集群...")
+// CreateClusterNodes 并行创建集群所有节点（master和worker）
+func (m *Manager) CreateClusterNodes() error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(m.Config.Workers)+1) // 为所有节点（包括master）创建错误通道
 
-	// 列出所有虚拟机
-	vms, err := m.MultipassClient.ListVMs(m.Config.Name + "-")
-	if err != nil {
-		return fmt.Errorf("列出虚拟机失败: %w", err)
+	// 创建一个包含所有节点配置的切片
+	allNodes := make([]struct {
+		name   string
+		cpu    string
+		memory string
+		disk   string
+	}, 0, len(m.Config.Workers)+1)
+
+	// 添加master节点配置
+	allNodes = append(allNodes, struct {
+		name   string
+		cpu    string
+		memory string
+		disk   string
+	}{
+		name:   m.Config.Master.Name,
+		cpu:    strconv.Itoa(m.Config.Master.CPU),
+		memory: strconv.Itoa(m.Config.Master.Memory) + "M",
+		disk:   strconv.Itoa(m.Config.Master.Disk) + "G",
+	})
+
+	// 添加worker节点配置
+	for i := range m.Config.Workers {
+		allNodes = append(allNodes, struct {
+			name   string
+			cpu    string
+			memory string
+			disk   string
+		}{
+			name:   m.Config.Workers[i].Name,
+			cpu:    strconv.Itoa(m.Config.Workers[i].CPU),
+			memory: strconv.Itoa(m.Config.Workers[i].Memory) + "M",
+			disk:   strconv.Itoa(m.Config.Workers[i].Disk) + "G",
+		})
 	}
 
-	// 找到集群相关的虚拟机并删除
-	prefix := m.Config.Prefix()
-	for _, vm := range vms {
-		if strings.HasPrefix(vm, prefix) {
-			fmt.Printf("删除节点: %s\n", vm)
-			// 关闭SSH连接
-			if client, ok := m.SSHClients[vm]; ok {
-				client.Close()
-				delete(m.SSHClients, vm)
+	// 并行创建所有节点
+	for _, node := range allNodes {
+		wg.Add(1)
+		go func(nodeName, cpus, memory, disk string) {
+			defer wg.Done()
+			fmt.Printf("创建节点: %s\n", nodeName)
+			if err := m.MultipassClient.CreateVM(nodeName, cpus, memory, disk); err != nil {
+				errChan <- fmt.Errorf("创建节点 %s 失败: %w", nodeName, err)
 			}
+		}(node.name, node.cpu, node.memory, node.disk)
+	}
 
-			err := m.MultipassClient.DeleteVM(vm)
-			if err != nil {
-				fmt.Printf("警告: 删除节点 %s 失败: %v\n", vm, err)
-			}
+	// 等待所有节点创建完成
+	wg.Wait()
+	close(errChan)
+
+	// 检查是否有错误发生
+	for err := range errChan {
+		if err != nil {
+			return err
 		}
 	}
 
-	// 删除 kubeconfig
-	kubeDir := filepath.Join(os.Getenv("HOME"), ".kube")
-	ohmykubeConfig := filepath.Join(kubeDir, m.Config.Name+"-config")
-	if _, err := os.Stat(ohmykubeConfig); err == nil {
-		os.Remove(ohmykubeConfig)
-	}
-
-	// 删除集群信息文件
-	homeDir, _ := os.UserHomeDir()
-	clusterYaml := filepath.Join(homeDir, ".ohmykube", "cluster.yaml")
-	if _, err := os.Stat(clusterYaml); err == nil {
-		os.Remove(clusterYaml)
-	}
-
-	fmt.Println("集群删除完成！")
 	return nil
 }
 
@@ -490,6 +518,24 @@ func (m *Manager) CreateWorkerNodes() error {
 			return fmt.Errorf("创建 Worker 节点 %s 失败: %w", nodeName, err)
 		}
 	}
+	return nil
+}
+
+func (m *Manager) InitializeEnvironment() error {
+	// 将所有节点名称收集到一个切片中
+	nodeNames := []string{m.Config.Master.Name}
+	for _, worker := range m.Config.Workers {
+		nodeNames = append(nodeNames, worker.Name)
+	}
+
+	// 使用并行批量初始化器，支持并行初始化多个节点
+	batchInitializer := environment.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
+
+	// 使用并发限制执行初始化（限制为3个节点同时初始化，避免资源竞争）
+	if err := batchInitializer.InitializeWithConcurrencyLimit(3); err != nil {
+		return fmt.Errorf("初始化环境失败: %w", err)
+	}
+
 	return nil
 }
 
@@ -701,60 +747,16 @@ func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
 		return fmt.Errorf("创建节点 %s 失败: %w", nodeName, err)
 	}
 
-	// 安装必要组件
-	installCmd := `
-sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates curl git
-
-# 添加 Kubernetes 源
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-
-sudo apt-get update
-sudo apt-get install -y kubelet=1.28.0-1.1 kubeadm=1.28.0-1.1 kubectl=1.28.0-1.1
-sudo apt-mark hold kubelet kubeadm kubectl
-
-# 安装 containerd
-sudo apt-get install -y containerd
-
-# 配置 containerd 使用 systemd cgroup 驱动
-sudo mkdir -p /etc/containerd
-containerd config default | sudo tee /etc/containerd/config.toml
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-sudo systemctl restart containerd
-
-# 禁用 swap
-sudo swapoff -a
-sudo sed -i '/swap/d' /etc/fstab
-
-# 允许 iptables 查看桥接流量
-cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
-
-sudo modprobe overlay
-sudo modprobe br_netfilter
-
-cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-
-sudo sysctl --system
-`
-
 	// 更新节点信息并获取IP
 	err = m.UpdateClusterInfo()
 	if err != nil {
 		return fmt.Errorf("更新集群信息失败: %w", err)
 	}
 
-	// 通过SSH安装必要组件
-	_, err = m.RunSSHCommand(nodeName, installCmd)
-	if err != nil {
-		return fmt.Errorf("在节点 %s 上安装 Kubernetes 组件失败: %w", nodeName, err)
+	// 使用初始化器来设置环境
+	initializer := environment.NewInitializerWithOptions(m, nodeName, m.InitOptions)
+	if err := initializer.Initialize(); err != nil {
+		return fmt.Errorf("初始化节点 %s 环境失败: %w", nodeName, err)
 	}
 
 	// 获取 join 命令
@@ -843,5 +845,51 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 	}
 
 	fmt.Printf("节点 %s 已成功删除！\n", nodeName)
+	return nil
+}
+
+// DeleteCluster 删除集群
+func (m *Manager) DeleteCluster() error {
+	fmt.Println("正在删除 Kubernetes 集群...")
+
+	// 列出所有虚拟机
+	vms, err := m.MultipassClient.ListVMs(m.Config.Name + "-")
+	if err != nil {
+		return fmt.Errorf("列出虚拟机失败: %w", err)
+	}
+
+	// 找到集群相关的虚拟机并删除
+	prefix := m.Config.Prefix()
+	for _, vm := range vms {
+		if strings.HasPrefix(vm, prefix) {
+			fmt.Printf("删除节点: %s\n", vm)
+			// 关闭SSH连接
+			if client, ok := m.SSHClients[vm]; ok {
+				client.Close()
+				delete(m.SSHClients, vm)
+			}
+
+			err := m.MultipassClient.DeleteVM(vm)
+			if err != nil {
+				fmt.Printf("警告: 删除节点 %s 失败: %v\n", vm, err)
+			}
+		}
+	}
+
+	// 删除 kubeconfig
+	kubeDir := filepath.Join(os.Getenv("HOME"), ".kube")
+	ohmykubeConfig := filepath.Join(kubeDir, m.Config.Name+"-config")
+	if _, err := os.Stat(ohmykubeConfig); err == nil {
+		os.Remove(ohmykubeConfig)
+	}
+
+	// 删除集群信息文件
+	homeDir, _ := os.UserHomeDir()
+	clusterYaml := filepath.Join(homeDir, ".ohmykube", "cluster.yaml")
+	if _, err := os.Stat(clusterYaml); err == nil {
+		os.Remove(clusterYaml)
+	}
+
+	fmt.Println("集群删除完成！")
 	return nil
 }

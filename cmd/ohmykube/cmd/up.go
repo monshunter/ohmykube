@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/environment"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +18,8 @@ var (
 	masterDisk   int
 	workerDisk   int
 	vmImage      string
+	proxyMode    string
+	enableSwap   bool
 )
 
 var upCmd = &cobra.Command{
@@ -47,11 +50,23 @@ var upCmd = &cobra.Command{
 				Disk:   workerDisk,
 			})
 		config.K8sVersion = k8sVersion
-		// 创建集群管理器
+
+		// 创建环境初始化选项
+		enableIPVS := proxyMode == "ipvs"
+		initOptions := environment.InitOptions{
+			DisableSwap:      !enableSwap,  // 如果enableSwap为true，则DisableSwap为false
+			EnableIPVS:       enableIPVS,   // 当proxyMode为ipvs时启用IPVS
+			ContainerRuntime: "containerd", // 默认使用containerd
+		}
+
+		// 创建集群管理器并传递选项
 		manager, err := cluster.NewManager(config)
 		if err != nil {
 			return err
 		}
+
+		// 设置环境初始化选项
+		manager.SetInitOptions(initOptions)
 
 		// 创建集群
 		return manager.CreateCluster()
@@ -70,4 +85,6 @@ func init() {
 	upCmd.Flags().IntVar(&workerDisk, "worker-disk", 20, "Worker节点磁盘大小(GB)")
 	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes版本")
 	upCmd.Flags().StringVar(&vmImage, "vm-image", "24.04", "虚拟机镜像")
+	upCmd.Flags().StringVar(&proxyMode, "proxy-mode", "ipvs", "代理模式 (iptables或ipvs)")
+	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "启用Swap (仅适用于K8s 1.28+)")
 }
