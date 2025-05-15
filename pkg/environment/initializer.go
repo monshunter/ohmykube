@@ -53,7 +53,7 @@ fi`
 		}
 
 		// 如果不再锁定，则继续
-		if strings.TrimSpace(output) == "unlocked" {
+		if attempt > 1 && strings.TrimSpace(output) == "unlocked" {
 			fmt.Printf("在节点 %s 上apt锁已释放，继续安装\n", i.nodeName)
 			return nil
 		}

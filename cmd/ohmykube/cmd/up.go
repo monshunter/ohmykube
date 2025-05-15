@@ -22,15 +22,16 @@ var (
 	enableSwap         bool
 	kubeadmConfigPath  string
 	cniType            string
+	csiType            string
 	downloadKubeconfig bool
 )
 
 var upCmd = &cobra.Command{
 	Use:   "up",
-	Short: "创建一个 k8s 集群 (包含CNI, Rook, MetalLB)",
+	Short: "创建一个 k8s 集群 (包含CNI, CSI, MetalLB)",
 	Long: `创建一个基于虚拟机的 k8s 集群，包含以下组件：
 - 可选的CNI: flannel(默认) 或 cilium
-- Rook-Ceph 作为 CSI 
+- 可选的CSI: local-path-provisioner(默认) 或 rook-ceph
 - MetalLB 作为 LoadBalancer 实现`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sshConfig, err := cluster.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
@@ -74,6 +75,9 @@ var upCmd = &cobra.Command{
 		// 设置CNI类型
 		manager.SetCNIType(cniType)
 
+		// 设置CSI类型
+		manager.SetCSIType(csiType)
+
 		// 设置是否下载kubeconfig
 		manager.SetDownloadKubeconfig(downloadKubeconfig)
 
@@ -103,5 +107,6 @@ func init() {
 	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "启用Swap (仅适用于K8s 1.28+)")
 	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "自定义kubeadm配置文件路径")
 	upCmd.Flags().StringVar(&cniType, "cni", "flannel", "要安装的CNI类型 (flannel, cilium, none)")
+	upCmd.Flags().StringVar(&csiType, "csi", "local-path-provisioner", "要安装的CSI类型 (local-path-provisioner, rook-ceph, none)")
 	upCmd.Flags().BoolVar(&downloadKubeconfig, "download-kubeconfig", true, "将kubeconfig下载到本地~/.kube目录")
 }

@@ -127,6 +127,7 @@ type Manager struct {
 	ClusterInfo        *ClusterInfo
 	InitOptions        environment.InitOptions
 	CNIType            string // 使用的CNI类型，默认为flannel
+	CSIType            string // 使用的CSI类型，默认为local-path-provisioner
 	DownloadKubeconfig bool   // 是否将kubeconfig下载到本地
 }
 
@@ -173,8 +174,9 @@ func NewManager(config *ClusterConfig) (*Manager, error) {
 		SSHClients:         make(map[string]*ssh.Client),
 		ClusterInfo:        clusterInfo,
 		InitOptions:        environment.DefaultInitOptions(),
-		CNIType:            "flannel", // 默认使用flannel
-		DownloadKubeconfig: true,      // 默认下载kubeconfig
+		CNIType:            "flannel",                // 默认使用flannel
+		CSIType:            "local-path-provisioner", // 默认使用local-path-provisioner
+		DownloadKubeconfig: true,                     // 默认下载kubeconfig
 	}
 
 	// 稍后在需要使用时创建SSH客户端和KubeadmConfig
@@ -367,6 +369,11 @@ func (m *Manager) SetCNIType(cniType string) {
 	m.CNIType = cniType
 }
 
+// SetCSIType 设置CSI类型
+func (m *Manager) SetCSIType(csiType string) {
+	m.CSIType = csiType
+}
+
 // SetDownloadKubeconfig 设置是否下载kubeconfig到本地
 func (m *Manager) SetDownloadKubeconfig(download bool) {
 	m.DownloadKubeconfig = download
@@ -438,19 +445,23 @@ func (m *Manager) CreateCluster() error {
 		fmt.Println("跳过CNI安装...")
 	}
 
-	// 7. 安装 CSI (Rook-Ceph)
-	fmt.Println("安装 Rook-Ceph CSI...")
-	err = m.InstallCSI()
-	if err != nil {
-		return fmt.Errorf("安装 CSI 失败: %w", err)
+	// 7. 安装 CSI
+	if m.CSIType != "none" {
+		fmt.Printf("安装 %s CSI...\n", m.CSIType)
+		err = m.InstallCSI()
+		if err != nil {
+			return fmt.Errorf("安装 CSI 失败: %w", err)
+		}
+	} else {
+		fmt.Println("跳过CSI安装...")
 	}
 
-	// 8. 安装 MetalLB
-	fmt.Println("安装 MetalLB LoadBalancer...")
-	err = m.InstallLoadBalancer()
-	if err != nil {
-		return fmt.Errorf("安装 LoadBalancer 失败: %w", err)
-	}
+	// // 8. 安装 MetalLB
+	// fmt.Println("安装 MetalLB LoadBalancer...")
+	// err = m.InstallLoadBalancer()
+	// if err != nil {
+	// 	return fmt.Errorf("安装 LoadBalancer 失败: %w", err)
+	// }
 
 	// 9. 下载 kubeconfig 到本地 (可选步骤)
 	var kubeconfigPath string
@@ -753,9 +764,21 @@ kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=
 	return nil
 }
 
-// InstallCSI 安装 CSI (Rook-Ceph)
+// InstallCSI 安装 CSI
 func (m *Manager) InstallCSI() error {
-	rookCmd := `
+	// 确保master节点的SSH客户端已创建
+	_, ok := m.SSHClients[m.Config.Master.Name]
+	if !ok {
+		_, err := m.CreateSSHClient(m.Config.Master.Name)
+		if err != nil {
+			return fmt.Errorf("为 Master 节点创建 SSH 客户端失败: %w", err)
+		}
+	}
+
+	switch m.CSIType {
+	case "rook-ceph":
+		// 安装 Rook-Ceph CSI
+		rookCmd := `
 git clone --single-branch --branch v1.12.9 https://github.com/rook/rook.git
 cd rook/deploy/examples
 kubectl create -f crds.yaml
@@ -763,10 +786,37 @@ kubectl create -f common.yaml
 kubectl create -f operator.yaml
 kubectl create -f cluster.yaml
 `
-	_, err := m.RunSSHCommand(m.Config.Master.Name, rookCmd)
-	if err != nil {
-		return fmt.Errorf("安装 Rook-Ceph CSI 失败: %w", err)
+		_, err := m.RunSSHCommand(m.Config.Master.Name, rookCmd)
+		if err != nil {
+			return fmt.Errorf("安装 Rook-Ceph CSI 失败: %w", err)
+		}
+
+	case "local-path-provisioner":
+		// 安装 local-path-provisioner
+		localPathCmd := `
+kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+`
+		_, err := m.RunSSHCommand(m.Config.Master.Name, localPathCmd)
+		if err != nil {
+			return fmt.Errorf("安装 local-path-provisioner 失败: %w", err)
+		}
+
+		// 将 local-path 设置为默认存储类
+		defaultStorageClassCmd := `
+kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+`
+		_, err = m.RunSSHCommand(m.Config.Master.Name, defaultStorageClassCmd)
+		if err != nil {
+			return fmt.Errorf("将 local-path 设置为默认存储类失败: %w", err)
+		}
+
+	case "none":
+		return nil
+
+	default:
+		return fmt.Errorf("不支持的 CSI 类型: %s", m.CSIType)
 	}
+
 	return nil
 }
 
