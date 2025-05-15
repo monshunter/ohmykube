@@ -2,8 +2,10 @@ package environment
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ParallelBatchInitializer 并行批量初始化器
@@ -90,9 +92,16 @@ func (b *ParallelBatchInitializer) InitializeWithConcurrencyLimitAndResults(maxC
 	var wg sync.WaitGroup
 	resultChan := make(chan NodeInitResult, len(b.nodeNames))
 
+	// 引入小的随机延迟，避免多个节点同时启动apt操作
+	// 注意：Go 1.20+不再需要手动调用rand.Seed
+
 	for _, nodeName := range b.nodeNames {
 		wg.Add(1)
 		go func(node string) {
+			// 在启动初始化前随机等待一段时间，错开多个节点的启动时间
+			randomDelay := time.Duration(rand.Intn(3000)) * time.Millisecond
+			time.Sleep(randomDelay)
+
 			// 获取并发槽
 			semaphore <- struct{}{}
 			defer func() {

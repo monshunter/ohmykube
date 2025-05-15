@@ -14,6 +14,7 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/environment"
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
+	"github.com/monshunter/ohmykube/pkg/kubeconfig"
 	"github.com/monshunter/ohmykube/pkg/multipass"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
@@ -119,12 +120,14 @@ func (c *ClusterConfig) Prefix() string {
 
 // Manager 集群管理器
 type Manager struct {
-	Config          *ClusterConfig
-	MultipassClient *multipass.Client
-	KubeadmConfig   *kubeadm.KubeadmConfig
-	SSHClients      map[string]*ssh.Client
-	ClusterInfo     *ClusterInfo
-	InitOptions     environment.InitOptions
+	Config             *ClusterConfig
+	MultipassClient    *multipass.Client
+	KubeadmConfig      *kubeadm.KubeadmConfig
+	SSHClients         map[string]*ssh.Client
+	ClusterInfo        *ClusterInfo
+	InitOptions        environment.InitOptions
+	CNIType            string // 使用的CNI类型，默认为flannel
+	DownloadKubeconfig bool   // 是否将kubeconfig下载到本地
 }
 
 // NewManager 创建新的集群管理器
@@ -134,8 +137,7 @@ func NewManager(config *ClusterConfig) (*Manager, error) {
 		return nil, fmt.Errorf("创建 Multipass 客户端失败: %w", err)
 	}
 
-	kubeadmCfg := kubeadm.NewKubeadmConfig(mpClient, config.K8sVersion, config.Master.Name)
-
+	// 创建集群信息对象
 	clusterInfo := &ClusterInfo{
 		Name:       config.Name,
 		K8sVersion: config.K8sVersion,
@@ -165,14 +167,20 @@ func NewManager(config *ClusterConfig) (*Manager, error) {
 		}
 	}
 
-	return &Manager{
-		Config:          config,
-		MultipassClient: mpClient,
-		KubeadmConfig:   kubeadmCfg,
-		SSHClients:      make(map[string]*ssh.Client),
-		ClusterInfo:     clusterInfo,
-		InitOptions:     environment.DefaultInitOptions(),
-	}, nil
+	manager := &Manager{
+		Config:             config,
+		MultipassClient:    mpClient,
+		SSHClients:         make(map[string]*ssh.Client),
+		ClusterInfo:        clusterInfo,
+		InitOptions:        environment.DefaultInitOptions(),
+		CNIType:            "flannel", // 默认使用flannel
+		DownloadKubeconfig: true,      // 默认下载kubeconfig
+	}
+
+	// 稍后在需要使用时创建SSH客户端和KubeadmConfig
+	// KubeadmConfig将在初始化Master节点时设置
+
+	return manager, nil
 }
 
 // SetInitOptions 设置环境初始化选项
@@ -268,7 +276,7 @@ func (m *Manager) UpdateClusterInfo() error {
 
 			// 等待Worker节点SSH服务就绪
 			if err := m.WaitForSSHReady(workerIP, m.ClusterInfo.Workers[i].SSHPort, 10); err != nil {
-				return fmt.Errorf("Worker节点 %s SSH服务未就绪: %w", m.Config.Workers[i].Name, err)
+				return fmt.Errorf("worker节点 %s SSH服务未就绪: %w", m.Config.Workers[i].Name, err)
 			}
 		}
 	}
@@ -354,6 +362,32 @@ func (m *Manager) RunSSHCommand(nodeName, command string) (string, error) {
 	return client.RunCommand(command)
 }
 
+// SetCNIType 设置CNI类型
+func (m *Manager) SetCNIType(cniType string) {
+	m.CNIType = cniType
+}
+
+// SetDownloadKubeconfig 设置是否下载kubeconfig到本地
+func (m *Manager) SetDownloadKubeconfig(download bool) {
+	m.DownloadKubeconfig = download
+}
+
+// SetupKubeconfig 配置本地 kubeconfig
+func (m *Manager) SetupKubeconfig() (string, error) {
+	// 获取Master节点的SSH客户端
+	sshClient, ok := m.SSHClients[m.Config.Master.Name]
+	if !ok {
+		var err error
+		sshClient, err = m.CreateSSHClient(m.Config.Master.Name)
+		if err != nil {
+			return "", fmt.Errorf("创建Master节点SSH客户端失败: %w", err)
+		}
+	}
+
+	// 使用统一的kubeconfig下载逻辑
+	return kubeconfig.DownloadToLocal(sshClient, m.Config.Name, "")
+}
+
 // CreateCluster 创建一个新的集群
 func (m *Manager) CreateCluster() error {
 	fmt.Println("开始创建 Kubernetes 集群...")
@@ -393,11 +427,15 @@ func (m *Manager) CreateCluster() error {
 		return fmt.Errorf("将 Worker 节点加入集群失败: %w", err)
 	}
 
-	// 6. 安装 CNI (Cilium)
-	fmt.Println("安装 Cilium CNI...")
-	err = m.InstallCNI()
-	if err != nil {
-		return fmt.Errorf("安装 CNI 失败: %w", err)
+	// 6. 安装 CNI
+	if m.CNIType != "none" {
+		fmt.Printf("安装 %s CNI...\n", m.CNIType)
+		err = m.InstallCNI()
+		if err != nil {
+			return fmt.Errorf("安装 CNI 失败: %w", err)
+		}
+	} else {
+		fmt.Println("跳过CNI安装...")
 	}
 
 	// 7. 安装 CSI (Rook-Ceph)
@@ -414,11 +452,21 @@ func (m *Manager) CreateCluster() error {
 		return fmt.Errorf("安装 LoadBalancer 失败: %w", err)
 	}
 
-	// 9. 配置 kubeconfig
-	fmt.Println("配置本地 kubeconfig...")
-	kubeconfigPath, err := m.SetupKubeconfig()
-	if err != nil {
-		return fmt.Errorf("配置 kubeconfig 失败: %w", err)
+	// 9. 下载 kubeconfig 到本地 (可选步骤)
+	var kubeconfigPath string
+	if m.DownloadKubeconfig {
+		fmt.Println("下载 kubeconfig 到本地...")
+		kubeconfigPath, err = m.SetupKubeconfig()
+		if err != nil {
+			return fmt.Errorf("下载 kubeconfig 到本地失败: %w", err)
+		}
+	} else {
+		// 只获取路径但不下载文件
+		kubeconfigPath, err = kubeconfig.GetKubeconfigPath(m.Config.Name)
+		if err != nil {
+			return fmt.Errorf("获取 kubeconfig 路径失败: %w", err)
+		}
+		fmt.Println("跳过 kubeconfig 下载...")
 	}
 
 	fmt.Printf("\n集群创建成功！可以使用以下命令访问集群:\n")
@@ -531,8 +579,8 @@ func (m *Manager) InitializeEnvironment() error {
 	// 使用并行批量初始化器，支持并行初始化多个节点
 	batchInitializer := environment.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
 
-	// 使用并发限制执行初始化（限制为3个节点同时初始化，避免资源竞争）
-	if err := batchInitializer.InitializeWithConcurrencyLimit(3); err != nil {
+	// 使用并发限制执行初始化（限制为2个节点同时初始化，避免apt锁争用）
+	if err := batchInitializer.InitializeWithConcurrencyLimit(2); err != nil {
 		return fmt.Errorf("初始化环境失败: %w", err)
 	}
 
@@ -541,74 +589,17 @@ func (m *Manager) InitializeEnvironment() error {
 
 // InitializeMaster 初始化 master 节点
 func (m *Manager) InitializeMaster() (string, error) {
-	// 使用SSH客户端执行命令
-	// 安装必要组件
-	installCmd := `
-sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates curl git
-
-# 添加 Kubernetes 源
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-
-sudo apt-get update
-sudo apt-get install -y kubelet=1.28.0-1.1 kubeadm=1.28.0-1.1 kubectl=1.28.0-1.1
-sudo apt-mark hold kubelet kubeadm kubectl
-
-# 安装 containerd
-sudo apt-get install -y containerd
-
-# 配置 containerd 使用 systemd cgroup 驱动
-sudo mkdir -p /etc/containerd
-containerd config default | sudo tee /etc/containerd/config.toml
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-sudo systemctl restart containerd
-
-# 禁用 swap
-sudo swapoff -a
-sudo sed -i '/swap/d' /etc/fstab
-
-# 允许 iptables 查看桥接流量
-cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
-
-sudo modprobe overlay
-sudo modprobe br_netfilter
-
-cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-
-sudo sysctl --system
-`
-
-	// 在master节点上执行安装命令
-	_, err := m.RunSSHCommand(m.Config.Master.Name, installCmd)
+	// 为master节点创建SSH客户端
+	sshClient, err := m.CreateSSHClient(m.Config.Master.Name)
 	if err != nil {
-		return "", fmt.Errorf("在 Master 节点上安装 Kubernetes 组件失败: %w", err)
+		return "", fmt.Errorf("为Master节点创建SSH客户端失败: %w", err)
 	}
 
-	// 在worker节点上安装必要组件
-	for i := range m.Config.Workers {
-		_, err := m.RunSSHCommand(m.Config.Workers[i].Name, installCmd)
-		if err != nil {
-			return "", fmt.Errorf("在 Worker 节点 %s 上安装 Kubernetes 组件失败: %w", m.Config.Workers[i].Name, err)
-		}
-	}
+	// 创建KubeadmConfig
+	m.KubeadmConfig = kubeadm.NewKubeadmConfig(sshClient, m.Config.K8sVersion, m.Config.Master.Name)
 
-	// 初始化master节点
-	initCmd := `
-sudo kubeadm init --pod-network-cidr=10.244.0.0/16 --kubernetes-version=` + m.Config.K8sVersion + `
-
-mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
-`
-	_, err = m.RunSSHCommand(m.Config.Master.Name, initCmd)
+	// 使用新的配置系统生成配置文件并初始化Master
+	err = m.KubeadmConfig.InitMaster()
 	if err != nil {
 		return "", fmt.Errorf("初始化 Master 节点失败: %w", err)
 	}
@@ -626,6 +617,7 @@ sudo chown $(id -u):$(id -g) $HOME/.kube/config
 // JoinWorkerNodes 将 worker 节点加入集群
 func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	for i := range m.Config.Workers {
+		// 直接使用RunSSHCommand而不是KubeadmConfig.JoinNode
 		_, err := m.RunSSHCommand(m.Config.Workers[i].Name, joinCommand)
 		if err != nil {
 			return fmt.Errorf("将 Worker 节点 %s 加入集群失败: %w", m.Config.Workers[i].Name, err)
@@ -634,15 +626,130 @@ func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	return nil
 }
 
-// InstallCNI 安装 CNI (Cilium)
+// InstallCNI 安装 CNI
 func (m *Manager) InstallCNI() error {
-	ciliumCmd := `
+	// 确保master节点的SSH客户端已创建
+	_, ok := m.SSHClients[m.Config.Master.Name]
+	if !ok {
+		_, err := m.CreateSSHClient(m.Config.Master.Name)
+		if err != nil {
+			return fmt.Errorf("为 Master 节点创建 SSH 客户端失败: %w", err)
+		}
+	}
+
+	switch m.CNIType {
+	case "cilium":
+		// 安装 Cilium
+		ciliumCmd := `
 kubectl create -f https://raw.githubusercontent.com/cilium/cilium/v1.14/install/kubernetes/quick-install.yaml
 `
-	_, err := m.RunSSHCommand(m.Config.Master.Name, ciliumCmd)
-	if err != nil {
-		return fmt.Errorf("安装 Cilium CNI 失败: %w", err)
+		_, err := m.RunSSHCommand(m.Config.Master.Name, ciliumCmd)
+		if err != nil {
+			return fmt.Errorf("安装 Cilium CNI 失败: %w", err)
+		}
+
+	case "flannel":
+		// 获取集群配置的podCIDR
+		getPodCIDRCmd := `kubectl cluster-info dump | grep -m 1 cluster-cidr | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/[0-9]\+'`
+		podCIDR := "10.244.0.0/16" // 默认值
+		output, err := m.RunSSHCommand(m.Config.Master.Name, getPodCIDRCmd)
+		if err != nil {
+			fmt.Printf("警告: 无法获取集群podCIDR，将使用默认值 %s: %v\n", podCIDR, err)
+		} else {
+			if strings.TrimSpace(output) != "" {
+				podCIDR = strings.TrimSpace(output)
+				fmt.Printf("从集群获取到podCIDR: %s\n", podCIDR)
+			}
+		}
+
+		// 检查Flannel helm仓库是否已添加
+		checkRepoCmd := `helm repo list | grep -q "flannel" && echo "已添加" || echo "未添加"`
+		output, err = m.RunSSHCommand(m.Config.Master.Name, checkRepoCmd)
+		if err != nil {
+			return fmt.Errorf("检查Flannel Helm仓库失败: %w", err)
+		}
+
+		// 如果仓库未添加，则添加
+		if strings.TrimSpace(output) != "已添加" {
+			fmt.Println("添加Flannel Helm仓库...")
+			_, err = m.RunSSHCommand(m.Config.Master.Name, `
+helm repo add flannel https://flannel-io.github.io/flannel/
+helm repo update
+`)
+			if err != nil {
+				return fmt.Errorf("添加Flannel Helm仓库失败: %w", err)
+			}
+		} else {
+			fmt.Println("Flannel Helm仓库已存在，跳过添加")
+		}
+
+		// 检查kube-flannel命名空间是否已存在
+		checkNsCmd := `kubectl get ns kube-flannel -o name 2>/dev/null || echo ""`
+		output, err = m.RunSSHCommand(m.Config.Master.Name, checkNsCmd)
+		if err != nil {
+			return fmt.Errorf("检查kube-flannel命名空间失败: %w", err)
+		}
+
+		// 创建命名空间并设置标签（如果需要）
+		if strings.TrimSpace(output) == "" {
+			fmt.Println("创建kube-flannel命名空间...")
+			_, err = m.RunSSHCommand(m.Config.Master.Name, `
+kubectl create ns kube-flannel
+kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
+`)
+			if err != nil {
+				return fmt.Errorf("创建kube-flannel命名空间失败: %w", err)
+			}
+		} else {
+			// 命名空间存在，只设置标签
+			fmt.Println("kube-flannel命名空间已存在，只更新标签")
+			_, err = m.RunSSHCommand(m.Config.Master.Name, `kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged`)
+			if err != nil {
+				return fmt.Errorf("设置kube-flannel命名空间标签失败: %w", err)
+			}
+		}
+
+		// 检查Flannel是否已安装
+		checkFlannelCmd := `helm ls -n kube-flannel | grep -q "flannel" && echo "已安装" || echo "未安装"`
+		output, err = m.RunSSHCommand(m.Config.Master.Name, checkFlannelCmd)
+		if err != nil {
+			return fmt.Errorf("检查Flannel安装状态失败: %w", err)
+		}
+
+		// 安装或升级Flannel
+		if strings.TrimSpace(output) != "已安装" {
+			fmt.Println("安装Flannel...")
+			helmInstallCmd := fmt.Sprintf(`
+helm install flannel --set podCidr="%s" --namespace kube-flannel flannel/flannel
+`, podCIDR)
+			_, err = m.RunSSHCommand(m.Config.Master.Name, helmInstallCmd)
+			if err != nil {
+				return fmt.Errorf("使用Helm安装Flannel失败: %w", err)
+			}
+		} else {
+			fmt.Println("Flannel已安装，执行升级以更新配置...")
+			helmUpgradeCmd := fmt.Sprintf(`
+helm upgrade flannel --set podCidr="%s" --namespace kube-flannel flannel/flannel
+`, podCIDR)
+			_, err = m.RunSSHCommand(m.Config.Master.Name, helmUpgradeCmd)
+			if err != nil {
+				return fmt.Errorf("使用Helm升级Flannel失败: %w", err)
+			}
+		}
+
+		// 等待Flannel就绪
+		waitCmd := `
+kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=120s
+`
+		_, err = m.RunSSHCommand(m.Config.Master.Name, waitCmd)
+		if err != nil {
+			fmt.Printf("警告: 等待Flannel就绪超时，但将继续执行: %v\n", err)
+		}
+
+	default:
+		return fmt.Errorf("不支持的 CNI 类型: %s", m.CNIType)
 	}
+
 	return nil
 }
 
@@ -683,34 +790,6 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 	}
 
 	return nil
-}
-
-// SetupKubeconfig 配置本地 kubeconfig
-func (m *Manager) SetupKubeconfig() (string, error) {
-	// 获取kubeconfig内容
-	kubeconfigCmd := `cat /etc/kubernetes/admin.conf`
-	kubeconfigContent, err := m.RunSSHCommand(m.Config.Master.Name, kubeconfigCmd)
-	if err != nil {
-		return "", fmt.Errorf("获取 kubeconfig 内容失败: %w", err)
-	}
-
-	// 创建本地kubeconfig文件
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("获取用户主目录失败: %w", err)
-	}
-
-	kubeDir := filepath.Join(homeDir, ".kube")
-	if err := os.MkdirAll(kubeDir, 0755); err != nil {
-		return "", fmt.Errorf("创建 .kube 目录失败: %w", err)
-	}
-
-	kubeconfigPath := filepath.Join(kubeDir, m.Config.Name+"-config")
-	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0644); err != nil {
-		return "", fmt.Errorf("保存 kubeconfig 文件失败: %w", err)
-	}
-
-	return kubeconfigPath, nil
 }
 
 // AddNode 添加新节点到集群
@@ -892,4 +971,14 @@ func (m *Manager) DeleteCluster() error {
 
 	fmt.Println("集群删除完成！")
 	return nil
+}
+
+// SetKubeadmConfigPath 设置自定义的kubeadm配置路径
+func (m *Manager) SetKubeadmConfigPath(configPath string) {
+	// 如果KubeadmConfig还未初始化，则不进行设置
+	if m.KubeadmConfig == nil {
+		fmt.Println("警告: KubeadmConfig尚未初始化，暂时无法设置自定义配置路径")
+		return
+	}
+	m.KubeadmConfig.SetCustomConfig(configPath)
 }

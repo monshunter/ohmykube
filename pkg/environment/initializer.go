@@ -2,6 +2,8 @@ package environment
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/monshunter/ohmykube/pkg/default/containerd"
 	"github.com/monshunter/ohmykube/pkg/default/ipvs"
@@ -30,6 +32,80 @@ func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, opti
 		nodeName:  nodeName,
 		options:   options,
 	}
+}
+
+// waitForAptLock 等待apt锁释放
+func (i *Initializer) waitForAptLock() error {
+	maxRetries := 30              // 最多等待30次
+	retryDelay := 5 * time.Second // 每次等待5秒
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 检查apt锁状态
+		cmd := `if fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null; then
+	echo "locked"
+else
+	echo "unlocked"
+fi`
+
+		output, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+		if err != nil {
+			return fmt.Errorf("检查apt锁状态失败: %w", err)
+		}
+
+		// 如果不再锁定，则继续
+		if strings.TrimSpace(output) == "unlocked" {
+			fmt.Printf("在节点 %s 上apt锁已释放，继续安装\n", i.nodeName)
+			return nil
+		}
+
+		// 如果仍然锁定，等待一段时间再试
+		if attempt < maxRetries {
+			fmt.Printf("在节点 %s 上apt仍然被锁定，等待释放 (尝试 %d/%d)...\n", i.nodeName, attempt, maxRetries)
+			time.Sleep(retryDelay)
+		} else {
+			// 如果达到最大重试次数，尝试强制释放锁
+			fmt.Printf("在节点 %s 上等待apt锁释放超时，尝试强制释放...\n", i.nodeName)
+
+			killCmd := "sudo killall apt apt-get dpkg 2>/dev/null || true"
+			_, err = i.sshRunner.RunSSHCommand(i.nodeName, killCmd)
+			if err != nil {
+				// 忽略killall可能的错误，因为进程可能不存在
+			}
+
+			unlockCmd := `sudo rm -f /var/lib/apt/lists/lock
+						  sudo rm -f /var/cache/apt/archives/lock
+						  sudo rm -f /var/lib/dpkg/lock
+						  sudo rm -f /var/lib/dpkg/lock-frontend
+						  sudo dpkg --configure -a`
+
+			_, err = i.sshRunner.RunSSHCommand(i.nodeName, unlockCmd)
+			if err != nil {
+				return fmt.Errorf("强制释放apt锁失败: %w", err)
+			}
+
+			fmt.Printf("在节点 %s 上已强制释放apt锁\n", i.nodeName)
+
+			// 修复：强制释放锁后额外等待一段时间确保锁真正释放
+			extraWaitTime := 10 * time.Second
+			fmt.Printf("在节点 %s 上等待额外的 %s 确保锁已完全释放...\n", i.nodeName, extraWaitTime)
+			time.Sleep(extraWaitTime)
+
+			// 再次检查锁状态
+			output, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+			if err != nil {
+				return fmt.Errorf("强制释放后检查apt锁状态失败: %w", err)
+			}
+
+			if strings.TrimSpace(output) != "unlocked" {
+				return fmt.Errorf("在节点 %s 上强制释放apt锁后仍然被锁定", i.nodeName)
+			}
+
+			fmt.Printf("在节点 %s 上确认apt锁已完全释放\n", i.nodeName)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("等待apt锁释放超时")
 }
 
 // DisableSwap 禁用swap
@@ -78,6 +154,11 @@ func (i *Initializer) EnableIPVS() error {
 		if err != nil {
 			return fmt.Errorf("在节点 %s 上加载%s模块失败: %w", i.nodeName, module, err)
 		}
+	}
+
+	// 等待apt锁释放
+	if err := i.waitForAptLock(); err != nil {
+		return fmt.Errorf("在节点 %s 上安装IPVS工具失败: %w", i.nodeName, err)
 	}
 
 	// 安装IPVS工具
@@ -154,6 +235,11 @@ net.ipv4.ip_forward                 = 1
 
 // InstallContainerd 安装和配置containerd
 func (i *Initializer) InstallContainerd() error {
+	// 等待apt锁释放
+	if err := i.waitForAptLock(); err != nil {
+		return fmt.Errorf("在节点 %s 上安装containerd失败: %w", i.nodeName, err)
+	}
+
 	// 安装containerd
 	cmd := "sudo apt-get install -y containerd"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
@@ -201,11 +287,21 @@ func (i *Initializer) InstallContainerd() error {
 
 // InstallK8sComponents 安装kubeadm、kubectl、kubelet
 func (i *Initializer) InstallK8sComponents() error {
+	// 等待apt锁释放
+	if err := i.waitForAptLock(); err != nil {
+		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+	}
+
 	// 更新apt
 	cmd := "sudo apt-get update"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+	}
+
+	// 等待apt锁释放
+	if err := i.waitForAptLock(); err != nil {
+		return fmt.Errorf("在节点 %s 上安装依赖失败: %w", i.nodeName, err)
 	}
 
 	// 安装依赖
@@ -236,11 +332,21 @@ func (i *Initializer) InstallK8sComponents() error {
 		return fmt.Errorf("在节点 %s 上添加Kubernetes源失败: %w", i.nodeName, err)
 	}
 
+	// 等待apt锁释放
+	if err := i.waitForAptLock(); err != nil {
+		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+	}
+
 	// 再次更新apt
 	cmd = "sudo apt-get update"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+	}
+
+	// 等待apt锁释放
+	if err := i.waitForAptLock(); err != nil {
+		return fmt.Errorf("在节点 %s 上安装Kubernetes组件失败: %w", i.nodeName, err)
 	}
 
 	// 安装k8s组件
@@ -264,6 +370,27 @@ func (i *Initializer) InstallK8sComponents() error {
 		return fmt.Errorf("在节点 %s 上启用kubelet失败: %w", i.nodeName, err)
 	}
 
+	return nil
+}
+
+// InstallHelm 安装Helm
+func (i *Initializer) InstallHelm() error {
+	// 检查Helm是否已安装
+	cmd := "command -v helm && echo 'Helm已安装' || echo 'Helm未安装'"
+	output, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err == nil && output == "Helm已安装" {
+		fmt.Printf("在节点 %s 上Helm已安装，跳过\n", i.nodeName)
+		return nil
+	}
+
+	// 安装Helm
+	cmd = `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash`
+	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("在节点 %s 上安装Helm失败: %w", i.nodeName, err)
+	}
+
+	fmt.Printf("在节点 %s 上成功安装Helm\n", i.nodeName)
 	return nil
 }
 
@@ -296,6 +423,11 @@ func (i *Initializer) Initialize() error {
 	}
 
 	if err := i.InstallK8sComponents(); err != nil {
+		return err
+	}
+
+	// 安装Helm
+	if err := i.InstallHelm(); err != nil {
 		return err
 	}
 
