@@ -2,25 +2,24 @@ package cni
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 
-	"github.com/monshunter/ohmykube/pkg/multipass"
+	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // CiliumInstaller 负责安装 Cilium CNI
 type CiliumInstaller struct {
-	MultipassClient *multipass.Client
-	MasterNode      string
-	Version         string
+	SSHClient  *ssh.Client
+	MasterNode string
+	Version    string
 }
 
 // NewCiliumInstaller 创建 Cilium 安装器
-func NewCiliumInstaller(mpClient *multipass.Client, masterNode string) *CiliumInstaller {
+func NewCiliumInstaller(sshClient *ssh.Client, masterNode string) *CiliumInstaller {
 	return &CiliumInstaller{
-		MultipassClient: mpClient,
-		MasterNode:      masterNode,
-		Version:         "1.14.5", // Cilium 版本
+		SSHClient:  sshClient,
+		MasterNode: masterNode,
+		Version:    "1.14.5", // Cilium 版本
 	}
 }
 
@@ -52,7 +51,7 @@ spec:
 	ciliumConfig = fmt.Sprintf(ciliumConfig, c.Version)
 
 	// 创建临时文件
-	tmpfile, err := ioutil.TempFile("", "cilium-config-*.yaml")
+	tmpfile, err := os.CreateTemp("", "cilium-config-*.yaml")
 	if err != nil {
 		return fmt.Errorf("创建临时 Cilium 配置文件失败: %w", err)
 	}
@@ -67,12 +66,12 @@ spec:
 
 	// 将配置文件传输到虚拟机
 	remoteConfigPath := "/tmp/cilium-config.yaml"
-	if err := c.MultipassClient.TransferFile(tmpfile.Name(), c.MasterNode, remoteConfigPath); err != nil {
+	if err := c.SSHClient.TransferFile(tmpfile.Name(), remoteConfigPath); err != nil {
 		return fmt.Errorf("传输 Cilium 配置文件到虚拟机失败: %w", err)
 	}
 
 	// 安装 Helm (如果需要)
-	_, err = c.MultipassClient.ExecCommand(c.MasterNode, `
+	_, err = c.SSHClient.RunCommand(`
 if ! command -v helm &> /dev/null; then
   curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 fi
@@ -82,7 +81,7 @@ fi
 	}
 
 	// 添加 Cilium Helm 仓库
-	_, err = c.MultipassClient.ExecCommand(c.MasterNode, `
+	_, err = c.SSHClient.RunCommand(`
 helm repo add cilium https://helm.cilium.io
 helm repo update
 `)
@@ -102,13 +101,13 @@ helm install cilium cilium/cilium --version %s \
   --set k8sServicePort=6443
 `, c.Version)
 
-	_, err = c.MultipassClient.ExecCommand(c.MasterNode, installCmd)
+	_, err = c.SSHClient.RunCommand(installCmd)
 	if err != nil {
 		return fmt.Errorf("安装 Cilium 失败: %w", err)
 	}
 
 	// 等待 Cilium 启动完成
-	_, err = c.MultipassClient.ExecCommand(c.MasterNode, `
+	_, err = c.SSHClient.RunCommand(`
 kubectl -n kube-system wait --for=condition=ready pod -l k8s-app=cilium --timeout=5m
 `)
 	if err != nil {

@@ -1,5 +1,9 @@
 package environment
 
+import (
+	"os"
+)
+
 // SSHCommandRunner 定义了执行SSH命令的接口
 type SSHCommandRunner interface {
 	RunSSHCommand(nodeName string, command string) (string, error)
@@ -10,14 +14,22 @@ type InitOptions struct {
 	DisableSwap      bool   // 是否禁用swap
 	EnableIPVS       bool   // 是否启用IPVS模式
 	ContainerRuntime string // 容器运行时，默认为containerd
+	K8sMirrorURL     string // Kubernetes源地址，默认为官方源
 }
 
 // DefaultInitOptions 返回默认初始化选项
 func DefaultInitOptions() InitOptions {
+	// 从环境变量读取K8s源地址配置，如果未设置则使用官方源
+	k8sMirrorURL := os.Getenv("OHMYKUBE_K8S_MIRROR_URL")
+	if k8sMirrorURL == "" {
+		k8sMirrorURL = "https://pkgs.k8s.io/core:/stable:/v1.33/deb"
+	}
+
 	return InitOptions{
 		DisableSwap:      true,         // 默认禁用swap
 		EnableIPVS:       false,        // 默认不启用IPVS
 		ContainerRuntime: "containerd", // 默认使用containerd
+		K8sMirrorURL:     k8sMirrorURL, // 使用环境变量配置的源或默认源
 	}
 }
 

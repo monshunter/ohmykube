@@ -56,13 +56,20 @@ func (c *Client) Connect() error {
 	}
 
 	addr := net.JoinHostPort(c.Host, c.Port)
-	client, err := ssh.Dial("tcp", addr, config)
-	if err != nil {
-		return fmt.Errorf("SSH连接失败: %w", err)
+	var err error
+	var client *ssh.Client
+	for range 5 {
+		client, err = ssh.Dial("tcp", addr, config)
+		if err != nil {
+			fmt.Printf("ssh连接 %s 失败: %v, 正在重试...\n", addr, err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		c.client = client
+		fmt.Printf("ssh连接 %s 成功\n", addr)
+		return nil
 	}
-
-	c.client = client
-	return nil
+	return fmt.Errorf("ssh连接失败: %w", err)
 }
 
 // Close 关闭SSH连接

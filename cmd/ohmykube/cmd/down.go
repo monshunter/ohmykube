@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/manager"
+	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
 
@@ -10,28 +12,24 @@ var downCmd = &cobra.Command{
 	Short: "删除一个 k8s 集群",
 	Long:  `删除已创建的 Kubernetes 集群和相关的所有虚拟机资源`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		sshConfig, err := cluster.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
-		if err != nil {
-			return err
-		}
-		err = sshConfig.Init()
+		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
 		if err != nil {
 			return err
 		}
 		// 创建集群配置
-		config := cluster.NewClusterConfig(clusterName, k8sVersion, workersCount, sshConfig,
-			cluster.ResourceConfig{
+		config := cluster.NewConfig(clusterName, k8sVersion, workersCount,
+			cluster.Resource{
 				CPU:    masterCPU,
 				Memory: masterMemory,
 				Disk:   masterDisk,
-			}, cluster.ResourceConfig{
+			}, cluster.Resource{
 				CPU:    workerCPU,
 				Memory: workerMemory,
 				Disk:   workerDisk,
 			})
 		config.K8sVersion = k8sVersion
 		// 创建集群管理器
-		manager, err := cluster.NewManager(config)
+		manager, err := manager.NewManager(config, sshConfig, nil)
 		if err != nil {
 			return err
 		}

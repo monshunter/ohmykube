@@ -16,13 +16,13 @@ var downloadKubeconfigCmd = &cobra.Command{
 	Long:  `将当前集群的kubeconfig文件下载到本地~/.kube目录，便于本地调试和管理集群`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// 加载集群信息
-		clusterInfo, err := cluster.LoadClusterInfo()
+		clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
 		if err != nil {
 			return fmt.Errorf("加载集群信息失败: %w", err)
 		}
 
 		// 检查 master 节点信息
-		if clusterInfo.Master.IP == "" {
+		if clusterInfo.Master.ExtraInfo.IP == "" {
 			return fmt.Errorf("无法获取 master 节点 IP 地址")
 		}
 
@@ -34,7 +34,7 @@ var downloadKubeconfigCmd = &cobra.Command{
 
 		// 创建 SSH 客户端
 		sshClient := ssh.NewClient(
-			clusterInfo.Master.IP,
+			clusterInfo.Master.ExtraInfo.IP,
 			clusterInfo.Master.SSHPort,
 			clusterInfo.Master.SSHUser,
 			password,

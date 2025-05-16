@@ -36,8 +36,8 @@ func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, opti
 
 // waitForAptLock 等待apt锁释放
 func (i *Initializer) waitForAptLock() error {
-	maxRetries := 30              // 最多等待30次
-	retryDelay := 5 * time.Second // 每次等待5秒
+	maxRetries := 30          // 最多等待30次
+	retryDelay := time.Second // 每次等待1秒
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// 检查apt锁状态
@@ -318,15 +318,39 @@ func (i *Initializer) InstallK8sComponents() error {
 		return fmt.Errorf("在节点 %s 上创建证书目录失败: %w", i.nodeName, err)
 	}
 
-	// 下载k8s公钥并导入
-	cmd = "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("在节点 %s 上下载并导入K8s密钥失败: %w", i.nodeName, err)
+	// 下载k8s公钥并导入（增加重试机制）
+	// 使用配置的K8sMirrorURL或默认值
+	mirrorURL := i.options.K8sMirrorURL
+	keyURL := fmt.Sprintf("%s/Release.key", mirrorURL)
+
+	// 添加重试机制
+	maxRetries := 3
+	retryDelay := 5 * time.Second
+	var downloadErr error
+
+	for retry := 0; retry < maxRetries; retry++ {
+		downloadKeyCmd := fmt.Sprintf("curl -fsSL %s | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg", keyURL)
+		_, downloadErr = i.sshRunner.RunSSHCommand(i.nodeName, downloadKeyCmd)
+
+		if downloadErr == nil {
+			// 成功下载和导入密钥
+			break
+		}
+
+		if retry < maxRetries-1 {
+			fmt.Printf("在节点 %s 上下载K8s密钥失败，%v后重试(%d/%d)...\n",
+				i.nodeName, retryDelay, retry+1, maxRetries)
+			time.Sleep(retryDelay)
+		}
+	}
+
+	if downloadErr != nil {
+		return fmt.Errorf("在节点 %s 上下载并导入K8s密钥失败: %w", i.nodeName, downloadErr)
 	}
 
 	// 添加k8s源
-	cmd = "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list"
+	repoURL := fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] %s/ /", mirrorURL)
+	cmd = fmt.Sprintf("echo '%s' | sudo tee /etc/apt/sources.list.d/kubernetes.list", repoURL)
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("在节点 %s 上添加Kubernetes源失败: %w", i.nodeName, err)
@@ -337,9 +361,23 @@ func (i *Initializer) InstallK8sComponents() error {
 		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
 	}
 
-	// 再次更新apt
-	cmd = "sudo apt-get update"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	// 再次更新apt（增加重试机制）
+	maxRetries = 3
+	for retry := 0; retry < maxRetries; retry++ {
+		cmd = "sudo apt-get update"
+		_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+
+		if err == nil {
+			break
+		}
+
+		if retry < maxRetries-1 {
+			fmt.Printf("在节点 %s 上更新apt失败，%v后重试(%d/%d)...\n",
+				i.nodeName, retryDelay, retry+1, maxRetries)
+			time.Sleep(retryDelay)
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
 	}
@@ -349,9 +387,23 @@ func (i *Initializer) InstallK8sComponents() error {
 		return fmt.Errorf("在节点 %s 上安装Kubernetes组件失败: %w", i.nodeName, err)
 	}
 
-	// 安装k8s组件
-	cmd = "sudo apt-get install -y kubelet kubeadm kubectl"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	// 安装k8s组件（增加重试机制）
+	maxRetries = 3
+	for retry := 0; retry < maxRetries; retry++ {
+		cmd = "sudo apt-get install -y kubelet kubeadm kubectl"
+		_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+
+		if err == nil {
+			break
+		}
+
+		if retry < maxRetries-1 {
+			fmt.Printf("在节点 %s 上安装Kubernetes组件失败，%v后重试(%d/%d)...\n",
+				i.nodeName, retryDelay, retry+1, maxRetries)
+			time.Sleep(retryDelay)
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("在节点 %s 上安装Kubernetes组件失败: %w", i.nodeName, err)
 	}
@@ -383,9 +435,25 @@ func (i *Initializer) InstallHelm() error {
 		return nil
 	}
 
-	// 安装Helm
-	cmd = `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash`
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	// 安装Helm（增加重试机制）
+	maxRetries := 3
+	retryDelay := 5 * time.Second
+
+	for retry := 0; retry < maxRetries; retry++ {
+		cmd = `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash`
+		_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+
+		if err == nil {
+			break
+		}
+
+		if retry < maxRetries-1 {
+			fmt.Printf("在节点 %s 上安装Helm失败，%v后重试(%d/%d)...\n",
+				i.nodeName, retryDelay, retry+1, maxRetries)
+			time.Sleep(retryDelay)
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("在节点 %s 上安装Helm失败: %w", i.nodeName, err)
 	}

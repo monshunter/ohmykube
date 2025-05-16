@@ -1,4 +1,4 @@
-package cluster
+package manager
 
 import (
 	"encoding/json"
@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/cni"
+	"github.com/monshunter/ohmykube/pkg/default/metallb"
 	"github.com/monshunter/ohmykube/pkg/environment"
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/kubeconfig"
@@ -19,112 +22,13 @@ import (
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
-const (
-	RoleMaster = "master"
-	RoleWorker = "worker"
-)
-
-// NodeConfig 保存节点配置
-type NodeConfig struct {
-	Name string
-	ResourceConfig
-}
-
-type ResourceConfig struct {
-	CPU    int
-	Memory int
-	Disk   int
-}
-
-// ClusterConfig 保存集群配置
-type ClusterConfig struct {
-	Image      string
-	Name       string
-	Master     NodeConfig
-	Workers    []NodeConfig
-	K8sVersion string
-	SSHConfig
-}
-
-type SSHConfig struct {
-	Password      string
-	SSHKeyFile    string
-	SSHPubKeyFile string
-	sshKey        string
-	sshPubKey     string
-}
-
-func NewSSHConfig(password string, sshKeyFile string, sshPubKeyFile string) (*SSHConfig, error) {
-	sshConfig := &SSHConfig{
-		Password:      password,
-		SSHKeyFile:    sshKeyFile,
-		SSHPubKeyFile: sshPubKeyFile,
-	}
-	err := sshConfig.Init()
-	if err != nil {
-		return nil, err
-	}
-	return sshConfig, nil
-}
-
-func (c *SSHConfig) Init() error {
-	sshKeyContent, err := os.ReadFile(c.SSHKeyFile)
-	if err != nil {
-		return fmt.Errorf("读取SSH私钥文件失败: %w", err)
-	}
-	c.sshKey = string(sshKeyContent)
-	sshPubKeyContent, err := os.ReadFile(c.SSHPubKeyFile)
-	if err != nil {
-		return fmt.Errorf("读取SSH公钥文件失败: %w", err)
-	}
-	c.sshPubKey = string(sshPubKeyContent)
-	return nil
-}
-
-func (c *SSHConfig) GetSSHKey() string {
-	return c.sshKey
-}
-
-func (c *SSHConfig) GetSSHPubKey() string {
-	return c.sshPubKey
-}
-
-func NewClusterConfig(name string, k8sVersion string, workers int, sshConfig *SSHConfig, masterResource ResourceConfig, workerResource ResourceConfig) *ClusterConfig {
-	c := &ClusterConfig{
-		Name:       name,
-		Master:     NodeConfig{},
-		Workers:    make([]NodeConfig, workers),
-		K8sVersion: k8sVersion,
-		SSHConfig:  *sshConfig,
-	}
-	for i := range workers {
-		c.Workers[i].Name = c.GetWorkerVMName(i)
-		c.Workers[i].ResourceConfig = workerResource
-	}
-	c.Master.Name = c.GetMasterVMName(0)
-	c.Master.ResourceConfig = masterResource
-	return c
-}
-
-func (c *ClusterConfig) GetMasterVMName(index int) string {
-	return fmt.Sprintf("%smaster-%d", c.Prefix(), index)
-}
-
-func (c *ClusterConfig) GetWorkerVMName(index int) string {
-	return fmt.Sprintf("%sworker-%d", c.Prefix(), index)
-}
-
-func (c *ClusterConfig) Prefix() string {
-	return fmt.Sprintf("%s-", c.Name)
-}
-
 // Manager 集群管理器
 type Manager struct {
-	Config             *ClusterConfig
+	Config             *cluster.Config
 	MultipassClient    *multipass.Client
 	KubeadmConfig      *kubeadm.KubeadmConfig
-	SSHClients         map[string]*ssh.Client
-	ClusterInfo        *ClusterInfo
+	SSHManager         *ssh.SSHManager
+	Cluster            *cluster.Cluster
 	InitOptions        environment.InitOptions
 	CNIType            string // 使用的CNI类型，默认为flannel
 	CSIType            string // 使用的CSI类型，默认为local-path-provisioner
@@ -132,47 +36,22 @@ type Manager struct {
 }
 
 // NewManager 创建新的集群管理器
-func NewManager(config *ClusterConfig) (*Manager, error) {
-	mpClient, err := multipass.NewClient(config.Image, config.Password, config.SSHConfig.GetSSHKey(), config.SSHConfig.GetSSHPubKey())
+func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *cluster.Cluster) (*Manager, error) {
+	mpClient, err := multipass.NewClient(config.Image, sshConfig.Password, sshConfig.GetSSHKey(), sshConfig.GetSSHPubKey())
 	if err != nil {
 		return nil, fmt.Errorf("创建 Multipass 客户端失败: %w", err)
 	}
 
 	// 创建集群信息对象
-	clusterInfo := &ClusterInfo{
-		Name:       config.Name,
-		K8sVersion: config.K8sVersion,
-		Master: NodeInfo{
-			Name:    config.Master.Name,
-			Role:    RoleMaster,
-			Status:  NodeStatusUnknown,
-			CPU:     config.Master.CPU,
-			Memory:  config.Master.Memory,
-			Disk:    config.Master.Disk,
-			SSHUser: "root",
-			SSHPort: "22",
-		},
-		Workers: make([]NodeInfo, len(config.Workers)),
-	}
-
-	for i, worker := range config.Workers {
-		clusterInfo.Workers[i] = NodeInfo{
-			Name:    worker.Name,
-			Role:    RoleWorker,
-			Status:  NodeStatusUnknown,
-			CPU:     worker.CPU,
-			Memory:  worker.Memory,
-			Disk:    worker.Disk,
-			SSHUser: "root",
-			SSHPort: "22",
-		}
+	if cluster == nil {
+		cluster = clusterFromConfig(config)
 	}
 
 	manager := &Manager{
 		Config:             config,
 		MultipassClient:    mpClient,
-		SSHClients:         make(map[string]*ssh.Client),
-		ClusterInfo:        clusterInfo,
+		SSHManager:         ssh.NewSSHManager(cluster, sshConfig),
+		Cluster:            cluster,
 		InitOptions:        environment.DefaultInitOptions(),
 		CNIType:            "flannel",                // 默认使用flannel
 		CSIType:            "local-path-provisioner", // 默认使用local-path-provisioner
@@ -183,6 +62,35 @@ func NewManager(config *ClusterConfig) (*Manager, error) {
 	// KubeadmConfig将在初始化Master节点时设置
 
 	return manager, nil
+}
+
+func clusterFromConfig(config *cluster.Config) *cluster.Cluster {
+
+	var master cluster.NodeInfo
+	var workers []cluster.NodeInfo
+	master = cluster.NodeInfo{
+		Name:    config.Master.Name,
+		Role:    cluster.RoleMaster,
+		CPU:     config.Master.CPU,
+		Memory:  config.Master.Memory,
+		Disk:    config.Master.Disk,
+		SSHUser: "root",
+		SSHPort: "22",
+	}
+
+	for _, worker := range config.Workers {
+		workers = append(workers, cluster.NodeInfo{
+			Name:    worker.Name,
+			Role:    cluster.RoleWorker,
+			CPU:     worker.CPU,
+			Memory:  worker.Memory,
+			Disk:    worker.Disk,
+			SSHUser: "root",
+			SSHPort: "22",
+		})
+	}
+
+	return cluster.NewCluster(config.Name, config.K8sVersion, master, workers)
 }
 
 // SetInitOptions 设置环境初始化选项
@@ -249,119 +157,108 @@ func (m *Manager) WaitForSSHReady(ip string, port string, maxRetries int) error 
 	return fmt.Errorf("等待SSH服务就绪超时 (%s:%s)", ip, port)
 }
 
-// UpdateClusterInfo 更新集群信息
-func (m *Manager) UpdateClusterInfo() error {
-	// 更新master节点信息
-	masterIP, err := m.GetNodeIP(m.Config.Master.Name)
-	if err != nil {
-		return fmt.Errorf("获取Master节点IP失败: %w", err)
-	}
-	m.ClusterInfo.Master.IP = masterIP
-	m.ClusterInfo.Master.Status = NodeStatusRunning
-	m.ClusterInfo.Master.GenerateSSHCommand()
-
-	// 等待Master节点SSH服务就绪
-	if err := m.WaitForSSHReady(masterIP, m.ClusterInfo.Master.SSHPort, 10); err != nil {
-		return fmt.Errorf("Master节点SSH服务未就绪: %w", err)
-	}
-
-	// 更新worker节点信息
-	if len(m.Config.Workers) > 0 {
-		for i := range m.Config.Workers {
-			workerIP, err := m.GetNodeIP(m.Config.Workers[i].Name)
-			if err != nil {
-				return fmt.Errorf("获取Worker节点 %s IP失败: %w", m.Config.Workers[i].Name, err)
-			}
-			m.ClusterInfo.Workers[i].IP = workerIP
-			m.ClusterInfo.Workers[i].Status = NodeStatusRunning
-			m.ClusterInfo.Workers[i].GenerateSSHCommand()
-
-			// 等待Worker节点SSH服务就绪
-			if err := m.WaitForSSHReady(workerIP, m.ClusterInfo.Workers[i].SSHPort, 10); err != nil {
-				return fmt.Errorf("worker节点 %s SSH服务未就绪: %w", m.Config.Workers[i].Name, err)
-			}
-		}
-	}
-
-	// 保存集群信息到本地文件
-	return SaveClusterInfo(m.ClusterInfo)
+func (m *Manager) CloseSSHClient() {
+	m.SSHManager.CloseAllClients()
 }
 
-// CreateSSHClient 为节点创建SSH客户端
-func (m *Manager) CreateSSHClient(nodeName string) (*ssh.Client, error) {
-	// 查找节点信息
-	var nodeInfo *NodeInfo
-
-	// 判断是否是master节点
-	if nodeName == m.Config.Master.Name {
-		nodeInfo = &m.ClusterInfo.Master
-	} else {
-		// 查找匹配的worker节点
-		for i := range m.ClusterInfo.Workers {
-			if m.Config.Workers[i].Name == nodeName {
-				nodeInfo = &m.ClusterInfo.Workers[i]
-				break
-			}
-		}
-	}
-
-	if nodeInfo == nil {
-		return nil, fmt.Errorf("节点 %s 不存在", nodeName)
-	}
-
-	// 确保节点IP不为空
-	if nodeInfo.IP == "" {
-		return nil, fmt.Errorf("节点 %s 的IP地址不可用", nodeName)
-	}
-
-	// 创建SSH客户端
-	client := ssh.NewClient(
-		nodeInfo.IP,
-		nodeInfo.SSHPort,
-		nodeInfo.SSHUser,
-		m.Config.Password,
-		m.Config.SSHConfig.GetSSHKey(),
-	)
-
-	// 连接到SSH服务器，带重试机制
-	maxRetries := 5
-	retryDelay := 3 * time.Second
-	var err error
-
-	for i := 0; i < maxRetries; i++ {
-		err = client.Connect()
-		if err == nil {
-			break
-		}
-
-		fmt.Printf("连接到节点 %s (%s) 失败，正在重试 (%d/%d)...\n", nodeName, nodeInfo.IP, i+1, maxRetries)
-		time.Sleep(retryDelay)
-	}
-
+func (m *Manager) AddNodeInfo(nodeName string, cpu int, memory int, disk int) error {
+	extraInfo, err := m.GetExtraInfoFromRemote(nodeName)
 	if err != nil {
-		return nil, fmt.Errorf("连接到节点 %s 失败，已重试 %d 次: %w", nodeName, maxRetries, err)
+		return fmt.Errorf("获取节点 %s 信息失败: %w", nodeName, err)
+	}
+	nodeInfo := cluster.NewNodeInfo(nodeName, cluster.RoleWorker, cpu, memory, disk)
+	nodeInfo.ExtraInfo = extraInfo
+	m.Cluster.AddNode(nodeInfo)
+	return nil
+}
+
+// UpdateClusterInfo 更新集群信息
+func (m *Manager) UpdateClusterInfo() error {
+	extraInfomations := make([]cluster.NodeExtraInfo, 0, 1+len(m.Cluster.Workers))
+	masterInfo, err := m.GetExtraInfoFromRemote(m.Cluster.Master.Name)
+	if err != nil {
+		return fmt.Errorf("获取Master节点信息失败: %w", err)
+	}
+	extraInfomations = append(extraInfomations, masterInfo)
+	for i := range m.Cluster.Workers {
+		workerInfo, err := m.GetExtraInfoFromRemote(m.Cluster.Workers[i].Name)
+		if err != nil {
+			return fmt.Errorf("获取Worker节点信息失败: %w", err)
+		}
+		extraInfomations = append(extraInfomations, workerInfo)
+	}
+	m.Cluster.UpdateWithExtraInfo(extraInfomations)
+	// 保存集群信息到本地文件
+	return cluster.SaveClusterInfomation(m.Cluster)
+}
+
+func (m *Manager) GetExtraInfoFromRemote(nodeName string) (info cluster.NodeExtraInfo, err error) {
+	// 获取IP信息
+	ip, err := m.GetNodeIP(nodeName)
+	if err != nil {
+		return info, fmt.Errorf("获取节点 %s 的IP失败: %w", nodeName, err)
 	}
 
-	// 保存SSH客户端
-	m.SSHClients[nodeName] = client
-	return client, nil
+	// 填充基本信息
+	info.Name = nodeName
+	info.IP = ip
+	info.Status = cluster.NodeStatusRunning
+	sshClient, err := m.SSHManager.CreateClient(nodeName, ip)
+	if err != nil {
+		return info, fmt.Errorf("创建SSH客户端失败: %w", err)
+	}
+	// 获取主机名
+	hostnameCmd := "hostname"
+	hostnameOutput, err := sshClient.RunCommand(hostnameCmd)
+	if err == nil {
+		info.Hostname = strings.TrimSpace(hostnameOutput)
+	} else {
+		fmt.Printf("警告: 获取节点 %s 的主机名失败: %v\n", nodeName, err)
+		return info, fmt.Errorf("获取节点 %s 的主机名失败: %w", nodeName, err)
+	}
+
+	// 获取操作系统发行版信息
+	releaseCmd := `cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2`
+	releaseOutput, err := sshClient.RunCommand(releaseCmd)
+	if err == nil {
+		info.Release = strings.TrimSpace(releaseOutput)
+	} else {
+		fmt.Printf("警告: 获取节点 %s 的发行版信息失败: %v\n", nodeName, err)
+	}
+
+	// 获取内核版本
+	kernelCmd := "uname -r"
+	kernelOutput, err := sshClient.RunCommand(kernelCmd)
+	if err == nil {
+		info.Kernel = strings.TrimSpace(kernelOutput)
+	} else {
+		fmt.Printf("警告: 获取节点 %s 的内核版本失败: %v\n", nodeName, err)
+	}
+
+	// 获取系统架构
+	archCmd := "uname -m"
+	archOutput, err := sshClient.RunCommand(archCmd)
+	if err == nil {
+		info.Arch = strings.TrimSpace(archOutput)
+	} else {
+		fmt.Printf("警告: 获取节点 %s 的系统架构失败: %v\n", nodeName, err)
+	}
+
+	// 获取操作系统类型
+	osCmd := `uname -o`
+	osOutput, err := sshClient.RunCommand(osCmd)
+	if err == nil {
+		info.OS = strings.TrimSpace(osOutput)
+	} else {
+		fmt.Printf("警告: 获取节点 %s 的操作系统类型失败: %v\n", nodeName, err)
+	}
+
+	return info, nil
 }
 
 // RunSSHCommand 通过SSH在节点上执行命令
 func (m *Manager) RunSSHCommand(nodeName, command string) (string, error) {
-	// 先检查是否已经有SSH客户端
-	client, ok := m.SSHClients[nodeName]
-	if !ok {
-		// 如果没有，创建一个新的
-		var err error
-		client, err = m.CreateSSHClient(nodeName)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	// 执行命令
-	return client.RunCommand(command)
+	return m.SSHManager.RunCommand(nodeName, command)
 }
 
 // SetCNIType 设置CNI类型
@@ -382,13 +279,9 @@ func (m *Manager) SetDownloadKubeconfig(download bool) {
 // SetupKubeconfig 配置本地 kubeconfig
 func (m *Manager) SetupKubeconfig() (string, error) {
 	// 获取Master节点的SSH客户端
-	sshClient, ok := m.SSHClients[m.Config.Master.Name]
-	if !ok {
-		var err error
-		sshClient, err = m.CreateSSHClient(m.Config.Master.Name)
-		if err != nil {
-			return "", fmt.Errorf("创建Master节点SSH客户端失败: %w", err)
-		}
+	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	if !exists {
+		return "", fmt.Errorf("获取Master节点SSH客户端失败")
 	}
 
 	// 使用统一的kubeconfig下载逻辑
@@ -456,12 +349,12 @@ func (m *Manager) CreateCluster() error {
 		fmt.Println("跳过CSI安装...")
 	}
 
-	// // 8. 安装 MetalLB
-	// fmt.Println("安装 MetalLB LoadBalancer...")
-	// err = m.InstallLoadBalancer()
-	// if err != nil {
-	// 	return fmt.Errorf("安装 LoadBalancer 失败: %w", err)
-	// }
+	// 8. 安装 MetalLB
+	fmt.Println("安装 MetalLB LoadBalancer...")
+	err = m.InstallLoadBalancer()
+	if err != nil {
+		return fmt.Errorf("安装 LoadBalancer 失败: %w", err)
+	}
 
 	// 9. 下载 kubeconfig 到本地 (可选步骤)
 	var kubeconfigPath string
@@ -591,7 +484,7 @@ func (m *Manager) InitializeEnvironment() error {
 	batchInitializer := environment.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
 
 	// 使用并发限制执行初始化（限制为2个节点同时初始化，避免apt锁争用）
-	if err := batchInitializer.InitializeWithConcurrencyLimit(2); err != nil {
+	if err := batchInitializer.InitializeWithConcurrencyLimit(3); err != nil {
 		return fmt.Errorf("初始化环境失败: %w", err)
 	}
 
@@ -601,160 +494,72 @@ func (m *Manager) InitializeEnvironment() error {
 // InitializeMaster 初始化 master 节点
 func (m *Manager) InitializeMaster() (string, error) {
 	// 为master节点创建SSH客户端
-	sshClient, err := m.CreateSSHClient(m.Config.Master.Name)
-	if err != nil {
-		return "", fmt.Errorf("为Master节点创建SSH客户端失败: %w", err)
+	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	if !exists {
+		return "", fmt.Errorf("获取Master节点SSH客户端失败")
 	}
 
 	// 创建KubeadmConfig
 	m.KubeadmConfig = kubeadm.NewKubeadmConfig(sshClient, m.Config.K8sVersion, m.Config.Master.Name)
 
 	// 使用新的配置系统生成配置文件并初始化Master
-	err = m.KubeadmConfig.InitMaster()
+	err := m.KubeadmConfig.InitMaster()
 	if err != nil {
 		return "", fmt.Errorf("初始化 Master 节点失败: %w", err)
 	}
+	return m.joinCommand()
+}
 
-	// 获取加入集群的命令
+func (m *Manager) joinCommand() (string, error) {
 	joinCmd := `sudo kubeadm token create --print-join-command`
 	output, err := m.RunSSHCommand(m.Config.Master.Name, joinCmd)
 	if err != nil {
 		return "", fmt.Errorf("获取集群加入命令失败: %w", err)
 	}
-
 	return output, nil
 }
 
 // JoinWorkerNodes 将 worker 节点加入集群
 func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	for i := range m.Config.Workers {
-		// 直接使用RunSSHCommand而不是KubeadmConfig.JoinNode
-		_, err := m.RunSSHCommand(m.Config.Workers[i].Name, joinCommand)
+		err := m.JoinWorkerNode(m.Config.Workers[i].Name, joinCommand)
 		if err != nil {
-			return fmt.Errorf("将 Worker 节点 %s 加入集群失败: %w", m.Config.Workers[i].Name, err)
+			return err
 		}
 	}
+	return nil
+}
+
+func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
+	_, err := m.RunSSHCommand(nodeName, joinCommand)
+	if err != nil {
+		return fmt.Errorf("将节点 %s 加入集群失败: %w", nodeName, err)
+	}
+	fmt.Printf("节点 %s 已成功加入集群！\n", nodeName)
 	return nil
 }
 
 // InstallCNI 安装 CNI
 func (m *Manager) InstallCNI() error {
 	// 确保master节点的SSH客户端已创建
-	_, ok := m.SSHClients[m.Config.Master.Name]
-	if !ok {
-		_, err := m.CreateSSHClient(m.Config.Master.Name)
-		if err != nil {
-			return fmt.Errorf("为 Master 节点创建 SSH 客户端失败: %w", err)
-		}
+	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	if !exists {
+		return fmt.Errorf("获取Master节点SSH客户端失败")
 	}
 
 	switch m.CNIType {
 	case "cilium":
-		// 安装 Cilium
-		ciliumCmd := `
-kubectl create -f https://raw.githubusercontent.com/cilium/cilium/v1.14/install/kubernetes/quick-install.yaml
-`
-		_, err := m.RunSSHCommand(m.Config.Master.Name, ciliumCmd)
+		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Config.Master.Name)
+		err := ciliumInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("安装 Cilium CNI 失败: %w", err)
 		}
 
 	case "flannel":
-		// 获取集群配置的podCIDR
-		getPodCIDRCmd := `kubectl cluster-info dump | grep -m 1 cluster-cidr | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/[0-9]\+'`
-		podCIDR := "10.244.0.0/16" // 默认值
-		output, err := m.RunSSHCommand(m.Config.Master.Name, getPodCIDRCmd)
+		flannelInstaller := cni.NewFlannelInstaller(sshClient, m.Config.Master.Name)
+		err := flannelInstaller.Install()
 		if err != nil {
-			fmt.Printf("警告: 无法获取集群podCIDR，将使用默认值 %s: %v\n", podCIDR, err)
-		} else {
-			if strings.TrimSpace(output) != "" {
-				podCIDR = strings.TrimSpace(output)
-				fmt.Printf("从集群获取到podCIDR: %s\n", podCIDR)
-			}
-		}
-
-		// 检查Flannel helm仓库是否已添加
-		checkRepoCmd := `helm repo list | grep -q "flannel" && echo "已添加" || echo "未添加"`
-		output, err = m.RunSSHCommand(m.Config.Master.Name, checkRepoCmd)
-		if err != nil {
-			return fmt.Errorf("检查Flannel Helm仓库失败: %w", err)
-		}
-
-		// 如果仓库未添加，则添加
-		if strings.TrimSpace(output) != "已添加" {
-			fmt.Println("添加Flannel Helm仓库...")
-			_, err = m.RunSSHCommand(m.Config.Master.Name, `
-helm repo add flannel https://flannel-io.github.io/flannel/
-helm repo update
-`)
-			if err != nil {
-				return fmt.Errorf("添加Flannel Helm仓库失败: %w", err)
-			}
-		} else {
-			fmt.Println("Flannel Helm仓库已存在，跳过添加")
-		}
-
-		// 检查kube-flannel命名空间是否已存在
-		checkNsCmd := `kubectl get ns kube-flannel -o name 2>/dev/null || echo ""`
-		output, err = m.RunSSHCommand(m.Config.Master.Name, checkNsCmd)
-		if err != nil {
-			return fmt.Errorf("检查kube-flannel命名空间失败: %w", err)
-		}
-
-		// 创建命名空间并设置标签（如果需要）
-		if strings.TrimSpace(output) == "" {
-			fmt.Println("创建kube-flannel命名空间...")
-			_, err = m.RunSSHCommand(m.Config.Master.Name, `
-kubectl create ns kube-flannel
-kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
-`)
-			if err != nil {
-				return fmt.Errorf("创建kube-flannel命名空间失败: %w", err)
-			}
-		} else {
-			// 命名空间存在，只设置标签
-			fmt.Println("kube-flannel命名空间已存在，只更新标签")
-			_, err = m.RunSSHCommand(m.Config.Master.Name, `kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged`)
-			if err != nil {
-				return fmt.Errorf("设置kube-flannel命名空间标签失败: %w", err)
-			}
-		}
-
-		// 检查Flannel是否已安装
-		checkFlannelCmd := `helm ls -n kube-flannel | grep -q "flannel" && echo "已安装" || echo "未安装"`
-		output, err = m.RunSSHCommand(m.Config.Master.Name, checkFlannelCmd)
-		if err != nil {
-			return fmt.Errorf("检查Flannel安装状态失败: %w", err)
-		}
-
-		// 安装或升级Flannel
-		if strings.TrimSpace(output) != "已安装" {
-			fmt.Println("安装Flannel...")
-			helmInstallCmd := fmt.Sprintf(`
-helm install flannel --set podCidr="%s" --namespace kube-flannel flannel/flannel
-`, podCIDR)
-			_, err = m.RunSSHCommand(m.Config.Master.Name, helmInstallCmd)
-			if err != nil {
-				return fmt.Errorf("使用Helm安装Flannel失败: %w", err)
-			}
-		} else {
-			fmt.Println("Flannel已安装，执行升级以更新配置...")
-			helmUpgradeCmd := fmt.Sprintf(`
-helm upgrade flannel --set podCidr="%s" --namespace kube-flannel flannel/flannel
-`, podCIDR)
-			_, err = m.RunSSHCommand(m.Config.Master.Name, helmUpgradeCmd)
-			if err != nil {
-				return fmt.Errorf("使用Helm升级Flannel失败: %w", err)
-			}
-		}
-
-		// 等待Flannel就绪
-		waitCmd := `
-kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=120s
-`
-		_, err = m.RunSSHCommand(m.Config.Master.Name, waitCmd)
-		if err != nil {
-			fmt.Printf("警告: 等待Flannel就绪超时，但将继续执行: %v\n", err)
+			return fmt.Errorf("安装 Flannel CNI 失败: %w", err)
 		}
 
 	default:
@@ -766,14 +571,6 @@ kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=
 
 // InstallCSI 安装 CSI
 func (m *Manager) InstallCSI() error {
-	// 确保master节点的SSH客户端已创建
-	_, ok := m.SSHClients[m.Config.Master.Name]
-	if !ok {
-		_, err := m.CreateSSHClient(m.Config.Master.Name)
-		if err != nil {
-			return fmt.Errorf("为 Master 节点创建 SSH 客户端失败: %w", err)
-		}
-	}
 
 	switch m.CSIType {
 	case "rook-ceph":
@@ -823,7 +620,7 @@ kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storagec
 // InstallLoadBalancer 安装 LoadBalancer (MetalLB)
 func (m *Manager) InstallLoadBalancer() error {
 	metallbCmd := `
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.9/config/manifests/metallb-native.yaml
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
 `
 	_, err := m.RunSSHCommand(m.Config.Master.Name, metallbCmd)
 	if err != nil {
@@ -839,141 +636,174 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 		return fmt.Errorf("等待 MetalLB 部署完成失败: %w", err)
 	}
 
+	// 获取节点IP地址范围
+	ipRange, err := m.getMetalLBAddressRange()
+	if err != nil {
+		return fmt.Errorf("获取 MetalLB 地址范围失败: %w", err)
+	}
+
+	// 导入配置模板
+	configYAML := strings.Replace(metallb.CONFIG_YAML, "# - 192.168.64.200 - 192.168.64.250", fmt.Sprintf("- %s", ipRange), 1)
+
+	// 创建配置文件
+	configFile := "/tmp/metallb-config.yaml"
+	createConfigCmd := fmt.Sprintf("cat <<EOF | tee %s\n%sEOF", configFile, configYAML)
+	_, err = m.RunSSHCommand(m.Config.Master.Name, createConfigCmd)
+	if err != nil {
+		return fmt.Errorf("创建 MetalLB 配置文件失败: %w", err)
+	}
+
+	// 应用配置
+	applyConfigCmd := fmt.Sprintf("kubectl apply -f %s", configFile)
+	_, err = m.RunSSHCommand(m.Config.Master.Name, applyConfigCmd)
+	if err != nil {
+		return fmt.Errorf("应用 MetalLB 配置失败: %w", err)
+	}
+
 	return nil
+}
+
+// getMetalLBAddressRange 获取适合MetalLB的IP地址范围
+func (m *Manager) getMetalLBAddressRange() (string, error) {
+	// 获取主节点IP地址
+	ipCmd := "ip -4 addr show | grep inet | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1"
+	output, err := m.RunSSHCommand(m.Config.Master.Name, ipCmd)
+	if err != nil {
+		return "", fmt.Errorf("获取节点IP地址失败: %w", err)
+	}
+
+	// 解析IP地址
+	ip := strings.TrimSpace(output)
+	ipParts := strings.Split(ip, ".")
+	if len(ipParts) != 4 {
+		return "", fmt.Errorf("IP地址格式错误: %s", ip)
+	}
+
+	// 使用相同子网的一段IP地址作为LoadBalancer IP池
+	// 例如: 192.168.64.100 -> 192.168.64.200-192.168.64.250
+	prefix := strings.Join(ipParts[:3], ".")
+	startIP := 200
+	endIP := 250
+
+	return fmt.Sprintf("%s.%d - %s.%d", prefix, startIP, prefix, endIP), nil
 }
 
 // AddNode 添加新节点到集群
 func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
 	// 确定节点名称
 	nodeName := ""
-	if role == "master" {
+	index := 0
+	if role == cluster.RoleMaster {
 		// 目前只支持单 master
 		return fmt.Errorf("目前仅支持单 Master 节点")
 	} else {
-		// 获取当前 worker 数量
-		vms, err := m.MultipassClient.ListVMs(m.Config.Name + "-")
-		if err != nil {
-			return fmt.Errorf("列出虚拟机失败: %w", err)
-		}
-
-		workerCount := 0
-		for _, vm := range vms {
-			if strings.HasPrefix(vm, "ohmykube-worker-") {
-				workerCount++
+		for _, worker := range m.Cluster.Workers {
+			suffix := strings.Split(strings.TrimPrefix(worker.Name, m.Config.Prefix()), "-")[1]
+			suffixInt, err := strconv.Atoi(suffix)
+			if err != nil {
+				return fmt.Errorf("节点 %s 的索引转换失败: %w", worker.Name, err)
+			}
+			if suffixInt > index {
+				index = suffixInt
 			}
 		}
-
-		nodeName = fmt.Sprintf("ohmykube-worker-%d", workerCount+1)
 	}
 
+	nodeName = m.Config.GetWorkerVMName(index + 1)
 	// 创建虚拟机
 	cpuStr := strconv.Itoa(cpu)
 	memoryStr := strconv.Itoa(memory) + "M"
 	diskStr := strconv.Itoa(disk) + "G"
-
+	fmt.Printf("创建节点 %s, cpu: %s, memory: %s, disk: %s\n", nodeName, cpuStr, memoryStr, diskStr)
 	err := m.MultipassClient.CreateVM(nodeName, cpuStr, memoryStr, diskStr)
 	if err != nil {
 		return fmt.Errorf("创建节点 %s 失败: %w", nodeName, err)
 	}
 
 	// 更新节点信息并获取IP
-	err = m.UpdateClusterInfo()
+	fmt.Printf("更新节点信息 %s\n", nodeName)
+	err = m.AddNodeInfo(nodeName, cpu, memory, disk)
+	if err != nil {
+		return fmt.Errorf("更新节点信息失败: %w", err)
+	}
+	fmt.Printf("更新集群信息 %s\n", nodeName)
+	err = cluster.SaveClusterInfomation(m.Cluster)
 	if err != nil {
 		return fmt.Errorf("更新集群信息失败: %w", err)
 	}
 
 	// 使用初始化器来设置环境
+	fmt.Printf("初始化节点 %s\n", nodeName)
 	initializer := environment.NewInitializerWithOptions(m, nodeName, m.InitOptions)
 	if err := initializer.Initialize(); err != nil {
 		return fmt.Errorf("初始化节点 %s 环境失败: %w", nodeName, err)
 	}
 
 	// 获取 join 命令
-	joinCmd := `sudo kubeadm token create --print-join-command`
-	joinCommand, err := m.RunSSHCommand(m.Config.Master.Name, joinCmd)
+	fmt.Printf("获取 join 命令 %s\n", nodeName)
+	joinCmd, err := m.joinCommand()
 	if err != nil {
 		return fmt.Errorf("获取 join 命令失败: %w", err)
 	}
-
-	// 加入集群
-	_, err = m.RunSSHCommand(nodeName, joinCommand)
+	fmt.Printf("加入集群 %s\n", nodeName)
+	err = m.JoinWorkerNode(nodeName, joinCmd)
 	if err != nil {
 		return fmt.Errorf("节点 %s 加入集群失败: %w", nodeName, err)
 	}
-
-	// 如果是 worker，添加存储标签
-	if role == "worker" {
-		labelCmd := fmt.Sprintf(`kubectl label node %s role=storage-node`, nodeName)
-		_, err = m.RunSSHCommand(m.Config.Master.Name, labelCmd)
-		if err != nil {
-			fmt.Printf("警告: 为节点 %s 添加存储标签失败: %v\n", nodeName, err)
-		}
-	}
-
-	fmt.Printf("节点 %s 已成功添加到集群！\n", nodeName)
 	return nil
 }
 
 // DeleteNode 从集群中删除节点
 func (m *Manager) DeleteNode(nodeName string, force bool) error {
 	// 检查节点是否存在
-	vms, err := m.MultipassClient.ListVMs(m.Config.Name + "-")
-	if err != nil {
-		return fmt.Errorf("列出虚拟机失败: %w", err)
-	}
-
-	nodeExists := false
-	for _, vm := range vms {
-		if vm == nodeName {
-			nodeExists = true
-			break
-		}
-	}
-
-	if !nodeExists {
+	nodeInfo := m.Cluster.GetNodeByName(nodeName)
+	if nodeInfo == nil {
 		return fmt.Errorf("节点 %s 不存在", nodeName)
 	}
 
-	// 如果是 master 节点，拒绝删除
-	if nodeName == "ohmykube-master" {
+	if nodeInfo.Role == cluster.RoleMaster {
 		return fmt.Errorf("不能删除 Master 节点，请先删除整个集群")
 	}
 
 	// 从 Kubernetes 中驱逐节点
 	if !force {
-		fmt.Printf("正在从 Kubernetes 集群中驱逐节点 %s...\n", nodeName)
-		drainCmd := fmt.Sprintf(`kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force`, nodeName)
-		_, err = m.RunSSHCommand(m.Config.Master.Name, drainCmd)
+		err := m.drainAndDeleteNode(nodeName)
 		if err != nil {
-			return fmt.Errorf("驱逐节点 %s 失败: %w", nodeName, err)
-		}
-
-		deleteNodeCmd := fmt.Sprintf(`kubectl delete node %s`, nodeName)
-		_, err = m.RunSSHCommand(m.Config.Master.Name, deleteNodeCmd)
-		if err != nil {
-			return fmt.Errorf("从集群中删除节点 %s 失败: %w", nodeName, err)
+			return err
 		}
 	}
 
 	// 删除虚拟机
 	fmt.Printf("正在删除节点 %s...\n", nodeName)
-	err = m.MultipassClient.DeleteVM(nodeName)
+	err := m.MultipassClient.DeleteVM(nodeName)
 	if err != nil {
 		return fmt.Errorf("删除节点 %s 失败: %w", nodeName, err)
 	}
 
-	// 关闭SSH连接
-	if client, ok := m.SSHClients[nodeName]; ok {
-		client.Close()
-		delete(m.SSHClients, nodeName)
-	}
-
 	// 更新集群信息
-	if err := m.UpdateClusterInfo(); err != nil {
+	fmt.Printf("更新集群信息 %s\n", nodeName)
+	m.Cluster.RemoveNode(nodeName)
+	if err := cluster.SaveClusterInfomation(m.Cluster); err != nil {
 		fmt.Printf("警告: 更新集群信息失败: %v\n", err)
 	}
 
 	fmt.Printf("节点 %s 已成功删除！\n", nodeName)
+	return nil
+}
+
+func (m *Manager) drainAndDeleteNode(nodeName string) error {
+	fmt.Printf("正在从 Kubernetes 集群中驱逐节点 %s...\n", nodeName)
+	drainCmd := fmt.Sprintf(`kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force`, nodeName)
+	_, err := m.RunSSHCommand(m.Config.Master.Name, drainCmd)
+	if err != nil {
+		return fmt.Errorf("驱逐节点 %s 失败: %w", nodeName, err)
+	}
+
+	deleteNodeCmd := fmt.Sprintf(`kubectl delete node %s`, nodeName)
+	_, err = m.RunSSHCommand(m.Config.Master.Name, deleteNodeCmd)
+	if err != nil {
+		return fmt.Errorf("从集群中删除节点 %s 失败: %w", nodeName, err)
+	}
 	return nil
 }
 
@@ -982,21 +812,18 @@ func (m *Manager) DeleteCluster() error {
 	fmt.Println("正在删除 Kubernetes 集群...")
 
 	// 列出所有虚拟机
-	vms, err := m.MultipassClient.ListVMs(m.Config.Name + "-")
+	prefix := m.Config.Prefix()
+	vms, err := m.MultipassClient.ListVMs(prefix)
 	if err != nil {
 		return fmt.Errorf("列出虚拟机失败: %w", err)
 	}
 
 	// 找到集群相关的虚拟机并删除
-	prefix := m.Config.Prefix()
 	for _, vm := range vms {
 		if strings.HasPrefix(vm, prefix) {
 			fmt.Printf("删除节点: %s\n", vm)
 			// 关闭SSH连接
-			if client, ok := m.SSHClients[vm]; ok {
-				client.Close()
-				delete(m.SSHClients, vm)
-			}
+			m.SSHManager.CloseClient(vm)
 
 			err := m.MultipassClient.DeleteVM(vm)
 			if err != nil {

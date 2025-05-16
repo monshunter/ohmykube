@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -12,8 +11,6 @@ var (
 	password      string
 	sshKeyFile    string
 	sshPubKeyFile string
-	sshKey        string
-	sshPubKey     string
 )
 
 var rootCmd = &cobra.Command{
@@ -24,16 +21,6 @@ var rootCmd = &cobra.Command{
 	// 如果需要在执行前做一些准备工作，可以添加 PersistentPreRun
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// 初始化工作
-		sshKeyContent, err := os.ReadFile(sshKeyFile)
-		if err != nil {
-			log.Fatalf("读取SSH私钥文件失败: %v", err)
-		}
-		sshPubKeyContent, err := os.ReadFile(sshPubKeyFile)
-		if err != nil {
-			log.Fatalf("读取SSH公钥文件失败: %v", err)
-		}
-		sshKey = string(sshKeyContent)
-		sshPubKey = string(sshPubKeyContent)
 	},
 }
 
@@ -49,6 +36,7 @@ const (
 var (
 	defaultSSHKeyFile    string
 	defaultSSHPubKeyFile string
+	clusterName          string
 )
 
 func init() {
@@ -63,7 +51,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&password, "password", defaultPassword, "密码")
 	rootCmd.PersistentFlags().StringVar(&sshKeyFile, "ssh-key", defaultSSHKeyFile, "SSH私钥文件")
 	rootCmd.PersistentFlags().StringVar(&sshPubKeyFile, "ssh-pub-key", defaultSSHPubKeyFile, "SSH公钥文件")
-
+	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "集群名称")
 	// 添加子命令
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
