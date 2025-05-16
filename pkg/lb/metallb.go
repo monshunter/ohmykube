@@ -2,102 +2,66 @@ package lb
 
 import (
 	"fmt"
-	"io/ioutil"
-	"os"
-	"regexp"
-	"strconv"
+	"strings"
 
-	"github.com/monshunter/ohmykube/pkg/multipass"
+	"github.com/monshunter/ohmykube/pkg/default/metallb"
+	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
-// MetalLBInstaller 负责安装 MetalLB LoadBalancer
+// MetalLBInstaller 用于安装和配置MetalLB负载均衡器
 type MetalLBInstaller struct {
-	MultipassClient *multipass.Client
-	MasterNode      string
-	Version         string
+	sshClient *ssh.Client
+	nodeName  string
 }
 
-// NewMetalLBInstaller 创建 MetalLB 安装器
-func NewMetalLBInstaller(mpClient *multipass.Client, masterNode string) *MetalLBInstaller {
+// NewMetalLBInstaller 创建一个新的MetalLB安装器
+func NewMetalLBInstaller(sshClient *ssh.Client, nodeName string) *MetalLBInstaller {
 	return &MetalLBInstaller{
-		MultipassClient: mpClient,
-		MasterNode:      masterNode,
-		Version:         "v0.13.7", // MetalLB 版本
+		sshClient: sshClient,
+		nodeName:  nodeName,
 	}
 }
 
-// Install 安装 MetalLB
+// Install 安装MetalLB负载均衡器
 func (m *MetalLBInstaller) Install() error {
-	// 安装 MetalLB
-	installCmd := fmt.Sprintf(`
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/%s/config/manifests/metallb-native.yaml
-`, m.Version)
-
-	_, err := m.MultipassClient.ExecCommand(m.MasterNode, installCmd)
+	// 安装MetalLB
+	metallbCmd := `
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
+`
+	_, err := m.sshClient.RunCommand(metallbCmd)
 	if err != nil {
 		return fmt.Errorf("安装 MetalLB 失败: %w", err)
 	}
 
-	// 等待 MetalLB 控制器就绪
-	_, err = m.MultipassClient.ExecCommand(m.MasterNode, `
-kubectl wait --namespace metallb-system \
-  --for=condition=ready pod \
-  --selector=app=metallb \
-  --timeout=3m
-`)
+	// 等待MetalLB部署完成
+	waitCmd := `
+kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=90s
+`
+	_, err = m.sshClient.RunCommand(waitCmd)
 	if err != nil {
-		return fmt.Errorf("等待 MetalLB 就绪超时: %w", err)
+		return fmt.Errorf("等待 MetalLB 部署完成失败: %w", err)
 	}
 
-	// 获取虚拟机的 IP 地址范围用于 MetalLB 地址池
-	ipRange, err := m.getAddressPoolRange()
+	// 获取节点IP地址范围
+	ipRange, err := m.getMetalLBAddressRange()
 	if err != nil {
-		return fmt.Errorf("获取 IP 地址范围失败: %w", err)
+		return fmt.Errorf("获取 MetalLB 地址范围失败: %w", err)
 	}
 
-	// 创建 MetalLB 地址池和 L2 通告配置
-	configMap := fmt.Sprintf(`
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: first-pool
-  namespace: metallb-system
-spec:
-  addresses:
-  - %s
----
-apiVersion: metallb.io/v1beta1
-kind: L2Advertisement
-metadata:
-  name: l2-advert
-  namespace: metallb-system
-spec:
-  ipAddressPools:
-  - first-pool
-`, ipRange)
+	// 导入配置模板
+	configYAML := strings.Replace(metallb.CONFIG_YAML, "# - 192.168.64.200 - 192.168.64.250", fmt.Sprintf("- %s", ipRange), 1)
 
-	// 创建临时配置文件
-	tmpfile, err := ioutil.TempFile("", "metallb-config-*.yaml")
+	// 创建配置文件
+	configFile := "/tmp/metallb-config.yaml"
+	createConfigCmd := fmt.Sprintf("cat <<EOF | tee %s\n%sEOF", configFile, configYAML)
+	_, err = m.sshClient.RunCommand(createConfigCmd)
 	if err != nil {
-		return fmt.Errorf("创建临时 MetalLB 配置文件失败: %w", err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	if _, err := tmpfile.Write([]byte(configMap)); err != nil {
-		return fmt.Errorf("写入 MetalLB 配置文件失败: %w", err)
-	}
-	if err := tmpfile.Close(); err != nil {
-		return fmt.Errorf("关闭 MetalLB 配置文件失败: %w", err)
-	}
-
-	// 将配置文件传输到虚拟机
-	remoteConfigPath := "/tmp/metallb-config.yaml"
-	if err := m.MultipassClient.TransferFile(tmpfile.Name(), m.MasterNode, remoteConfigPath); err != nil {
-		return fmt.Errorf("传输 MetalLB 配置文件到虚拟机失败: %w", err)
+		return fmt.Errorf("创建 MetalLB 配置文件失败: %w", err)
 	}
 
 	// 应用配置
-	_, err = m.MultipassClient.ExecCommand(m.MasterNode, fmt.Sprintf("kubectl apply -f %s", remoteConfigPath))
+	applyConfigCmd := fmt.Sprintf("kubectl apply -f %s", configFile)
+	_, err = m.sshClient.RunCommand(applyConfigCmd)
 	if err != nil {
 		return fmt.Errorf("应用 MetalLB 配置失败: %w", err)
 	}
@@ -105,26 +69,27 @@ spec:
 	return nil
 }
 
-// getAddressPoolRange 获取适合 MetalLB 的 IP 地址范围
-func (m *MetalLBInstaller) getAddressPoolRange() (string, error) {
-	// 获取主节点 IP 地址
-	output, err := m.MultipassClient.ExecCommand(m.MasterNode, "ip -4 addr show | grep inet")
+// getMetalLBAddressRange 获取适合MetalLB的IP地址范围
+func (m *MetalLBInstaller) getMetalLBAddressRange() (string, error) {
+	// 获取主节点IP地址
+	ipCmd := "ip -4 addr show | grep inet | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1"
+	output, err := m.sshClient.RunCommand(ipCmd)
 	if err != nil {
-		return "", fmt.Errorf("无法获取节点 IP 地址: %w", err)
+		return "", fmt.Errorf("获取节点IP地址失败: %w", err)
 	}
 
-	// 解析 IP 地址
-	re := regexp.MustCompile(`inet (\d+\.\d+\.\d+\.)(\d+)`)
-	matches := re.FindStringSubmatch(output)
-	if len(matches) < 3 {
-		return "", fmt.Errorf("无法解析 IP 地址格式")
+	// 解析IP地址
+	ip := strings.TrimSpace(output)
+	ipParts := strings.Split(ip, ".")
+	if len(ipParts) != 4 {
+		return "", fmt.Errorf("IP地址格式错误: %s", ip)
 	}
 
-	// 使用相同子网最后 10 个地址
-	prefix := matches[1]
-	base, _ := strconv.Atoi(matches[2])
-	start := base + 100
-	end := start + 10
+	// 使用相同子网的一段IP地址作为LoadBalancer IP池
+	// 例如: 192.168.64.100 -> 192.168.64.200-192.168.64.250
+	prefix := strings.Join(ipParts[:3], ".")
+	startIP := 200
+	endIP := 250
 
-	return fmt.Sprintf("%s%d-%s%d", prefix, start, prefix, end), nil
+	return fmt.Sprintf("%s.%d - %s.%d", prefix, startIP, prefix, endIP), nil
 }

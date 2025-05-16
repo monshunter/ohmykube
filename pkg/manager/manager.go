@@ -14,10 +14,11 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
 	"github.com/monshunter/ohmykube/pkg/cni"
-	"github.com/monshunter/ohmykube/pkg/default/metallb"
+	"github.com/monshunter/ohmykube/pkg/csi"
 	"github.com/monshunter/ohmykube/pkg/environment"
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/kubeconfig"
+	"github.com/monshunter/ohmykube/pkg/lb"
 	"github.com/monshunter/ohmykube/pkg/multipass"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
@@ -549,7 +550,8 @@ func (m *Manager) InstallCNI() error {
 
 	switch m.CNIType {
 	case "cilium":
-		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Config.Master.Name)
+		// 获取Master节点IP
+		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Config.Master.Name, m.Cluster.GetMasterIP())
 		err := ciliumInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("安装 Cilium CNI 失败: %w", err)
@@ -571,40 +573,27 @@ func (m *Manager) InstallCNI() error {
 
 // InstallCSI 安装 CSI
 func (m *Manager) InstallCSI() error {
+	// 确保master节点的SSH客户端已创建
+	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	if !exists {
+		return fmt.Errorf("获取Master节点SSH客户端失败")
+	}
 
 	switch m.CSIType {
 	case "rook-ceph":
-		// 安装 Rook-Ceph CSI
-		rookCmd := `
-git clone --single-branch --branch v1.12.9 https://github.com/rook/rook.git
-cd rook/deploy/examples
-kubectl create -f crds.yaml
-kubectl create -f common.yaml
-kubectl create -f operator.yaml
-kubectl create -f cluster.yaml
-`
-		_, err := m.RunSSHCommand(m.Config.Master.Name, rookCmd)
+		// 使用Rook安装器安装Rook-Ceph CSI
+		rookInstaller := csi.NewRookInstaller(sshClient, m.Config.Master.Name)
+		err := rookInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("安装 Rook-Ceph CSI 失败: %w", err)
 		}
 
 	case "local-path-provisioner":
-		// 安装 local-path-provisioner
-		localPathCmd := `
-kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
-`
-		_, err := m.RunSSHCommand(m.Config.Master.Name, localPathCmd)
+		// 使用LocalPath安装器安装local-path-provisioner
+		localPathInstaller := csi.NewLocalPathInstaller(sshClient, m.Config.Master.Name)
+		err := localPathInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("安装 local-path-provisioner 失败: %w", err)
-		}
-
-		// 将 local-path 设置为默认存储类
-		defaultStorageClassCmd := `
-kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-`
-		_, err = m.RunSSHCommand(m.Config.Master.Name, defaultStorageClassCmd)
-		if err != nil {
-			return fmt.Errorf("将 local-path 设置为默认存储类失败: %w", err)
 		}
 
 	case "none":
@@ -619,73 +608,19 @@ kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storagec
 
 // InstallLoadBalancer 安装 LoadBalancer (MetalLB)
 func (m *Manager) InstallLoadBalancer() error {
-	metallbCmd := `
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
-`
-	_, err := m.RunSSHCommand(m.Config.Master.Name, metallbCmd)
-	if err != nil {
+	// 确保master节点的SSH客户端已创建
+	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	if !exists {
+		return fmt.Errorf("获取Master节点SSH客户端失败")
+	}
+
+	// 使用MetalLB安装器
+	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Config.Master.Name)
+	if err := metallbInstaller.Install(); err != nil {
 		return fmt.Errorf("安装 MetalLB 失败: %w", err)
 	}
 
-	// 等待MetalLB部署完成
-	waitCmd := `
-kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=90s
-`
-	_, err = m.RunSSHCommand(m.Config.Master.Name, waitCmd)
-	if err != nil {
-		return fmt.Errorf("等待 MetalLB 部署完成失败: %w", err)
-	}
-
-	// 获取节点IP地址范围
-	ipRange, err := m.getMetalLBAddressRange()
-	if err != nil {
-		return fmt.Errorf("获取 MetalLB 地址范围失败: %w", err)
-	}
-
-	// 导入配置模板
-	configYAML := strings.Replace(metallb.CONFIG_YAML, "# - 192.168.64.200 - 192.168.64.250", fmt.Sprintf("- %s", ipRange), 1)
-
-	// 创建配置文件
-	configFile := "/tmp/metallb-config.yaml"
-	createConfigCmd := fmt.Sprintf("cat <<EOF | tee %s\n%sEOF", configFile, configYAML)
-	_, err = m.RunSSHCommand(m.Config.Master.Name, createConfigCmd)
-	if err != nil {
-		return fmt.Errorf("创建 MetalLB 配置文件失败: %w", err)
-	}
-
-	// 应用配置
-	applyConfigCmd := fmt.Sprintf("kubectl apply -f %s", configFile)
-	_, err = m.RunSSHCommand(m.Config.Master.Name, applyConfigCmd)
-	if err != nil {
-		return fmt.Errorf("应用 MetalLB 配置失败: %w", err)
-	}
-
 	return nil
-}
-
-// getMetalLBAddressRange 获取适合MetalLB的IP地址范围
-func (m *Manager) getMetalLBAddressRange() (string, error) {
-	// 获取主节点IP地址
-	ipCmd := "ip -4 addr show | grep inet | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1"
-	output, err := m.RunSSHCommand(m.Config.Master.Name, ipCmd)
-	if err != nil {
-		return "", fmt.Errorf("获取节点IP地址失败: %w", err)
-	}
-
-	// 解析IP地址
-	ip := strings.TrimSpace(output)
-	ipParts := strings.Split(ip, ".")
-	if len(ipParts) != 4 {
-		return "", fmt.Errorf("IP地址格式错误: %s", ip)
-	}
-
-	// 使用相同子网的一段IP地址作为LoadBalancer IP池
-	// 例如: 192.168.64.100 -> 192.168.64.200-192.168.64.250
-	prefix := strings.Join(ipParts[:3], ".")
-	startIP := 200
-	endIP := 250
-
-	return fmt.Sprintf("%s.%d - %s.%d", prefix, startIP, prefix, endIP), nil
 }
 
 // AddNode 添加新节点到集群

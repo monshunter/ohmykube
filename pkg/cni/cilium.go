@@ -9,17 +9,21 @@ import (
 
 // CiliumInstaller 负责安装 Cilium CNI
 type CiliumInstaller struct {
-	SSHClient  *ssh.Client
-	MasterNode string
-	Version    string
+	SSHClient     *ssh.Client
+	MasterNode    string
+	Version       string
+	APIServerHost string
+	APIServerPort string
 }
 
 // NewCiliumInstaller 创建 Cilium 安装器
-func NewCiliumInstaller(sshClient *ssh.Client, masterNode string) *CiliumInstaller {
+func NewCiliumInstaller(sshClient *ssh.Client, masterNode string, masterIP string) *CiliumInstaller {
 	return &CiliumInstaller{
-		SSHClient:  sshClient,
-		MasterNode: masterNode,
-		Version:    "1.14.5", // Cilium 版本
+		SSHClient:     sshClient,
+		MasterNode:    masterNode,
+		Version:       "1.14.5", // Cilium 版本
+		APIServerHost: masterIP, // 使用主节点IP作为API服务器地址
+		APIServerPort: "6443",   // 默认API服务器端口
 	}
 }
 
@@ -45,10 +49,10 @@ spec:
       ui:
         enabled: true
     kubeProxyReplacement: true
-    k8sServiceHost: 127.0.0.1
-    k8sServicePort: 6443
+    k8sServiceHost: %s
+    k8sServicePort: %s
 `
-	ciliumConfig = fmt.Sprintf(ciliumConfig, c.Version)
+	ciliumConfig = fmt.Sprintf(ciliumConfig, c.Version, c.APIServerHost, c.APIServerPort)
 
 	// 创建临时文件
 	tmpfile, err := os.CreateTemp("", "cilium-config-*.yaml")
@@ -97,9 +101,9 @@ helm install cilium cilium/cilium --version %s \
   --set hubble.relay.enabled=true \
   --set hubble.ui.enabled=true \
   --set kubeProxyReplacement=true \
-  --set k8sServiceHost=127.0.0.1 \
-  --set k8sServicePort=6443
-`, c.Version)
+  --set k8sServiceHost=%s \
+  --set k8sServicePort=%s
+`, c.Version, c.APIServerHost, c.APIServerPort)
 
 	_, err = c.SSHClient.RunCommand(installCmd)
 	if err != nil {
