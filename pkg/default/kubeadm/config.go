@@ -9,36 +9,36 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ConfigType 定义了配置的类型
+// ConfigType defines the type of configuration
 type ConfigType string
 
 const (
-	// InitConfiguration 类型
+	// InitConfiguration type
 	InitConfiguration ConfigType = "InitConfiguration"
-	// ClusterConfiguration 类型
+	// ClusterConfiguration type
 	ClusterConfiguration ConfigType = "ClusterConfiguration"
-	// KubeletConfiguration 类型
+	// KubeletConfiguration type
 	KubeletConfiguration ConfigType = "KubeletConfiguration"
-	// KubeProxyConfiguration 类型
+	// KubeProxyConfiguration type
 	KubeProxyConfiguration ConfigType = "KubeProxyConfiguration"
 )
 
-// YAMLDocument 表示一个YAML文档
+// YAMLDocument represents a YAML document
 type YAMLDocument map[string]any
 
-// Config 管理kubeadm配置
+// Config manages kubeadm configuration
 type Config struct {
-	// 各个配置部分
+	// Configuration sections
 	InitConfig      YAMLDocument
 	ClusterConfig   YAMLDocument
 	KubeletConfig   YAMLDocument
 	KubeProxyConfig YAMLDocument
 
-	// 配置文件路径
+	// Configuration file path
 	ConfigPath string
 }
 
-// NewConfig 创建一个新的配置实例，使用默认值
+// NewConfig creates a new configuration instance with default values
 func NewConfig() *Config {
 	return &Config{
 		InitConfig:      loadDefaultInitConfig(),
@@ -48,31 +48,31 @@ func NewConfig() *Config {
 	}
 }
 
-// LoadFromFile 从文件加载配置
+// LoadFromFile loads configuration from a file
 func LoadFromFile(filePath string) (*Config, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+		return nil, fmt.Errorf("failed to read configuration file: %w", err)
 	}
 
 	return LoadFromBytes(data)
 }
 
-// LoadFromBytes 从字节数据加载配置
+// LoadFromBytes loads configuration from byte data
 func LoadFromBytes(data []byte) (*Config, error) {
 	config := NewConfig()
 
-	// 将数据分割为多个YAML文档
+	// Split data into multiple YAML documents
 	docs, err := splitYAMLDocuments(data)
 	if err != nil {
-		return nil, fmt.Errorf("分割YAML文档失败: %w", err)
+		return nil, fmt.Errorf("failed to split YAML documents: %w", err)
 	}
 
-	// 处理每个文档
+	// Process each document
 	for _, doc := range docs {
 		var document YAMLDocument
 		if err := yaml.Unmarshal(doc, &document); err != nil {
-			return nil, fmt.Errorf("解析YAML文档失败: %w", err)
+			return nil, fmt.Errorf("failed to parse YAML document: %w", err)
 		}
 
 		kind, ok := document["kind"].(string)
@@ -95,11 +95,11 @@ func LoadFromBytes(data []byte) (*Config, error) {
 	return config, nil
 }
 
-// MergeWith 将另一个配置与当前配置合并
+// MergeWith merges another configuration with the current one
 func (c *Config) MergeWith(other *Config) *Config {
 	result := NewConfig()
 
-	// 合并每个配置部分
+	// Merge each configuration section
 	if other.InitConfig != nil {
 		mergeMaps(result.InitConfig, other.InitConfig)
 	} else {
@@ -127,45 +127,45 @@ func (c *Config) MergeWith(other *Config) *Config {
 	return result
 }
 
-// ToYAML 将配置转换为YAML字符串
+// ToYAML converts the configuration to a YAML string
 func (c *Config) ToYAML() ([]byte, error) {
 	var result []byte
 
-	// 添加InitConfig
+	// Add InitConfig
 	if c.InitConfig != nil {
 		data, err := yaml.Marshal(c.InitConfig)
 		if err != nil {
-			return nil, fmt.Errorf("序列化InitConfig失败: %w", err)
+			return nil, fmt.Errorf("failed to serialize InitConfig: %w", err)
 		}
 		result = append(result, data...)
 		result = append(result, []byte("---\n")...)
 	}
 
-	// 添加ClusterConfig
+	// Add ClusterConfig
 	if c.ClusterConfig != nil {
 		data, err := yaml.Marshal(c.ClusterConfig)
 		if err != nil {
-			return nil, fmt.Errorf("序列化ClusterConfig失败: %w", err)
+			return nil, fmt.Errorf("failed to serialize ClusterConfig: %w", err)
 		}
 		result = append(result, data...)
 		result = append(result, []byte("---\n")...)
 	}
 
-	// 添加KubeletConfig
+	// Add KubeletConfig
 	if c.KubeletConfig != nil {
 		data, err := yaml.Marshal(c.KubeletConfig)
 		if err != nil {
-			return nil, fmt.Errorf("序列化KubeletConfig失败: %w", err)
+			return nil, fmt.Errorf("failed to serialize KubeletConfig: %w", err)
 		}
 		result = append(result, data...)
 		result = append(result, []byte("---\n")...)
 	}
 
-	// 添加KubeProxyConfig
+	// Add KubeProxyConfig
 	if c.KubeProxyConfig != nil {
 		data, err := yaml.Marshal(c.KubeProxyConfig)
 		if err != nil {
-			return nil, fmt.Errorf("序列化KubeProxyConfig失败: %w", err)
+			return nil, fmt.Errorf("failed to serialize KubeProxyConfig: %w", err)
 		}
 		result = append(result, data...)
 	}
@@ -173,26 +173,26 @@ func (c *Config) ToYAML() ([]byte, error) {
 	return result, nil
 }
 
-// SaveToFile 将配置保存到文件
+// SaveToFile saves the configuration to a file
 func (c *Config) SaveToFile(filePath string) error {
 	data, err := c.ToYAML()
 	if err != nil {
-		return fmt.Errorf("转换配置为YAML失败: %w", err)
+		return fmt.Errorf("failed to convert configuration to YAML: %w", err)
 	}
 
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建目录失败: %w", err)
+		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("写入配置文件失败: %w", err)
+		return fmt.Errorf("failed to write configuration file: %w", err)
 	}
 
 	return nil
 }
 
-// GetConfig 获取指定类型的配置
+// GetConfig gets the configuration of the specified type
 func (c *Config) GetConfig(configType ConfigType) YAMLDocument {
 	switch configType {
 	case InitConfiguration:
@@ -208,7 +208,7 @@ func (c *Config) GetConfig(configType ConfigType) YAMLDocument {
 	}
 }
 
-// SetConfig 设置指定类型的配置
+// SetConfig sets the configuration of the specified type
 func (c *Config) SetConfig(configType ConfigType, config YAMLDocument) {
 	switch configType {
 	case InitConfiguration:
@@ -222,54 +222,58 @@ func (c *Config) SetConfig(configType ConfigType, config YAMLDocument) {
 	}
 }
 
-// 辅助函数
-
-// splitYAMLDocuments 将YAML数据分割为多个文档
+// splitYAMLDocuments splits YAML data into multiple documents
 func splitYAMLDocuments(data []byte) ([][]byte, error) {
-	var docs [][]byte
+	sep := []byte("---\n")
+	docs := bytes.Split(data, sep)
 
-	// 简单地按 "---" 分割
-	chunks := [][]byte{}
-	lines := [][]byte{}
-
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		if bytes.HasPrefix(bytes.TrimSpace(line), []byte("---")) {
-			if len(lines) > 0 {
-				chunks = append(chunks, bytes.Join(lines, []byte("\n")))
-				lines = [][]byte{}
-			}
-		} else {
-			lines = append(lines, line)
+	// Filter out empty documents
+	var result [][]byte
+	for _, doc := range docs {
+		if len(bytes.TrimSpace(doc)) > 0 {
+			result = append(result, doc)
 		}
 	}
 
-	if len(lines) > 0 {
-		chunks = append(chunks, bytes.Join(lines, []byte("\n")))
-	}
-
-	for _, chunk := range chunks {
-		if len(bytes.TrimSpace(chunk)) > 0 {
-			docs = append(docs, chunk)
-		}
-	}
-
-	return docs, nil
+	return result, nil
 }
 
-// mergeMaps 合并两个map
+// mergeMaps merges two maps, with overlay values taking precedence
 func mergeMaps(base, overlay YAMLDocument) {
 	for k, v := range overlay {
-		if baseVal, ok := base[k]; ok {
-			// 如果两者都是map，递归合并
-			if baseMap, ok := baseVal.(map[string]any); ok {
-				if overlayMap, ok := v.(map[string]any); ok {
-					mergeMaps(baseMap, overlayMap)
-					continue
+		if k == "kind" || k == "apiVersion" {
+			continue
+		}
+
+		// If overlay value is a map, merge it recursively
+		if overlayMap, ok := v.(map[string]any); ok {
+			if baseMap, ok := base[k].(map[string]any); ok {
+				// Create new maps for conversion
+				baseYAML := make(YAMLDocument)
+				overlayYAML := make(YAMLDocument)
+
+				for bk, bv := range baseMap {
+					baseYAML[bk] = bv
 				}
+
+				for ok, ov := range overlayMap {
+					overlayYAML[ok] = ov
+				}
+
+				mergeMaps(baseYAML, overlayYAML)
+
+				// Convert back to map[string]any
+				newBaseMap := make(map[string]any)
+				for bk, bv := range baseYAML {
+					newBaseMap[bk] = bv
+				}
+
+				base[k] = newBaseMap
+				continue
 			}
 		}
 
-		// 直接替换
+		// Otherwise, just set the value
 		base[k] = v
 	}
 }

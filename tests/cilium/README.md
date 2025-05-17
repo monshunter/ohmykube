@@ -1,66 +1,66 @@
-# Cilium 星球大战演示测试
+# Cilium Star Wars Demo Test
 
-此目录包含用于测试 Cilium 网络策略功能的脚本和配置文件，基于 Cilium 官方的 Star Wars 演示示例。
+This directory contains scripts and configuration files for testing the Cilium network policy functionality, based on the official Cilium Star Wars demo example.
 
-## 概述
+## Overview
 
-Cilium 是一个开源软件，用于提供和透明地保护应用程序工作负载之间的网络连接和负载均衡。它使用 eBPF 技术实现高效的网络策略、可观测性和安全功能。
+Cilium is an open-source software used to provide and transparently secure the network connectivity and load balancing between application workloads. It uses eBPF technology to achieve efficient network policies, observability, and security features.
 
-本测试套件演示了如何：
-1. 部署示例应用程序（死星服务、TIE战机和X翼战机）
-2. 测试默认情况下的网络访问
-3. 应用细粒度的 L7 HTTP 网络策略
-4. 验证策略是否按预期工作
+This test suite demonstrates how to:
+1. Deploy sample applications (Death Star service, TIE Fighters, and X-Wing Fighters)
+2. Test network access by default
+3. Apply fine-grained L7 HTTP network policies
+4. Verify that the policies work as expected
 
-## 测试内容
+## Test Content
 
-测试脚本 `test-starwars-demo.sh` 会执行以下操作：
+The test script `test-starwars-demo.sh` will perform the following actions:
 
-1. 检查 Cilium 是否已在集群中运行
-2. 部署 Star Wars 演示应用（deathstar 服务、tiefighter 和 xwing pod）
-3. 测试初始网络访问状态（无策略限制）
-4. 应用 L7 HTTP 网络策略，限制 tiefighter（empire 组织）只能向 deathstar 发送 POST 请求到 `/v1/request-landing` 接口
-5. 进行三项测试：
-   - 测试 TIE战机是否能执行允许的 POST 请求（应成功）
-   - 测试 TIE战机是否无法执行被禁止的 PUT 请求（应被拒绝）
-   - 测试 X翼战机（非 empire 组织）是否完全无法访问 deathstar（应超时）
-6. 测试完成后清理所有资源
+1. Check if Cilium is running in the cluster
+2. Deploy the Star Wars demo application (Death Star service, TIE Fighter, and X-Wing pods)
+3. Test the initial network access status (no policy restrictions)
+4. Apply an L7 HTTP network policy to restrict TIE Fighters (Empire organization) to only send POST requests to the `/v1/request-landing` interface of the Death Star
+5. Conduct three tests:
+   - Test if TIE Fighters can perform the allowed POST requests (should succeed)
+   - Test if TIE Fighters cannot perform the forbidden PUT requests (should be rejected)
+   - Test if X-Wing Fighters (non-Empire organization) cannot access the Death Star at all (should time out)
+6. Clean up all resources after the test is complete
 
-## 前提条件
+## Prerequisites
 
-- 正在运行的 Kubernetes 集群
-- 已安装并运行的 Cilium（最低版本 1.8）
-- 可用的 `kubectl` 命令，已配置连接到集群
+- A running Kubernetes cluster
+- Cilium installed and running (minimum version 1.8)
+- The `kubectl` command available, configured to connect to the cluster
 
-## 使用方法
+## Usage
 
-1. 确保 Cilium 已在您的集群中运行：
+1. Ensure that Cilium is running in your cluster:
    ```
    kubectl get pods -n kube-system -l k8s-app=cilium
    ```
 
-2. 运行测试脚本：
+2. Run the test script:
    ```
    chmod +x test-starwars-demo.sh
    ./test-starwars-demo.sh
    ```
 
-3. 观察输出结果，验证所有测试是否通过
+3. Observe the output to verify that all tests pass
 
-## 文件结构
+## File Structure
 
 ```
 tests/cilium/
-├── README.md                      # 本文档
-├── test-starwars-demo.sh          # 主测试脚本
+├── README.md                      # This document
+├── test-starwars-demo.sh          # Main test script
 └── manifests/
     └── starwars/
-        ├── http-sw-app.yaml       # 应用部署配置
-        └── sw_l3_l4_l7_policy.yaml # Cilium L7 网络策略
+        ├── http-sw-app.yaml       # Application deployment configuration
+        └── sw_l3_l4_l7_policy.yaml # Cilium L7 network policy
 ```
 
-## 参考资料
+## References
 
-- [Cilium Star Wars 演示文档](https://docs.cilium.io/en/latest/gettingstarted/demo/)
-- [Cilium 网络策略](https://docs.cilium.io/en/latest/security/policy/)
-- [Cilium HTTP 策略示例](https://docs.cilium.io/en/latest/security/policy/language/#http) 
+- [Cilium Star Wars Demo Documentation](https://docs.cilium.io/en/latest/gettingstarted/demo/)
+- [Cilium Network Policy](https://docs.cilium.io/en/latest/security/policy/)
+- [Cilium HTTP Policy Example](https://docs.cilium.io/en/latest/security/policy/language/#http) ****

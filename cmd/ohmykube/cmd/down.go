@@ -9,14 +9,14 @@ import (
 
 var downCmd = &cobra.Command{
 	Use:   "down",
-	Short: "删除一个 k8s 集群",
-	Long:  `删除已创建的 Kubernetes 集群和相关的所有虚拟机资源`,
+	Short: "Delete a k8s cluster",
+	Long:  `Delete the created Kubernetes cluster and all related virtual machine resources`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
 		if err != nil {
 			return err
 		}
-		// 创建集群配置
+		// Create cluster configuration
 		config := cluster.NewConfig(clusterName, k8sVersion, workersCount,
 			cluster.Resource{
 				CPU:    masterCPU,
@@ -28,17 +28,17 @@ var downCmd = &cobra.Command{
 				Disk:   workerDisk,
 			})
 		config.K8sVersion = k8sVersion
-		// 创建集群管理器
+		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, nil)
 		if err != nil {
 			return err
 		}
 
-		// 删除集群
+		// Delete cluster
 		return manager.DeleteCluster()
 	},
 }
 
 func init() {
-	// 暂时没有特定标志
+	// No specific flags at the moment
 }

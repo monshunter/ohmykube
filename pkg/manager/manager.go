@@ -19,11 +19,12 @@ import (
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/kubeconfig"
 	"github.com/monshunter/ohmykube/pkg/lb"
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/multipass"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
-// Manager 集群管理器
+// Manager cluster manager
 type Manager struct {
 	Config             *cluster.Config
 	MultipassClient    *multipass.Client
@@ -31,19 +32,19 @@ type Manager struct {
 	SSHManager         *ssh.SSHManager
 	Cluster            *cluster.Cluster
 	InitOptions        environment.InitOptions
-	CNIType            string // 使用的CNI类型，默认为flannel
-	CSIType            string // 使用的CSI类型，默认为local-path-provisioner
-	DownloadKubeconfig bool   // 是否将kubeconfig下载到本地
+	CNIType            string // CNI type to use, default is flannel
+	CSIType            string // CSI type to use, default is local-path-provisioner
+	DownloadKubeconfig bool   // Whether to download kubeconfig to local
 }
 
-// NewManager 创建新的集群管理器
+// NewManager creates a new cluster manager
 func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *cluster.Cluster) (*Manager, error) {
 	mpClient, err := multipass.NewClient(config.Image, sshConfig.Password, sshConfig.GetSSHKey(), sshConfig.GetSSHPubKey())
 	if err != nil {
-		return nil, fmt.Errorf("创建 Multipass 客户端失败: %w", err)
+		return nil, fmt.Errorf("failed to create Multipass client: %w", err)
 	}
 
-	// 创建集群信息对象
+	// Create cluster information object
 	if cluster == nil {
 		cluster = clusterFromConfig(config)
 	}
@@ -54,13 +55,13 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *clust
 		SSHManager:         ssh.NewSSHManager(cluster, sshConfig),
 		Cluster:            cluster,
 		InitOptions:        environment.DefaultInitOptions(),
-		CNIType:            "flannel",                // 默认使用flannel
-		CSIType:            "local-path-provisioner", // 默认使用local-path-provisioner
-		DownloadKubeconfig: true,                     // 默认下载kubeconfig
+		CNIType:            "flannel",                // Default to flannel
+		CSIType:            "local-path-provisioner", // Default to local-path-provisioner
+		DownloadKubeconfig: true,                     // Default to download kubeconfig
 	}
 
-	// 稍后在需要使用时创建SSH客户端和KubeadmConfig
-	// KubeadmConfig将在初始化Master节点时设置
+	// SSH clients and KubeadmConfig will be created later when needed
+	// KubeadmConfig will be set when initializing the Master node
 
 	return manager, nil
 }
@@ -94,24 +95,24 @@ func clusterFromConfig(config *cluster.Config) *cluster.Cluster {
 	return cluster.NewCluster(config.Name, config.K8sVersion, master, workers)
 }
 
-// SetInitOptions 设置环境初始化选项
+// SetInitOptions sets environment initialization options
 func (m *Manager) SetInitOptions(options environment.InitOptions) {
 	m.InitOptions = options
 }
 
-// GetNodeIP 获取节点IP地址
+// GetNodeIP gets the node IP address
 func (m *Manager) GetNodeIP(nodeName string) (string, error) {
-	// 重试几次，因为节点可能需要一些时间才能完全启动
+	// Retry a few times, as the node may need some time to fully start
 	var err error
 	maxRetries := 5
 	retryDelay := 2 * time.Second
 
 	for i := 0; i < maxRetries; i++ {
-		// 使用multipass info命令获取节点信息
+		// Use multipass info command to get node information
 		cmd := exec.Command("multipass", "info", nodeName, "--format", "json")
 		output, err := cmd.Output()
 		if err == nil {
-			// 解析JSON输出
+			// Parse JSON output
 			var info struct {
 				Info map[string]struct {
 					Ipv4 []string `json:"ipv4"`
@@ -119,12 +120,12 @@ func (m *Manager) GetNodeIP(nodeName string) (string, error) {
 			}
 
 			if err := json.Unmarshal(output, &info); err != nil {
-				return "", fmt.Errorf("解析节点信息失败: %w", err)
+				return "", fmt.Errorf("failed to parse node information: %w", err)
 			}
 
 			nodeInfo, ok := info.Info[nodeName]
 			if !ok || len(nodeInfo.Ipv4) == 0 {
-				// 如果此次尝试未找到节点信息，继续重试
+				// If node info not found in this attempt, continue retrying
 				time.Sleep(retryDelay)
 				continue
 			}
@@ -132,15 +133,15 @@ func (m *Manager) GetNodeIP(nodeName string) (string, error) {
 			return nodeInfo.Ipv4[0], nil
 		}
 
-		// 如果失败，等待一段时间后重试
-		fmt.Printf("获取节点 %s 的IP地址失败，正在重试 (%d/%d)...\n", nodeName, i+1, maxRetries)
+		// If failed, wait a while before retrying
+		log.Infof("Failed to get IP address for node %s, retrying (%d/%d)...", nodeName, i+1, maxRetries)
 		time.Sleep(retryDelay)
 	}
 
-	return "", fmt.Errorf("获取节点 %s 的IP地址失败，已重试 %d 次: %w", nodeName, maxRetries, err)
+	return "", fmt.Errorf("failed to get IP address for node %s after %d retries: %w", nodeName, maxRetries, err)
 }
 
-// WaitForSSHReady 等待节点SSH服务就绪
+// WaitForSSHReady waits for the node's SSH service to be ready
 func (m *Manager) WaitForSSHReady(ip string, port string, maxRetries int) error {
 	retryDelay := 2 * time.Second
 
@@ -151,11 +152,11 @@ func (m *Manager) WaitForSSHReady(ip string, port string, maxRetries int) error 
 			return nil
 		}
 
-		fmt.Printf("等待SSH服务就绪 (%s:%s)，正在重试 (%d/%d)...\n", ip, port, i+1, maxRetries)
+		log.Infof("Waiting for SSH service to be ready (%s:%s), retrying (%d/%d)...", ip, port, i+1, maxRetries)
 		time.Sleep(retryDelay)
 	}
 
-	return fmt.Errorf("等待SSH服务就绪超时 (%s:%s)", ip, port)
+	return fmt.Errorf("timeout waiting for SSH service to be ready (%s:%s)", ip, port)
 }
 
 func (m *Manager) CloseSSHClient() {
@@ -165,7 +166,7 @@ func (m *Manager) CloseSSHClient() {
 func (m *Manager) AddNodeInfo(nodeName string, cpu int, memory int, disk int) error {
 	extraInfo, err := m.GetExtraInfoFromRemote(nodeName)
 	if err != nil {
-		return fmt.Errorf("获取节点 %s 信息失败: %w", nodeName, err)
+		return fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
 	}
 	nodeInfo := cluster.NewNodeInfo(nodeName, cluster.RoleWorker, cpu, memory, disk)
 	nodeInfo.ExtraInfo = extraInfo
@@ -173,220 +174,220 @@ func (m *Manager) AddNodeInfo(nodeName string, cpu int, memory int, disk int) er
 	return nil
 }
 
-// UpdateClusterInfo 更新集群信息
+// UpdateClusterInfo updates cluster information
 func (m *Manager) UpdateClusterInfo() error {
 	extraInfomations := make([]cluster.NodeExtraInfo, 0, 1+len(m.Cluster.Workers))
 	masterInfo, err := m.GetExtraInfoFromRemote(m.Cluster.Master.Name)
 	if err != nil {
-		return fmt.Errorf("获取Master节点信息失败: %w", err)
+		return fmt.Errorf("failed to get Master node information: %w", err)
 	}
 	extraInfomations = append(extraInfomations, masterInfo)
 	for i := range m.Cluster.Workers {
 		workerInfo, err := m.GetExtraInfoFromRemote(m.Cluster.Workers[i].Name)
 		if err != nil {
-			return fmt.Errorf("获取Worker节点信息失败: %w", err)
+			return fmt.Errorf("failed to get Worker node information: %w", err)
 		}
 		extraInfomations = append(extraInfomations, workerInfo)
 	}
 	m.Cluster.UpdateWithExtraInfo(extraInfomations)
-	// 保存集群信息到本地文件
+	// Save cluster information to local file
 	return cluster.SaveClusterInfomation(m.Cluster)
 }
 
 func (m *Manager) GetExtraInfoFromRemote(nodeName string) (info cluster.NodeExtraInfo, err error) {
-	// 获取IP信息
+	// Get IP information
 	ip, err := m.GetNodeIP(nodeName)
 	if err != nil {
-		return info, fmt.Errorf("获取节点 %s 的IP失败: %w", nodeName, err)
+		return info, fmt.Errorf("failed to get IP for node %s: %w", nodeName, err)
 	}
 
-	// 填充基本信息
+	// Fill in basic information
 	info.Name = nodeName
 	info.IP = ip
 	info.Status = cluster.NodeStatusRunning
 	sshClient, err := m.SSHManager.CreateClient(nodeName, ip)
 	if err != nil {
-		return info, fmt.Errorf("创建SSH客户端失败: %w", err)
+		return info, fmt.Errorf("failed to create SSH client: %w", err)
 	}
-	// 获取主机名
+	// Get hostname
 	hostnameCmd := "hostname"
 	hostnameOutput, err := sshClient.RunCommand(hostnameCmd)
 	if err == nil {
 		info.Hostname = strings.TrimSpace(hostnameOutput)
 	} else {
-		fmt.Printf("警告: 获取节点 %s 的主机名失败: %v\n", nodeName, err)
-		return info, fmt.Errorf("获取节点 %s 的主机名失败: %w", nodeName, err)
+		log.Infof("Warning: failed to get hostname for node %s: %v", nodeName, err)
+		return info, fmt.Errorf("failed to get hostname for node %s: %w", nodeName, err)
 	}
 
-	// 获取操作系统发行版信息
+	// Get OS distribution information
 	releaseCmd := `cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2`
 	releaseOutput, err := sshClient.RunCommand(releaseCmd)
 	if err == nil {
 		info.Release = strings.TrimSpace(releaseOutput)
 	} else {
-		fmt.Printf("警告: 获取节点 %s 的发行版信息失败: %v\n", nodeName, err)
+		log.Infof("Warning: failed to get distribution information for node %s: %v", nodeName, err)
 	}
 
-	// 获取内核版本
+	// Get kernel version
 	kernelCmd := "uname -r"
 	kernelOutput, err := sshClient.RunCommand(kernelCmd)
 	if err == nil {
 		info.Kernel = strings.TrimSpace(kernelOutput)
 	} else {
-		fmt.Printf("警告: 获取节点 %s 的内核版本失败: %v\n", nodeName, err)
+		log.Infof("Warning: failed to get kernel version for node %s: %v", nodeName, err)
 	}
 
-	// 获取系统架构
+	// Get system architecture
 	archCmd := "uname -m"
 	archOutput, err := sshClient.RunCommand(archCmd)
 	if err == nil {
 		info.Arch = strings.TrimSpace(archOutput)
 	} else {
-		fmt.Printf("警告: 获取节点 %s 的系统架构失败: %v\n", nodeName, err)
+		log.Infof("Warning: failed to get system architecture for node %s: %v", nodeName, err)
 	}
 
-	// 获取操作系统类型
+	// Get OS type
 	osCmd := `uname -o`
 	osOutput, err := sshClient.RunCommand(osCmd)
 	if err == nil {
 		info.OS = strings.TrimSpace(osOutput)
 	} else {
-		fmt.Printf("警告: 获取节点 %s 的操作系统类型失败: %v\n", nodeName, err)
+		log.Infof("Warning: failed to get OS type for node %s: %v", nodeName, err)
 	}
 
 	return info, nil
 }
 
-// RunSSHCommand 通过SSH在节点上执行命令
+// RunSSHCommand executes a command on a node via SSH
 func (m *Manager) RunSSHCommand(nodeName, command string) (string, error) {
 	return m.SSHManager.RunCommand(nodeName, command)
 }
 
-// SetCNIType 设置CNI类型
+// SetCNIType sets the CNI type
 func (m *Manager) SetCNIType(cniType string) {
 	m.CNIType = cniType
 }
 
-// SetCSIType 设置CSI类型
+// SetCSIType sets the CSI type
 func (m *Manager) SetCSIType(csiType string) {
 	m.CSIType = csiType
 }
 
-// SetDownloadKubeconfig 设置是否下载kubeconfig到本地
+// SetDownloadKubeconfig sets whether to download kubeconfig to local
 func (m *Manager) SetDownloadKubeconfig(download bool) {
 	m.DownloadKubeconfig = download
 }
 
-// SetupKubeconfig 配置本地 kubeconfig
+// SetupKubeconfig configures local kubeconfig
 func (m *Manager) SetupKubeconfig() (string, error) {
-	// 获取Master节点的SSH客户端
+	// Get SSH client for the Master node
 	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
 	if !exists {
-		return "", fmt.Errorf("获取Master节点SSH客户端失败")
+		return "", fmt.Errorf("failed to get SSH client for Master node")
 	}
 
-	// 使用统一的kubeconfig下载逻辑
+	// Use unified kubeconfig download logic
 	return kubeconfig.DownloadToLocal(sshClient, m.Config.Name, "")
 }
 
-// CreateCluster 创建一个新的集群
+// CreateCluster creates a new cluster
 func (m *Manager) CreateCluster() error {
-	fmt.Println("开始创建 Kubernetes 集群...")
+	log.Info("Starting to create Kubernetes cluster...")
 
-	// 1. 创建所有节点（并行）
-	fmt.Println("创建集群节点...")
+	// 1. Create all nodes (in parallel)
+	log.Info("Creating cluster nodes...")
 	err := m.CreateClusterNodes()
 	if err != nil {
-		return fmt.Errorf("创建集群节点失败: %w", err)
+		return fmt.Errorf("failed to create cluster nodes: %w", err)
 	}
 
-	// 2. 更新集群信息
-	fmt.Println("获取集群节点信息...")
+	// 2. Update cluster information
+	log.Info("Getting cluster node information...")
 	err = m.UpdateClusterInfo()
 	if err != nil {
-		return fmt.Errorf("更新集群信息失败: %w", err)
+		return fmt.Errorf("failed to update cluster information: %w", err)
 	}
 
-	fmt.Println("使用root用户通过SSH连接节点...")
+	log.Info("Connecting to nodes via SSH as root user...")
 
-	// 3. 初始化环境
+	// 3. Initialize environment
 	err = m.InitializeEnvironment()
 	if err != nil {
-		return fmt.Errorf("初始化环境失败: %w", err)
+		return fmt.Errorf("failed to initialize environment: %w", err)
 	}
-	// 4. 配置 master 节点
-	fmt.Println("配置 Kubernetes Master 节点...")
+	// 4. Configure master node
+	log.Info("Configuring Kubernetes Master node...")
 	joinCommand, err := m.InitializeMaster()
 	if err != nil {
-		return fmt.Errorf("初始化 Master 节点失败: %w", err)
+		return fmt.Errorf("failed to initialize Master node: %w", err)
 	}
 
-	// 5. 配置 worker 节点
-	fmt.Println("将 Worker 节点加入集群...")
+	// 5. Configure worker nodes
+	log.Info("Joining Worker nodes to the cluster...")
 	err = m.JoinWorkerNodes(joinCommand)
 	if err != nil {
-		return fmt.Errorf("将 Worker 节点加入集群失败: %w", err)
+		return fmt.Errorf("failed to join Worker nodes to the cluster: %w", err)
 	}
 
-	// 6. 安装 CNI
+	// 6. Install CNI
 	if m.CNIType != "none" {
-		fmt.Printf("安装 %s CNI...\n", m.CNIType)
+		log.Infof("Installing %s CNI...", m.CNIType)
 		err = m.InstallCNI()
 		if err != nil {
-			return fmt.Errorf("安装 CNI 失败: %w", err)
+			return fmt.Errorf("failed to install CNI: %w", err)
 		}
 	} else {
-		fmt.Println("跳过CNI安装...")
+		log.Info("Skipping CNI installation...")
 	}
 
-	// 7. 安装 CSI
+	// 7. Install CSI
 	if m.CSIType != "none" {
-		fmt.Printf("安装 %s CSI...\n", m.CSIType)
+		log.Infof("Installing %s CSI...", m.CSIType)
 		err = m.InstallCSI()
 		if err != nil {
-			return fmt.Errorf("安装 CSI 失败: %w", err)
+			return fmt.Errorf("failed to install CSI: %w", err)
 		}
 	} else {
-		fmt.Println("跳过CSI安装...")
+		log.Info("Skipping CSI installation...")
 	}
 
-	// 8. 安装 MetalLB
-	fmt.Println("安装 MetalLB LoadBalancer...")
+	// 8. Install MetalLB
+	log.Info("Installing MetalLB LoadBalancer...")
 	err = m.InstallLoadBalancer()
 	if err != nil {
-		return fmt.Errorf("安装 LoadBalancer 失败: %w", err)
+		return fmt.Errorf("failed to install LoadBalancer: %w", err)
 	}
 
-	// 9. 下载 kubeconfig 到本地 (可选步骤)
+	// 9. Download kubeconfig to local (optional step)
 	var kubeconfigPath string
 	if m.DownloadKubeconfig {
-		fmt.Println("下载 kubeconfig 到本地...")
+		log.Info("Downloading kubeconfig to local...")
 		kubeconfigPath, err = m.SetupKubeconfig()
 		if err != nil {
-			return fmt.Errorf("下载 kubeconfig 到本地失败: %w", err)
+			return fmt.Errorf("failed to download kubeconfig to local: %w", err)
 		}
 	} else {
-		// 只获取路径但不下载文件
+		// Just get the path without downloading the file
 		kubeconfigPath, err = kubeconfig.GetKubeconfigPath(m.Config.Name)
 		if err != nil {
-			return fmt.Errorf("获取 kubeconfig 路径失败: %w", err)
+			return fmt.Errorf("failed to get kubeconfig path: %w", err)
 		}
-		fmt.Println("跳过 kubeconfig 下载...")
+		log.Info("Skipping kubeconfig download...")
 	}
 
-	fmt.Printf("\n集群创建成功！可以使用以下命令访问集群:\n")
-	fmt.Printf("export KUBECONFIG=%s\n", kubeconfigPath)
-	fmt.Printf("kubectl get nodes\n")
+	log.Info("\nCluster created successfully! You can access the cluster with the following commands:")
+	log.Infof("\texport KUBECONFIG=%s", kubeconfigPath)
+	log.Info("\tkubectl get nodes")
 
 	return nil
 }
 
-// CreateClusterNodes 并行创建集群所有节点（master和worker）
+// CreateClusterNodes creates all cluster nodes in parallel (master and workers)
 func (m *Manager) CreateClusterNodes() error {
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(m.Config.Workers)+1) // 为所有节点（包括master）创建错误通道
+	errChan := make(chan error, len(m.Config.Workers)+1) // Create error channel for all nodes (including master)
 
-	// 创建一个包含所有节点配置的切片
+	// Create a slice containing configurations for all nodes
 	allNodes := make([]struct {
 		name   string
 		cpu    string
@@ -394,7 +395,7 @@ func (m *Manager) CreateClusterNodes() error {
 		disk   string
 	}, 0, len(m.Config.Workers)+1)
 
-	// 添加master节点配置
+	// Add master node configuration
 	allNodes = append(allNodes, struct {
 		name   string
 		cpu    string
@@ -407,7 +408,7 @@ func (m *Manager) CreateClusterNodes() error {
 		disk:   strconv.Itoa(m.Config.Master.Disk) + "G",
 	})
 
-	// 添加worker节点配置
+	// Add worker node configurations
 	for i := range m.Config.Workers {
 		allNodes = append(allNodes, struct {
 			name   string
@@ -422,23 +423,23 @@ func (m *Manager) CreateClusterNodes() error {
 		})
 	}
 
-	// 并行创建所有节点
+	// Create all nodes in parallel
 	for _, node := range allNodes {
 		wg.Add(1)
 		go func(nodeName, cpus, memory, disk string) {
 			defer wg.Done()
-			fmt.Printf("创建节点: %s\n", nodeName)
+			log.Infof("Creating node: %s", nodeName)
 			if err := m.MultipassClient.CreateVM(nodeName, cpus, memory, disk); err != nil {
-				errChan <- fmt.Errorf("创建节点 %s 失败: %w", nodeName, err)
+				errChan <- fmt.Errorf("failed to create node %s: %w", nodeName, err)
 			}
 		}(node.name, node.cpu, node.memory, node.disk)
 	}
 
-	// 等待所有节点创建完成
+	// Wait for all node creation to complete
 	wg.Wait()
 	close(errChan)
 
-	// 检查是否有错误发生
+	// Check if any errors occurred
 	for err := range errChan {
 		if err != nil {
 			return err
@@ -448,7 +449,7 @@ func (m *Manager) CreateClusterNodes() error {
 	return nil
 }
 
-// CreateMasterNode 创建 master 节点
+// CreateMasterNode creates master node
 func (m *Manager) CreateMasterNode() error {
 	masterName := m.Config.Master.Name
 	cpus := strconv.Itoa(m.Config.Master.CPU)
@@ -458,7 +459,7 @@ func (m *Manager) CreateMasterNode() error {
 	return m.MultipassClient.CreateVM(masterName, cpus, memory, disk)
 }
 
-// CreateWorkerNodes 创建 worker 节点
+// CreateWorkerNodes creates worker nodes
 func (m *Manager) CreateWorkerNodes() error {
 	for i := range m.Config.Workers {
 		nodeName := m.Config.Workers[i].Name
@@ -468,59 +469,44 @@ func (m *Manager) CreateWorkerNodes() error {
 
 		err := m.MultipassClient.CreateVM(nodeName, cpus, memory, disk)
 		if err != nil {
-			return fmt.Errorf("创建 Worker 节点 %s 失败: %w", nodeName, err)
+			return fmt.Errorf("failed to create Worker node %s: %w", nodeName, err)
 		}
 	}
 	return nil
 }
 
 func (m *Manager) InitializeEnvironment() error {
-	// 将所有节点名称收集到一个切片中
+	// Collect all node names into a slice
 	nodeNames := []string{m.Config.Master.Name}
 	for _, worker := range m.Config.Workers {
 		nodeNames = append(nodeNames, worker.Name)
 	}
 
-	// 使用并行批量初始化器，支持并行初始化多个节点
+	// Use parallel batch initializer to support parallel initialization of multiple nodes
 	batchInitializer := environment.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
 
-	// 使用并发限制执行初始化（限制为2个节点同时初始化，避免apt锁争用）
+	// Use concurrency limit to execute initialization (limit to 2 nodes at a time to avoid apt lock contention)
 	if err := batchInitializer.InitializeWithConcurrencyLimit(3); err != nil {
-		return fmt.Errorf("初始化环境失败: %w", err)
+		return fmt.Errorf("failed to initialize environment: %w", err)
 	}
 
 	return nil
 }
 
-// InitializeMaster 初始化 master 节点
+// InitializeMaster initializes master node
 func (m *Manager) InitializeMaster() (string, error) {
-	// 为master节点创建SSH客户端
-	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
-	if !exists {
-		return "", fmt.Errorf("获取Master节点SSH客户端失败")
-	}
+	// Create KubeadmConfig
+	m.KubeadmConfig = kubeadm.NewKubeadmConfig(m.SSHManager, m.Config.K8sVersion, m.Config.Master.Name)
 
-	// 创建KubeadmConfig
-	m.KubeadmConfig = kubeadm.NewKubeadmConfig(sshClient, m.Config.K8sVersion, m.Config.Master.Name)
-
-	// 使用新的配置系统生成配置文件并初始化Master
+	// Use new config system to generate config file and initialize Master
 	err := m.KubeadmConfig.InitMaster()
 	if err != nil {
-		return "", fmt.Errorf("初始化 Master 节点失败: %w", err)
+		return "", fmt.Errorf("failed to initialize Master node: %w", err)
 	}
-	return m.joinCommand()
+	return m.getJoinCommand()
 }
 
-func (m *Manager) joinCommand() (string, error) {
-	joinCmd := `sudo kubeadm token create --print-join-command`
-	output, err := m.RunSSHCommand(m.Config.Master.Name, joinCmd)
-	if err != nil {
-		return "", fmt.Errorf("获取集群加入命令失败: %w", err)
-	}
-	return output, nil
-}
-
-// JoinWorkerNodes 将 worker 节点加入集群
+// JoinWorkerNodes joins worker nodes to the cluster
 func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	for i := range m.Config.Workers {
 		err := m.JoinWorkerNode(m.Config.Workers[i].Name, joinCommand)
@@ -531,112 +517,113 @@ func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	return nil
 }
 
-func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
-	_, err := m.RunSSHCommand(nodeName, joinCommand)
-	if err != nil {
-		return fmt.Errorf("将节点 %s 加入集群失败: %w", nodeName, err)
-	}
-	fmt.Printf("节点 %s 已成功加入集群！\n", nodeName)
-	return nil
+// getJoinCommand gets the join command
+func (m *Manager) getJoinCommand() (string, error) {
+	return m.KubeadmConfig.PrintJoinCommand()
 }
 
-// InstallCNI 安装 CNI
+// JoinWorkerNode joins a worker node to the cluster
+func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
+	return m.KubeadmConfig.JoinNode(nodeName, joinCommand)
+}
+
+// InstallCNI installs CNI
 func (m *Manager) InstallCNI() error {
-	// 确保master节点的SSH客户端已创建
+	// Ensure master node's SSH client is created
 	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
 	if !exists {
-		return fmt.Errorf("获取Master节点SSH客户端失败")
+		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
 	switch m.CNIType {
 	case "cilium":
-		// 获取Master节点IP
+		// Get Master node IP
 		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Config.Master.Name, m.Cluster.GetMasterIP())
 		err := ciliumInstaller.Install()
 		if err != nil {
-			return fmt.Errorf("安装 Cilium CNI 失败: %w", err)
+			return fmt.Errorf("failed to install Cilium CNI: %w", err)
 		}
 
 	case "flannel":
 		flannelInstaller := cni.NewFlannelInstaller(sshClient, m.Config.Master.Name)
 		err := flannelInstaller.Install()
 		if err != nil {
-			return fmt.Errorf("安装 Flannel CNI 失败: %w", err)
+			return fmt.Errorf("failed to install Flannel CNI: %w", err)
 		}
 
 	default:
-		return fmt.Errorf("不支持的 CNI 类型: %s", m.CNIType)
+		return fmt.Errorf("unsupported CNI type: %s", m.CNIType)
 	}
 
 	return nil
 }
 
-// InstallCSI 安装 CSI
+// InstallCSI installs CSI
 func (m *Manager) InstallCSI() error {
-	// 确保master节点的SSH客户端已创建
+	// Ensure master node's SSH client is created
 	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
 	if !exists {
-		return fmt.Errorf("获取Master节点SSH客户端失败")
+		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
 	switch m.CSIType {
 	case "rook-ceph":
-		// 使用Rook安装器安装Rook-Ceph CSI
+		// Use Rook installer to install Rook-Ceph CSI
 		rookInstaller := csi.NewRookInstaller(sshClient, m.Config.Master.Name)
 		err := rookInstaller.Install()
 		if err != nil {
-			return fmt.Errorf("安装 Rook-Ceph CSI 失败: %w", err)
+			return fmt.Errorf("failed to install Rook-Ceph CSI: %w", err)
 		}
 
 	case "local-path-provisioner":
-		// 使用LocalPath安装器安装local-path-provisioner
+		// Use LocalPath installer to install local-path-provisioner
 		localPathInstaller := csi.NewLocalPathInstaller(sshClient, m.Config.Master.Name)
 		err := localPathInstaller.Install()
 		if err != nil {
-			return fmt.Errorf("安装 local-path-provisioner 失败: %w", err)
+			return fmt.Errorf("failed to install local-path-provisioner: %w", err)
 		}
 
 	case "none":
 		return nil
 
 	default:
-		return fmt.Errorf("不支持的 CSI 类型: %s", m.CSIType)
+		return fmt.Errorf("unsupported CSI type: %s", m.CSIType)
 	}
 
 	return nil
 }
 
-// InstallLoadBalancer 安装 LoadBalancer (MetalLB)
+// InstallLoadBalancer installs LoadBalancer (MetalLB)
 func (m *Manager) InstallLoadBalancer() error {
-	// 确保master节点的SSH客户端已创建
+	// Ensure master node's SSH client is created
 	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
 	if !exists {
-		return fmt.Errorf("获取Master节点SSH客户端失败")
+		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
-	// 使用MetalLB安装器
+	// Use MetalLB installer
 	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Config.Master.Name)
 	if err := metallbInstaller.Install(); err != nil {
-		return fmt.Errorf("安装 MetalLB 失败: %w", err)
+		return fmt.Errorf("failed to install MetalLB: %w", err)
 	}
 
 	return nil
 }
 
-// AddNode 添加新节点到集群
+// AddNode adds a new node to the cluster
 func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
-	// 确定节点名称
+	// Determine node name
 	nodeName := ""
 	index := 0
 	if role == cluster.RoleMaster {
-		// 目前只支持单 master
-		return fmt.Errorf("目前仅支持单 Master 节点")
+		// Currently only support single master
+		return fmt.Errorf("currently only support single Master node")
 	} else {
 		for _, worker := range m.Cluster.Workers {
 			suffix := strings.Split(strings.TrimPrefix(worker.Name, m.Config.Prefix()), "-")[1]
 			suffixInt, err := strconv.Atoi(suffix)
 			if err != nil {
-				return fmt.Errorf("节点 %s 的索引转换失败: %w", worker.Name, err)
+				return fmt.Errorf("failed to convert index for node %s: %w", worker.Name, err)
 			}
 			if suffixInt > index {
 				index = suffixInt
@@ -645,62 +632,62 @@ func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
 	}
 
 	nodeName = m.Config.GetWorkerVMName(index + 1)
-	// 创建虚拟机
+	// Create virtual machine
 	cpuStr := strconv.Itoa(cpu)
 	memoryStr := strconv.Itoa(memory) + "M"
 	diskStr := strconv.Itoa(disk) + "G"
-	fmt.Printf("创建节点 %s, cpu: %s, memory: %s, disk: %s\n", nodeName, cpuStr, memoryStr, diskStr)
+	log.Infof("Creating node %s, cpu: %s, memory: %s, disk: %s", nodeName, cpuStr, memoryStr, diskStr)
 	err := m.MultipassClient.CreateVM(nodeName, cpuStr, memoryStr, diskStr)
 	if err != nil {
-		return fmt.Errorf("创建节点 %s 失败: %w", nodeName, err)
+		return fmt.Errorf("failed to create node %s: %w", nodeName, err)
 	}
 
-	// 更新节点信息并获取IP
-	fmt.Printf("更新节点信息 %s\n", nodeName)
+	// Update node information and get IP
+	log.Infof("Updating node information %s", nodeName)
 	err = m.AddNodeInfo(nodeName, cpu, memory, disk)
 	if err != nil {
-		return fmt.Errorf("更新节点信息失败: %w", err)
+		return fmt.Errorf("failed to update node information: %w", err)
 	}
-	fmt.Printf("更新集群信息 %s\n", nodeName)
+	log.Infof("Updating cluster information %s", nodeName)
 	err = cluster.SaveClusterInfomation(m.Cluster)
 	if err != nil {
-		return fmt.Errorf("更新集群信息失败: %w", err)
+		return fmt.Errorf("failed to update cluster information: %w", err)
 	}
 
-	// 使用初始化器来设置环境
-	fmt.Printf("初始化节点 %s\n", nodeName)
+	// Use initializer to set environment
+	log.Infof("Initializing node %s", nodeName)
 	initializer := environment.NewInitializerWithOptions(m, nodeName, m.InitOptions)
 	if err := initializer.Initialize(); err != nil {
-		return fmt.Errorf("初始化节点 %s 环境失败: %w", nodeName, err)
+		return fmt.Errorf("failed to initialize node %s environment: %w", nodeName, err)
 	}
 
-	// 获取 join 命令
-	fmt.Printf("获取 join 命令 %s\n", nodeName)
-	joinCmd, err := m.joinCommand()
+	// Get join command
+	log.Infof("Getting join command %s", nodeName)
+	joinCmd, err := m.getJoinCommand()
 	if err != nil {
-		return fmt.Errorf("获取 join 命令失败: %w", err)
+		return fmt.Errorf("failed to get join command: %w", err)
 	}
-	fmt.Printf("加入集群 %s\n", nodeName)
+	log.Infof("Joining cluster %s", nodeName)
 	err = m.JoinWorkerNode(nodeName, joinCmd)
 	if err != nil {
-		return fmt.Errorf("节点 %s 加入集群失败: %w", nodeName, err)
+		return fmt.Errorf("failed to join node %s to cluster: %w", nodeName, err)
 	}
 	return nil
 }
 
-// DeleteNode 从集群中删除节点
+// DeleteNode deletes a node from the cluster
 func (m *Manager) DeleteNode(nodeName string, force bool) error {
-	// 检查节点是否存在
+	// Check if node exists
 	nodeInfo := m.Cluster.GetNodeByName(nodeName)
 	if nodeInfo == nil {
-		return fmt.Errorf("节点 %s 不存在", nodeName)
+		return fmt.Errorf("node %s does not exist", nodeName)
 	}
 
 	if nodeInfo.Role == cluster.RoleMaster {
-		return fmt.Errorf("不能删除 Master 节点，请先删除整个集群")
+		return fmt.Errorf("cannot delete Master node, please delete the entire cluster first")
 	}
 
-	// 从 Kubernetes 中驱逐节点
+	// Evict node from Kubernetes
 	if !force {
 		err := m.drainAndDeleteNode(nodeName)
 		if err != nil {
@@ -708,88 +695,88 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 		}
 	}
 
-	// 删除虚拟机
-	fmt.Printf("正在删除节点 %s...\n", nodeName)
+	// Delete virtual machine
+	log.Infof("Deleting node %s...", nodeName)
 	err := m.MultipassClient.DeleteVM(nodeName)
 	if err != nil {
-		return fmt.Errorf("删除节点 %s 失败: %w", nodeName, err)
+		return fmt.Errorf("failed to delete node %s: %w", nodeName, err)
 	}
 
-	// 更新集群信息
-	fmt.Printf("更新集群信息 %s\n", nodeName)
+	// Update cluster information
+	log.Infof("Updating cluster information %s", nodeName)
 	m.Cluster.RemoveNode(nodeName)
 	if err := cluster.SaveClusterInfomation(m.Cluster); err != nil {
-		fmt.Printf("警告: 更新集群信息失败: %v\n", err)
+		return fmt.Errorf("failed to update cluster information: %w", err)
 	}
 
-	fmt.Printf("节点 %s 已成功删除！\n", nodeName)
+	log.Infof("Node %s has been successfully deleted!", nodeName)
 	return nil
 }
 
 func (m *Manager) drainAndDeleteNode(nodeName string) error {
-	fmt.Printf("正在从 Kubernetes 集群中驱逐节点 %s...\n", nodeName)
+	log.Infof("Draining node %s from Kubernetes cluster...", nodeName)
 	drainCmd := fmt.Sprintf(`kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force`, nodeName)
 	_, err := m.RunSSHCommand(m.Config.Master.Name, drainCmd)
 	if err != nil {
-		return fmt.Errorf("驱逐节点 %s 失败: %w", nodeName, err)
+		return fmt.Errorf("failed to drain node %s: %w", nodeName, err)
 	}
 
 	deleteNodeCmd := fmt.Sprintf(`kubectl delete node %s`, nodeName)
 	_, err = m.RunSSHCommand(m.Config.Master.Name, deleteNodeCmd)
 	if err != nil {
-		return fmt.Errorf("从集群中删除节点 %s 失败: %w", nodeName, err)
+		return fmt.Errorf("failed to delete node %s from cluster: %w", nodeName, err)
 	}
 	return nil
 }
 
-// DeleteCluster 删除集群
+// DeleteCluster deletes the cluster
 func (m *Manager) DeleteCluster() error {
-	fmt.Println("正在删除 Kubernetes 集群...")
+	log.Info("Deleting Kubernetes cluster...")
 
-	// 列出所有虚拟机
+	// List all virtual machines
 	prefix := m.Config.Prefix()
 	vms, err := m.MultipassClient.ListVMs(prefix)
 	if err != nil {
-		return fmt.Errorf("列出虚拟机失败: %w", err)
+		return fmt.Errorf("failed to list virtual machines: %w", err)
 	}
 
-	// 找到集群相关的虚拟机并删除
+	// Find cluster-related virtual machines and delete them
 	for _, vm := range vms {
 		if strings.HasPrefix(vm, prefix) {
-			fmt.Printf("删除节点: %s\n", vm)
-			// 关闭SSH连接
+			log.Infof("Deleting node: %s", vm)
+			// Close SSH connection
 			m.SSHManager.CloseClient(vm)
 
 			err := m.MultipassClient.DeleteVM(vm)
 			if err != nil {
-				fmt.Printf("警告: 删除节点 %s 失败: %v\n", vm, err)
+				log.Errorf("failed to delete node %s: %v", vm, err)
 			}
 		}
 	}
 
-	// 删除 kubeconfig
+	// Delete kubeconfig
 	kubeDir := filepath.Join(os.Getenv("HOME"), ".kube")
 	ohmykubeConfig := filepath.Join(kubeDir, m.Config.Name+"-config")
 	if _, err := os.Stat(ohmykubeConfig); err == nil {
 		os.Remove(ohmykubeConfig)
 	}
 
-	// 删除集群信息文件
+	// Delete cluster information file
 	homeDir, _ := os.UserHomeDir()
 	clusterYaml := filepath.Join(homeDir, ".ohmykube", "cluster.yaml")
 	if _, err := os.Stat(clusterYaml); err == nil {
 		os.Remove(clusterYaml)
 	}
 
-	fmt.Println("集群删除完成！")
+	log.Info("Cluster deleted successfully!")
 	return nil
 }
 
-// SetKubeadmConfigPath 设置自定义的kubeadm配置路径
+// SetKubeadmConfigPath sets the custom kubeadm config path
 func (m *Manager) SetKubeadmConfigPath(configPath string) {
-	// 如果KubeadmConfig还未初始化，则不进行设置
+	// If KubeadmConfig is not initialized, do not set the custom config path
 	if m.KubeadmConfig == nil {
-		fmt.Println("警告: KubeadmConfig尚未初始化，暂时无法设置自定义配置路径")
+		log.Info("KubeadmConfig is not initialized, cannot set custom config path")
 		return
 	}
 	m.KubeadmConfig.SetCustomConfig(configPath)

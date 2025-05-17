@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monshunter/ohmykube/pkg/log"
 	"golang.org/x/crypto/ssh"
 )
 
-// Client 是SSH客户端的封装
+// Client is a wrapper for the SSH client
 type Client struct {
 	Host      string
 	Port      string
@@ -22,7 +23,7 @@ type Client struct {
 	connected bool
 }
 
-// NewClient 创建一个新的SSH客户端
+// NewClient creates a new SSH client
 func NewClient(host, port, user, password, privKey string) *Client {
 	return &Client{
 		Host:     host,
@@ -33,18 +34,18 @@ func NewClient(host, port, user, password, privKey string) *Client {
 	}
 }
 
-// Connect 连接到SSH服务器
+// Connect connects to the SSH server
 func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 如果已经连接，直接返回
+	// If already connected, return
 	if c.connected && c.client != nil {
-		// 检查连接是否仍然有效
+		// Check if the connection is still valid
 		if err := c.testConnection(); err == nil {
 			return nil
 		}
-		// 连接无效，关闭并重新连接
+		// Connection is invalid, close and reconnect
 		c.client.Close()
 		c.client = nil
 		c.connected = false
@@ -52,12 +53,12 @@ func (c *Client) Connect() error {
 
 	var auth []ssh.AuthMethod
 
-	// 如果提供了密码，使用密码认证
+	// If password is provided, use password authentication
 	if c.Password != "" {
 		auth = append(auth, ssh.Password(c.Password))
 	}
 
-	// 如果提供了私钥，使用私钥认证
+	// If private key is provided, use private key authentication
 	if c.PrivKey != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(c.PrivKey))
 		if err != nil {
@@ -70,7 +71,7 @@ func (c *Client) Connect() error {
 		User:            c.User,
 		Auth:            auth,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         30 * time.Second, // 增加超时时间
+		Timeout:         30 * time.Second, // Increase timeout
 	}
 
 	addr := net.JoinHostPort(c.Host, c.Port)
@@ -81,27 +82,27 @@ func (c *Client) Connect() error {
 		client, err = ssh.Dial("tcp", addr, config)
 		if err != nil {
 			if i < maxRetries-1 {
-				fmt.Printf("ssh连接 %s 失败: %v, 正在重试(%d/%d)...\n", addr, err, i+1, maxRetries)
+				log.Infof("ssh connection %s failed: %v, retrying (%d/%d)...", addr, err, i+1, maxRetries)
 				time.Sleep(3 * time.Second)
 				continue
 			}
-			return fmt.Errorf("ssh连接失败: %w", err)
+			return fmt.Errorf("ssh connection failed: %w", err)
 		}
 		c.client = client
 		c.connected = true
-		fmt.Printf("ssh连接 %s 成功\n", addr)
+		log.Infof("ssh connection %s successful", addr)
 		return nil
 	}
-	return fmt.Errorf("ssh连接失败: %w", err)
+	return fmt.Errorf("ssh connection failed: %w", err)
 }
 
-// testConnection 测试连接是否有效
+// testConnection tests if the connection is valid
 func (c *Client) testConnection() error {
 	if c.client == nil {
 		return fmt.Errorf("SSH client is nil")
 	}
 
-	// 创建一个临时会话来测试连接
+	// Create a temporary session to test the connection
 	session, err := c.client.NewSession()
 	if err != nil {
 		return err
@@ -110,7 +111,7 @@ func (c *Client) testConnection() error {
 	return nil
 }
 
-// Close 关闭SSH连接
+// Close closes the SSH connection
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -122,14 +123,14 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// RunCommand 在SSH服务器上执行命令，包含重试机制
+// RunCommand runs a command on the SSH server, with retry mechanism
 func (c *Client) RunCommand(command string) (string, error) {
 	maxRetries := 3
 	var lastErr error
 	var output string
 
 	for i := 0; i < maxRetries; i++ {
-		// 确保连接
+		// Ensure connection
 		if err := c.Connect(); err != nil {
 			lastErr = err
 			if i < maxRetries-1 {
@@ -139,11 +140,11 @@ func (c *Client) RunCommand(command string) (string, error) {
 			return "", lastErr
 		}
 
-		// 创建会话
+		// Create session
 		session, err := c.client.NewSession()
 		if err != nil {
-			lastErr = fmt.Errorf("创建SSH会话失败: %w", err)
-			// 连接可能已断开，强制重连
+			lastErr = fmt.Errorf("failed to create SSH session: %w", err)
+			// Connection may be disconnected, force reconnect
 			c.mu.Lock()
 			if c.client != nil {
 				c.client.Close()
@@ -159,13 +160,13 @@ func (c *Client) RunCommand(command string) (string, error) {
 			return "", lastErr
 		}
 
-		// 确保会话关闭
+		// Ensure session is closed
 		defer session.Close()
 
-		// 执行命令
+		// Execute command
 		out, err := session.CombinedOutput(command)
 		if err != nil {
-			lastErr = fmt.Errorf("执行命令失败: %w, 输出: %s", err, string(out))
+			lastErr = fmt.Errorf("failed to execute command: %w, output: %s", err, string(out))
 			if i < maxRetries-1 {
 				time.Sleep(2 * time.Second)
 				continue
@@ -180,13 +181,13 @@ func (c *Client) RunCommand(command string) (string, error) {
 	return "", lastErr
 }
 
-// TransferFile 将本地文件传输到远程服务器
+// TransferFile transfers a local file to the remote server
 func (c *Client) TransferFile(localPath, remotePath string) error {
 	maxRetries := 3
 	var lastErr error
 
 	for i := 0; i < maxRetries; i++ {
-		// 确保连接
+		// Ensure connection
 		if err := c.Connect(); err != nil {
 			lastErr = err
 			if i < maxRetries-1 {
@@ -196,17 +197,17 @@ func (c *Client) TransferFile(localPath, remotePath string) error {
 			return lastErr
 		}
 
-		// 读取本地文件
+		// Read local file
 		data, err := os.ReadFile(localPath)
 		if err != nil {
-			return fmt.Errorf("读取本地文件失败: %w", err)
+			return fmt.Errorf("failed to read local file: %w", err)
 		}
 
-		// 创建SCP会话
+		// Create SCP session
 		session, err := c.client.NewSession()
 		if err != nil {
-			lastErr = fmt.Errorf("创建SSH会话失败: %w", err)
-			// 连接可能已断开，强制重连
+			lastErr = fmt.Errorf("failed to create SSH session: %w", err)
+			// Connection may be disconnected, force reconnect
 			c.mu.Lock()
 			if c.client != nil {
 				c.client.Close()
@@ -223,11 +224,11 @@ func (c *Client) TransferFile(localPath, remotePath string) error {
 		}
 		defer session.Close()
 
-		// 创建远程文件
+		// Create remote file
 		cmd := fmt.Sprintf("cat > %s", remotePath)
 		stdin, err := session.StdinPipe()
 		if err != nil {
-			lastErr = fmt.Errorf("创建标准输入管道失败: %w", err)
+			lastErr = fmt.Errorf("failed to create standard input pipe: %w", err)
 			if i < maxRetries-1 {
 				time.Sleep(2 * time.Second)
 				continue
@@ -236,7 +237,7 @@ func (c *Client) TransferFile(localPath, remotePath string) error {
 		}
 
 		if err := session.Start(cmd); err != nil {
-			lastErr = fmt.Errorf("启动SCP会话失败: %w", err)
+			lastErr = fmt.Errorf("failed to start SCP session: %w", err)
 			if i < maxRetries-1 {
 				time.Sleep(2 * time.Second)
 				continue
@@ -244,9 +245,9 @@ func (c *Client) TransferFile(localPath, remotePath string) error {
 			return lastErr
 		}
 
-		// 写入文件内容
+		// Write file content
 		if _, err := stdin.Write(data); err != nil {
-			lastErr = fmt.Errorf("写入文件数据失败: %w", err)
+			lastErr = fmt.Errorf("failed to write file data: %w", err)
 			if i < maxRetries-1 {
 				time.Sleep(2 * time.Second)
 				continue
@@ -256,7 +257,7 @@ func (c *Client) TransferFile(localPath, remotePath string) error {
 		stdin.Close()
 
 		if err := session.Wait(); err != nil {
-			lastErr = fmt.Errorf("传输文件等待完成失败: %w", err)
+			lastErr = fmt.Errorf("failed to wait for file transfer: %w", err)
 			if i < maxRetries-1 {
 				time.Sleep(2 * time.Second)
 				continue

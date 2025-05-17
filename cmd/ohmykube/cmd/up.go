@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	// 集群配置选项
+	// Cluster configuration options
 	k8sVersion         string
 	workersCount       int
 	masterMemory       int
@@ -29,17 +29,17 @@ var (
 
 var upCmd = &cobra.Command{
 	Use:   "up",
-	Short: "创建一个 k8s 集群 (包含CNI, CSI, MetalLB)",
-	Long: `创建一个基于虚拟机的 k8s 集群，包含以下组件：
-- 可选的CNI: flannel(默认) 或 cilium
-- 可选的CSI: local-path-provisioner(默认) 或 rook-ceph
-- MetalLB 作为 LoadBalancer 实现`,
+	Short: "Create a k8s cluster (with CNI, CSI, MetalLB)",
+	Long: `Create a VM-based k8s cluster with the following components:
+- Optional CNI: flannel(default) or cilium
+- Optional CSI: local-path-provisioner(default) or rook-ceph
+- MetalLB as LoadBalancer implementation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
 		if err != nil {
 			return err
 		}
-		// 创建集群配置
+		// Create cluster configuration
 		config := cluster.NewConfig(clusterName, k8sVersion, workersCount,
 			cluster.Resource{
 				CPU:    masterCPU,
@@ -52,58 +52,58 @@ var upCmd = &cobra.Command{
 			})
 		config.K8sVersion = k8sVersion
 
-		// 创建环境初始化选项
+		// Create environment initialization options
 		enableIPVS := proxyMode == "ipvs"
 
-		// 获取默认初始化选项并修改需要的字段
+		// Get default initialization options and modify required fields
 		initOptions := environment.DefaultInitOptions()
-		initOptions.DisableSwap = !enableSwap // 如果enableSwap为true，则DisableSwap为false
-		initOptions.EnableIPVS = enableIPVS   // 当proxyMode为ipvs时启用IPVS
+		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
+		initOptions.EnableIPVS = enableIPVS   // Enable IPVS when proxyMode is ipvs
 
-		// 创建集群管理器并传递选项
+		// Create cluster manager and pass options
 		manager, err := manager.NewManager(config, sshConfig, nil)
 		if err != nil {
 			return err
 		}
 
-		// 设置环境初始化选项
+		// Set environment initialization options
 		manager.SetInitOptions(initOptions)
 
-		// 设置CNI类型
+		// Set CNI type
 		manager.SetCNIType(cniType)
 
-		// 设置CSI类型
+		// Set CSI type
 		manager.SetCSIType(csiType)
 
-		// 设置是否下载kubeconfig
+		// Set whether to download kubeconfig
 		manager.SetDownloadKubeconfig(downloadKubeconfig)
 
-		// 设置自定义kubeadm配置（如果提供）
+		// Set custom kubeadm config (if provided)
 		if kubeadmConfigPath != "" {
 			manager.SetKubeadmConfigPath(kubeadmConfigPath)
 		}
 
-		// 创建集群
+		// Create cluster
 		defer manager.CloseSSHClient()
 		return manager.CreateCluster()
 	},
 }
 
 func init() {
-	// 添加命令行参数
-	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 2, "工作节点数量")
-	upCmd.Flags().IntVar(&masterMemory, "master-memory", 4096, "Master节点内存(MB)")
-	upCmd.Flags().IntVar(&masterCPU, "master-cpu", 2, "Master节点CPU核心数")
-	upCmd.Flags().IntVar(&workerMemory, "worker-memory", 2048, "Worker节点内存(MB)")
-	upCmd.Flags().IntVar(&workerCPU, "worker-cpu", 1, "Worker节点CPU核心数")
-	upCmd.Flags().IntVar(&masterDisk, "master-disk", 20, "Master节点磁盘大小(GB)")
-	upCmd.Flags().IntVar(&workerDisk, "worker-disk", 10, "Worker节点磁盘大小(GB)")
-	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes版本")
-	upCmd.Flags().StringVar(&vmImage, "vm-image", "24.04", "虚拟机镜像")
-	upCmd.Flags().StringVar(&proxyMode, "proxy-mode", "ipvs", "代理模式 (iptables或ipvs)")
-	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "启用Swap (仅适用于K8s 1.28+)")
-	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "自定义kubeadm配置文件路径")
-	upCmd.Flags().StringVar(&cniType, "cni", "flannel", "要安装的CNI类型 (flannel, cilium, none)")
-	upCmd.Flags().StringVar(&csiType, "csi", "local-path-provisioner", "要安装的CSI类型 (local-path-provisioner, rook-ceph, none)")
-	upCmd.Flags().BoolVar(&downloadKubeconfig, "download-kubeconfig", true, "将kubeconfig下载到本地~/.kube目录")
+	// Add command line parameters
+	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 2, "Number of worker nodes")
+	upCmd.Flags().IntVar(&masterMemory, "master-memory", 4096, "Master node memory (MB)")
+	upCmd.Flags().IntVar(&masterCPU, "master-cpu", 2, "Master node CPU cores")
+	upCmd.Flags().IntVar(&workerMemory, "worker-memory", 2048, "Worker node memory (MB)")
+	upCmd.Flags().IntVar(&workerCPU, "worker-cpu", 1, "Worker node CPU cores")
+	upCmd.Flags().IntVar(&masterDisk, "master-disk", 20, "Master node disk size (GB)")
+	upCmd.Flags().IntVar(&workerDisk, "worker-disk", 10, "Worker node disk size (GB)")
+	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes version")
+	upCmd.Flags().StringVar(&vmImage, "vm-image", "24.04", "VM image")
+	upCmd.Flags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
+	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "Enable Swap (only for K8s 1.28+)")
+	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "Custom kubeadm config file path")
+	upCmd.Flags().StringVar(&cniType, "cni", "flannel", "CNI type to install (flannel, cilium, none)")
+	upCmd.Flags().StringVar(&csiType, "csi", "local-path-provisioner", "CSI type to install (local-path-provisioner, rook-ceph, none)")
+	upCmd.Flags().BoolVar(&downloadKubeconfig, "download-kubeconfig", true, "Download kubeconfig to local ~/.kube directory")
 }

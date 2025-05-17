@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -19,38 +20,42 @@ var (
 
 var addCmd = &cobra.Command{
 	Use:   "add",
-	Short: "添加一个或者多个节点",
-	Long:  `向已存在的 Kubernetes 集群中添加一个或者多个工作节点`,
+	Short: "Add one or more nodes",
+	Long:  `Add one or more worker nodes to an existing Kubernetes cluster`,
 	Args:  cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 加载集群信息
+		// Load cluster information
 		clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
 		if err != nil {
-			return fmt.Errorf("加载集群信息失败: %w", err)
+			log.Errorf("Failed to load cluster information: %v", err)
+			return fmt.Errorf("failed to load cluster information: %w", err)
 		}
 
-		// 读取SSH配置
+		// Read SSH configuration
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
 		if err != nil {
-			return fmt.Errorf("创建SSH配置失败: %w", err)
+			log.Errorf("Failed to create SSH configuration: %v", err)
+			return fmt.Errorf("failed to create SSH configuration: %w", err)
 		}
-		// 创建集群配置
+		// Create cluster configuration
 		config := &cluster.Config{
 			Name:       clusterInfo.Name,
 			K8sVersion: clusterInfo.K8sVersion,
 			Master:     cluster.Node{Name: clusterInfo.Master.Name},
 		}
 
-		// 创建集群管理器
+		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, clusterInfo)
 		if err != nil {
-			return fmt.Errorf("创建集群管理器失败: %w", err)
+			log.Errorf("Failed to create cluster manager: %v", err)
+			return fmt.Errorf("failed to create cluster manager: %w", err)
 		}
 		defer manager.CloseSSHClient()
 		for range count {
-			// 添加节点（注意这里不需要显式设置InitOptions，因为NewManager中已经使用DefaultInitOptions初始化了）
+			// Add node (InitOptions is already initialized in NewManager with DefaultInitOptions)
 			if err := manager.AddNode(addNodeRole, addNodeCPU, addNodeMemory, addNodeDisk); err != nil {
-				return fmt.Errorf("添加节点失败: %w", err)
+				log.Errorf("Failed to add node: %v", err)
+				return fmt.Errorf("failed to add node: %w", err)
 			}
 		}
 		return nil
@@ -59,9 +64,9 @@ var addCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(addCmd)
-	addCmd.Flags().IntVar(&addNodeMemory, "memory", 2048, "节点内存(MB)")
-	addCmd.Flags().IntVar(&addNodeCPU, "cpu", 2, "节点CPU核心数")
-	addCmd.Flags().IntVar(&addNodeDisk, "disk", 20, "节点磁盘空间(GB)")
-	addCmd.Flags().StringVar(&addNodeRole, "role", "worker", "节点角色 (worker/master)")
-	addCmd.Flags().IntVar(&count, "count", 1, "添加的节点数量")
+	addCmd.Flags().IntVar(&addNodeMemory, "memory", 2048, "Node memory (MB)")
+	addCmd.Flags().IntVar(&addNodeCPU, "cpu", 2, "Node CPU cores")
+	addCmd.Flags().IntVar(&addNodeDisk, "disk", 20, "Node disk space (GB)")
+	addCmd.Flags().StringVar(&addNodeRole, "role", "worker", "Node role (worker/master)")
+	addCmd.Flags().IntVar(&count, "count", 1, "Number of nodes to add")
 }

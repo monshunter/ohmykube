@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -16,42 +17,46 @@ var (
 
 var deleteCmd = &cobra.Command{
 	Use:   "delete",
-	Short: "删除一个或者多个节点",
-	Long:  `从现有 Kubernetes 集群中删除一个或者多个节点`,
+	Short: "Delete one or more nodes",
+	Long:  `Delete one or more nodes from an existing Kubernetes cluster`,
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// args 中获取节点名称
+		// Get node names from args
 		deleteNodeNames := args
-		// 加载集群信息
+		// Load cluster information
 		clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
 		if err != nil {
-			return fmt.Errorf("加载集群信息失败: %w", err)
+			log.Errorf("Failed to load cluster information: %v", err)
+			return fmt.Errorf("failed to load cluster information: %w", err)
 		}
 
-		// 读取SSH配置
+		// Read SSH configuration
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
 		if err != nil {
-			return fmt.Errorf("创建SSH配置失败: %w", err)
+			log.Errorf("Failed to create SSH configuration: %v", err)
+			return fmt.Errorf("failed to create SSH configuration: %w", err)
 		}
 
-		// 创建集群配置
+		// Create cluster configuration
 		config := &cluster.Config{
 			Name:       clusterInfo.Name,
 			K8sVersion: clusterInfo.K8sVersion,
 			Master:     cluster.Node{Name: clusterInfo.Master.Name},
 		}
 
-		// 创建集群管理器
+		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, clusterInfo)
 		if err != nil {
-			return fmt.Errorf("创建集群管理器失败: %w", err)
+			log.Errorf("Failed to create cluster manager: %v", err)
+			return fmt.Errorf("failed to create cluster manager: %w", err)
 		}
 		defer manager.CloseSSHClient()
-		// 删除节点
+		// Delete nodes
 		for _, nodeName := range deleteNodeNames {
 			nodeName = strings.TrimSpace(nodeName)
 			if err := manager.DeleteNode(nodeName, deleteForce); err != nil {
-				return fmt.Errorf("删除节点 %s 失败: %w", nodeName, err)
+				log.Errorf("Failed to delete node %s: %v", nodeName, err)
+				return fmt.Errorf("failed to delete node %s: %w", nodeName, err)
 			}
 		}
 
@@ -61,5 +66,5 @@ var deleteCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(deleteCmd)
-	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "强制删除节点，即使它不能正常从集群中移除")
+	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "Force delete the node even if it cannot be gracefully removed from the cluster")
 }

@@ -4,25 +4,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/default/kubeadm"
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
-// KubeadmConfig 保存 kubeadm 配置
+// KubeadmConfig stores kubeadm configuration
 type KubeadmConfig struct {
-	SSHClient         *ssh.Client
+	SSHManager        *ssh.SSHManager
 	MasterNode        string
 	PodCIDR           string
 	ServiceCIDR       string
 	KubernetesVersion string
-	CustomConfigPath  string // 新增：自定义配置路径
+	CustomConfigPath  string // Added: custom configuration path
 }
 
-// NewKubeadmConfig 创建一个新的 kubeadm 配置
-func NewKubeadmConfig(sshClient *ssh.Client, k8sVersion string, masterNode string) *KubeadmConfig {
+// NewKubeadmConfig creates a new kubeadm configuration
+func NewKubeadmConfig(sshManager *ssh.SSHManager, k8sVersion string, masterNode string) *KubeadmConfig {
 	return &KubeadmConfig{
-		SSHClient:         sshClient,
+		SSHManager:        sshManager,
 		MasterNode:        masterNode,
 		PodCIDR:           "10.244.0.0/16",
 		ServiceCIDR:       "10.96.0.0/12",
@@ -30,9 +32,9 @@ func NewKubeadmConfig(sshClient *ssh.Client, k8sVersion string, masterNode strin
 	}
 }
 
-// InitMaster 初始化 Kubernetes 控制平面
+// InitMaster initializes Kubernetes control plane
 func (k *KubeadmConfig) InitMaster() error {
-	// 使用新的配置生成系统
+	// Use new configuration generation system
 	configPath, err := kubeadm.GenerateKubeadmConfig(
 		k.KubernetesVersion,
 		k.PodCIDR,
@@ -40,66 +42,84 @@ func (k *KubeadmConfig) InitMaster() error {
 		k.CustomConfigPath,
 	)
 	if err != nil {
-		return fmt.Errorf("生成 kubeadm 配置失败: %w", err)
+		return fmt.Errorf("failed to generate kubeadm configuration: %w", err)
 	}
-	defer os.Remove(configPath) // 确保临时文件被删除
+	defer os.Remove(configPath) // Ensure temporary file is deleted
 
-	// 将配置文件传输到虚拟机
+	// Transfer configuration file to the VM
 	remoteConfigPath := "/tmp/kubeadm-config.yaml"
-	if err := k.SSHClient.TransferFile(configPath, remoteConfigPath); err != nil {
-		return fmt.Errorf("传输 kubeadm 配置文件到虚拟机失败: %w", err)
+	sshClient, exists := k.SSHManager.GetClient(k.MasterNode)
+	if !exists {
+		return fmt.Errorf("failed to get SSH client for Master node")
+	}
+	if err := sshClient.TransferFile(configPath, remoteConfigPath); err != nil {
+		return fmt.Errorf("failed to transfer kubeadm configuration file to VM: %w", err)
 	}
 
-	// 执行 kubeadm init
+	// Execute kubeadm init
 	initCmd := fmt.Sprintf("sudo kubeadm init --config %s --upload-certs", remoteConfigPath)
-	_, err = k.SSHClient.RunCommand(initCmd)
+	_, err = k.SSHManager.RunCommand(k.MasterNode, initCmd)
 	if err != nil {
-		return fmt.Errorf("执行 kubeadm init 失败: %w", err)
+		return fmt.Errorf("failed to execute kubeadm init: %w", err)
 	}
-	// 配置 kubectl
+	// Configure kubectl
 	configCmd := `mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config`
-	_, err = k.SSHClient.RunCommand(configCmd)
+	_, err = k.SSHManager.RunCommand(k.MasterNode, configCmd)
 	if err != nil {
-		return fmt.Errorf("配置 kubectl 失败: %w", err)
+		return fmt.Errorf("failed to configure kubectl: %w", err)
 	}
 
 	return nil
 }
 
-// JoinNode 将节点加入集群
+func (k *KubeadmConfig) PrintJoinCommand() (string, error) {
+	joinCmd := `sudo kubeadm token create --print-join-command`
+	output, err := k.SSHManager.RunCommand(k.MasterNode, joinCmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get join command: %w", err)
+	}
+	return output, nil
+}
+
+// JoinNode adds a node to the cluster
 func (k *KubeadmConfig) JoinNode(nodeName, joinCommand string) error {
-	_, err := k.SSHClient.RunCommand("sudo " + joinCommand)
-	if err != nil {
-		return fmt.Errorf("节点加入集群失败: %w", err)
+	if !strings.HasPrefix(joinCommand, "sudo ") {
+		joinCommand = "sudo " + joinCommand
 	}
+	_, err := k.SSHManager.RunCommand(nodeName, joinCommand)
+	if err != nil {
+		return fmt.Errorf("failed to join node %s to cluster: %w", nodeName, err)
+	}
+	log.Infof("Node %s has been successfully joined to cluster!", nodeName)
 	return nil
+
 }
 
-// GetKubeconfig 获取 kubeconfig 到本地
+// GetKubeconfig gets kubeconfig to local
 func (k *KubeadmConfig) GetKubeconfig() (string, error) {
-	// 获取 kubeconfig 内容
-	output, err := k.SSHClient.RunCommand("cat $HOME/.kube/config")
+	// Get kubeconfig content
+	output, err := k.SSHManager.RunCommand(k.MasterNode, "cat $HOME/.kube/config")
 	if err != nil {
-		return "", fmt.Errorf("获取 kubeconfig 失败: %w", err)
+		return "", fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
 
-	// 创建本地 kubeconfig 文件
+	// Create local kubeconfig file
 	kubeDir := filepath.Join(os.Getenv("HOME"), ".kube")
 	if err := os.MkdirAll(kubeDir, 0755); err != nil {
-		return "", fmt.Errorf("创建 .kube 目录失败: %w", err)
+		return "", fmt.Errorf("failed to create .kube directory: %w", err)
 	}
 
 	ohmykubeConfig := filepath.Join(kubeDir, "ohmykube-config")
 	if err := os.WriteFile(ohmykubeConfig, []byte(output), 0644); err != nil {
-		return "", fmt.Errorf("写入 kubeconfig 文件失败: %w", err)
+		return "", fmt.Errorf("failed to write kubeconfig file: %w", err)
 	}
 
 	return ohmykubeConfig, nil
 }
 
-// SetCustomConfig 设置自定义配置文件路径
+// SetCustomConfig sets custom configuration file path
 func (k *KubeadmConfig) SetCustomConfig(configPath string) {
 	k.CustomConfigPath = configPath
 }

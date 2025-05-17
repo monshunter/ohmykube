@@ -1,8 +1,7 @@
 package cmd
 
 import (
-	"fmt"
-
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/spf13/cobra"
 )
 
@@ -14,22 +13,22 @@ var (
 
 var registryCmd = &cobra.Command{
 	Use:   "registry",
-	Short: "(可选) 创建一个本地harbor",
-	Long:  `创建一个基于虚拟机的本地 Harbor 私有容器镜像仓库`,
+	Short: "(Optional) Create a local harbor",
+	Long:  `Create a local Harbor private container registry based on a virtual machine`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("开始创建本地 Harbor 实例...")
-		fmt.Println("注意: 此功能尚未实现，将在未来版本中支持")
-		// TODO: 实现 Harbor 创建逻辑
-		// 1. 创建虚拟机
-		// 2. 安装 Docker
-		// 3. 安装 Harbor
-		// 4. 配置证书和访问方式
+		log.Info("Starting to create local Harbor instance...")
+		log.Info("Note: This feature is not yet implemented and will be supported in future versions")
+		// TODO: Implement Harbor creation logic
+		// 1. Create VM
+		// 2. Install Docker
+		// 3. Install Harbor
+		// 4. Configure certificates and access methods
 		return nil
 	},
 }
 
 func init() {
-	registryCmd.Flags().IntVar(&harborMemory, "memory", 4096, "Harbor实例内存(MB)")
-	registryCmd.Flags().IntVar(&harborCPU, "cpu", 2, "Harbor实例CPU核心数")
-	registryCmd.Flags().IntVar(&harborDisk, "disk", 40, "Harbor实例磁盘空间(GB)")
+	registryCmd.Flags().IntVar(&harborMemory, "memory", 4096, "Harbor instance memory (MB)")
+	registryCmd.Flags().IntVar(&harborCPU, "cpu", 2, "Harbor instance CPU cores")
+	registryCmd.Flags().IntVar(&harborDisk, "disk", 40, "Harbor instance disk space (GB)")
 }

@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// NodeStatus 表示节点状态
+// NodeStatus represents node status
 type NodeStatus string
 
 const (
@@ -23,7 +23,7 @@ const (
 	ApiVersion  = "ohmykube.dev/v1alpha1"
 )
 
-// NodeInfo 保存节点详细信息
+// NodeInfo stores detailed node information
 type NodeInfo struct {
 	Name       string        `yaml:"name"`
 	Role       string        `yaml:"role"`
@@ -59,7 +59,7 @@ func NewNodeInfo(name string, role string, cpu int, memory int, disk int) NodeIn
 	}
 }
 
-// Cluster 保存集群信息
+// Cluster stores cluster information
 type Cluster struct {
 	ApiVersion string     `yaml:"apiVersion"`
 	Kind       string     `yaml:"kind"`
@@ -147,55 +147,55 @@ func (c *Cluster) AddNode(node NodeInfo) {
 	c.Workers = append(c.Workers, node)
 }
 
-// SaveCluster 保存集群信息到文件
+// SaveClusterInfomation saves cluster information to a file
 func SaveClusterInfomation(info *Cluster) error {
-	// 创建 .ohmykube 目录
+	// Create the .ohmykube directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("获取用户主目录失败: %w", err)
+		return fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
 	ohmykubeDir := filepath.Join(homeDir, ".ohmykube", info.Name)
 	if err := os.MkdirAll(ohmykubeDir, 0755); err != nil {
-		return fmt.Errorf("创建 .ohmykube 目录失败: %w", err)
+		return fmt.Errorf("failed to create .ohmykube directory: %w", err)
 	}
 
-	// 将集群信息保存到 YAML 文件
+	// Save cluster information to YAML file
 	clusterYaml := filepath.Join(ohmykubeDir, "cluster.yaml")
 	data, err := yaml.Marshal(info)
 	if err != nil {
-		return fmt.Errorf("序列化集群信息失败: %w", err)
+		return fmt.Errorf("failed to serialize cluster information: %w", err)
 	}
 
 	if err := os.WriteFile(clusterYaml, data, 0644); err != nil {
-		return fmt.Errorf("保存集群信息到 %s 失败: %w", clusterYaml, err)
+		return fmt.Errorf("failed to save cluster information to %s: %w", clusterYaml, err)
 	}
 
 	return nil
 }
 
-// LoadCluster 从文件加载集群信息
+// LoadClusterInfomation loads cluster information from a file
 func LoadClusterInfomation(name string) (*Cluster, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("获取用户主目录失败: %w", err)
+		return nil, fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
 	clusterYaml := filepath.Join(homeDir, ".ohmykube", name, "cluster.yaml")
 	data, err := os.ReadFile(clusterYaml)
 	if err != nil {
-		return nil, fmt.Errorf("读取集群信息文件失败: %w", err)
+		return nil, fmt.Errorf("failed to read cluster information file: %w", err)
 	}
 
 	var info Cluster
 	if err := yaml.Unmarshal(data, &info); err != nil {
-		return nil, fmt.Errorf("解析集群信息失败: %w", err)
+		return nil, fmt.Errorf("failed to parse cluster information: %w", err)
 	}
 
 	return &info, nil
 }
 
-// GenerateSSHCommand 生成SSH命令字符串
+// GenerateSSHCommand generates SSH command string
 func (n *NodeInfo) GenerateSSHCommand() {
 	n.SSHCommand = fmt.Sprintf("ssh -p %s %s@%s", n.SSHPort, n.SSHUser, n.ExtraInfo.IP)
 }

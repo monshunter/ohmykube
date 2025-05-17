@@ -4,71 +4,71 @@ import (
 	"os"
 )
 
-// SSHCommandRunner 定义了执行SSH命令的接口
+// SSHCommandRunner defines the interface for executing SSH commands
 type SSHCommandRunner interface {
 	RunSSHCommand(nodeName string, command string) (string, error)
 }
 
-// InitOptions 定义环境初始化选项
+// InitOptions defines environment initialization options
 type InitOptions struct {
-	DisableSwap      bool   // 是否禁用swap
-	EnableIPVS       bool   // 是否启用IPVS模式
-	ContainerRuntime string // 容器运行时，默认为containerd
-	K8sMirrorURL     string // Kubernetes源地址，默认为官方源
+	DisableSwap      bool   // Whether to disable swap
+	EnableIPVS       bool   // Whether to enable IPVS mode
+	ContainerRuntime string // Container runtime, default is containerd
+	K8sMirrorURL     string // Kubernetes source URL, default is official source
 }
 
-// DefaultInitOptions 返回默认初始化选项
+// DefaultInitOptions returns default initialization options
 func DefaultInitOptions() InitOptions {
-	// 从环境变量读取K8s源地址配置，如果未设置则使用官方源
+	// Read K8s source URL from environment variable, if not set use the official source
 	k8sMirrorURL := os.Getenv("OHMYKUBE_K8S_MIRROR_URL")
 	if k8sMirrorURL == "" {
 		k8sMirrorURL = "https://pkgs.k8s.io/core:/stable:/v1.33/deb"
 	}
 
 	return InitOptions{
-		DisableSwap:      true,         // 默认禁用swap
-		EnableIPVS:       false,        // 默认不启用IPVS
-		ContainerRuntime: "containerd", // 默认使用containerd
-		K8sMirrorURL:     k8sMirrorURL, // 使用环境变量配置的源或默认源
+		DisableSwap:      true,         // Default to disable swap
+		EnableIPVS:       false,        // Default to not enable IPVS
+		ContainerRuntime: "containerd", // Default to use containerd
+		K8sMirrorURL:     k8sMirrorURL, // Use source configured by environment variable or default source
 	}
 }
 
-// EnvironmentInitializer 是环境初始化器的接口
+// EnvironmentInitializer is the interface for environment initializers
 type EnvironmentInitializer interface {
-	// DisableSwap 禁用swap
+	// DisableSwap disables swap
 	DisableSwap() error
 
-	// EnableIPVS 启用IPVS模块
+	// EnableIPVS enables IPVS module
 	EnableIPVS() error
 
-	// InstallContainerd 安装和配置containerd
+	// InstallContainerd installs and configures containerd
 	InstallContainerd() error
 
-	// InstallK8sComponents 安装kubeadm、kubectl、kubelet
+	// InstallK8sComponents installs kubeadm, kubectl, kubelet
 	InstallK8sComponents() error
 
-	// Initialize 执行所有初始化步骤
+	// Initialize performs all initialization steps
 	Initialize() error
 }
 
-// NodeInitResult 表示单个节点的初始化结果
+// NodeInitResult represents the initialization result of a single node
 type NodeInitResult struct {
 	NodeName string
 	Success  bool
 	Error    error
 }
 
-// BatchInitializer 是批量环境初始化器的接口，支持并行初始化多个节点
+// BatchInitializer is the interface for batch environment initializers, supporting parallel initialization of multiple nodes
 type BatchInitializer interface {
-	// Initialize 并行初始化所有节点
+	// Initialize initializes all nodes in parallel
 	Initialize() error
 
-	// InitializeWithConcurrencyLimit 使用并发限制的并行初始化
+	// InitializeWithConcurrencyLimit initializes in parallel with concurrency limit
 	InitializeWithConcurrencyLimit(maxConcurrency int) error
 
-	// InitializeWithResults 并行初始化所有节点并返回详细结果
+	// InitializeWithResults initializes all nodes in parallel and returns detailed results
 	InitializeWithResults() []NodeInitResult
 
-	// InitializeWithConcurrencyLimitAndResults 使用并发限制的并行初始化并返回详细结果
+	// InitializeWithConcurrencyLimitAndResults initializes with concurrency limit and returns detailed results
 	InitializeWithConcurrencyLimitAndResults(maxConcurrency int) []NodeInitResult
 }

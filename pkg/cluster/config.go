@@ -9,7 +9,7 @@ const (
 	RoleWorker = "worker"
 )
 
-// Node 保存节点配置
+// Node stores node configuration
 type Node struct {
 	Name string
 	Resource
@@ -21,7 +21,7 @@ type Resource struct {
 	Disk   int
 }
 
-// Config 保存集群配置
+// Config stores cluster configuration
 type Config struct {
 	Image      string
 	Name       string

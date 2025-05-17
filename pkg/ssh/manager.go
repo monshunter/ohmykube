@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/log"
 )
 
 type SSHConfig struct {
@@ -34,12 +35,12 @@ func NewSSHConfig(password string, sshKeyFile string, sshPubKeyFile string) (*SS
 func (c *SSHConfig) init() error {
 	sshKeyContent, err := os.ReadFile(c.SSHKeyFile)
 	if err != nil {
-		return fmt.Errorf("读取SSH私钥文件失败: %w", err)
+		return fmt.Errorf("failed to read SSH private key file: %w", err)
 	}
 	c.sshKey = string(sshKeyContent)
 	sshPubKeyContent, err := os.ReadFile(c.SSHPubKeyFile)
 	if err != nil {
-		return fmt.Errorf("读取SSH公钥文件失败: %w", err)
+		return fmt.Errorf("failed to read SSH public key file: %w", err)
 	}
 	c.sshPubKey = string(sshPubKeyContent)
 	return nil
@@ -53,19 +54,19 @@ func (c *SSHConfig) GetSSHPubKey() string {
 	return c.sshPubKey
 }
 
-// SSHManager 管理SSH客户端及其生命周期
+// SSHManager manages SSH clients and their lifecycle
 type SSHManager struct {
 	cluster   *cluster.Cluster
 	sshConfig *SSHConfig
 	clients   map[string]*Client
 	mutex     sync.RWMutex
-	// 添加健康检查和自动重连相关字段
+	// Fields for health check and auto-reconnect
 	healthCheckInterval time.Duration
 	stopHealthCheck     chan struct{}
 	healthCheckActive   bool
 }
 
-// NewSSHManager 创建新的SSH管理器
+// NewSSHManager creates a new SSH manager
 func NewSSHManager(cluster *cluster.Cluster, sshConfig *SSHConfig) *SSHManager {
 	manager := &SSHManager{
 		cluster:             cluster,
@@ -75,13 +76,13 @@ func NewSSHManager(cluster *cluster.Cluster, sshConfig *SSHConfig) *SSHManager {
 		stopHealthCheck:     make(chan struct{}),
 	}
 
-	// 启动健康检查
+	// Start health check
 	manager.StartHealthCheck()
 
 	return manager
 }
 
-// StartHealthCheck 启动SSH连接的健康检查
+// StartHealthCheck starts the health check for SSH connections
 func (sm *SSHManager) StartHealthCheck() {
 	sm.mutex.Lock()
 	if sm.healthCheckActive {
@@ -106,7 +107,7 @@ func (sm *SSHManager) StartHealthCheck() {
 	}()
 }
 
-// StopHealthCheck 停止健康检查
+// StopHealthCheck stops the health check
 func (sm *SSHManager) StopHealthCheck() {
 	sm.mutex.Lock()
 	if !sm.healthCheckActive {
@@ -119,7 +120,7 @@ func (sm *SSHManager) StopHealthCheck() {
 	close(sm.stopHealthCheck)
 }
 
-// checkAllConnections 检查所有连接的健康状态
+// checkAllConnections checks the health status of all connections
 func (sm *SSHManager) checkAllConnections() {
 	sm.mutex.RLock()
 	clientsCopy := make(map[string]*Client)
@@ -127,11 +128,11 @@ func (sm *SSHManager) checkAllConnections() {
 	sm.mutex.RUnlock()
 
 	for name, client := range clientsCopy {
-		// 检查连接
+		// Check connection
 		err := client.Connect()
 		if err != nil {
-			fmt.Printf("节点 %s 的SSH连接检查失败: %v\n", name, err)
-			// 移除无效客户端
+			log.Infof("SSH connection check for node %s failed: %v", name, err)
+			// Remove invalid client
 			sm.mutex.Lock()
 			delete(sm.clients, name)
 			sm.mutex.Unlock()
@@ -147,7 +148,7 @@ func (sm *SSHManager) GetIP(nodeName string) string {
 	return node.ExtraInfo.IP
 }
 
-// GetClient 获取SSH客户端
+// GetClient gets an SSH client
 func (sm *SSHManager) GetClient(nodeName string) (*Client, bool) {
 	sm.mutex.RLock()
 	client, exists := sm.clients[nodeName]
@@ -159,9 +160,9 @@ func (sm *SSHManager) GetClient(nodeName string) (*Client, bool) {
 			return nil, false
 		}
 
-		// 创建新客户端
+		// Create a new client
 		sm.mutex.Lock()
-		// 双重检查锁定
+		// Double-check locking
 		client, exists = sm.clients[nodeName]
 		if exists {
 			sm.mutex.Unlock()
@@ -186,7 +187,7 @@ func (sm *SSHManager) CreateClient(nodeName string, ip string) (*Client, error) 
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	// 检查是否已存在
+	// Check if already exists
 	if client, exists := sm.clients[nodeName]; exists {
 		client.Close()
 		delete(sm.clients, nodeName)
@@ -201,17 +202,17 @@ func (sm *SSHManager) CreateClient(nodeName string, ip string) (*Client, error) 
 	return client, nil
 }
 
-// RunCommand 在指定节点上执行命令
+// RunCommand executes a command on the specified node
 func (sm *SSHManager) RunCommand(nodeName, command string) (string, error) {
 	client, exists := sm.GetClient(nodeName)
 	if !exists {
-		return "", fmt.Errorf("节点 %s 的SSH客户端不存在", nodeName)
+		return "", fmt.Errorf("SSH client for node %s does not exist", nodeName)
 	}
 
 	return client.RunCommand(command)
 }
 
-// CloseClient 关闭指定节点的SSH客户端
+// CloseClient closes the SSH client for the specified node
 func (sm *SSHManager) CloseClient(nodeName string) {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
@@ -222,7 +223,7 @@ func (sm *SSHManager) CloseClient(nodeName string) {
 	}
 }
 
-// CloseAllClients 关闭所有SSH客户端
+// CloseAllClients closes all SSH clients
 func (sm *SSHManager) CloseAllClients() {
 	sm.StopHealthCheck()
 

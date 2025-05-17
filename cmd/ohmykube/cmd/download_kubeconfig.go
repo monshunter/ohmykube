@@ -6,33 +6,37 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
 	"github.com/monshunter/ohmykube/pkg/kubeconfig"
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
 
 var downloadKubeconfigCmd = &cobra.Command{
 	Use:   "download-kubeconfig",
-	Short: "下载集群kubeconfig到本地",
-	Long:  `将当前集群的kubeconfig文件下载到本地~/.kube目录，便于本地调试和管理集群`,
+	Short: "Download cluster kubeconfig to local",
+	Long:  `Download the current cluster's kubeconfig file to the local ~/.kube directory for local debugging and cluster management`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 加载集群信息
+		// Load cluster information
 		clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
 		if err != nil {
-			return fmt.Errorf("加载集群信息失败: %w", err)
+			log.Errorf("Failed to load cluster information: %v", err)
+			return fmt.Errorf("failed to load cluster information: %w", err)
 		}
 
-		// 检查 master 节点信息
+		// Check master node information
 		if clusterInfo.Master.ExtraInfo.IP == "" {
-			return fmt.Errorf("无法获取 master 节点 IP 地址")
+			log.Errorf("Unable to get master node IP address")
+			return fmt.Errorf("unable to get master node IP address")
 		}
 
-		// 读取SSH密钥
+		// Read SSH key
 		sshKeyContent, err := os.ReadFile(sshKeyFile)
 		if err != nil {
-			return fmt.Errorf("读取SSH密钥失败: %w", err)
+			log.Errorf("Failed to read SSH key: %v", err)
+			return fmt.Errorf("failed to read SSH key: %w", err)
 		}
 
-		// 创建 SSH 客户端
+		// Create SSH client
 		sshClient := ssh.NewClient(
 			clusterInfo.Master.ExtraInfo.IP,
 			clusterInfo.Master.SSHPort,
@@ -41,22 +45,24 @@ var downloadKubeconfigCmd = &cobra.Command{
 			string(sshKeyContent),
 		)
 
-		// 连接到 SSH 服务器
+		// Connect to SSH server
 		if err := sshClient.Connect(); err != nil {
-			return fmt.Errorf("连接到 master 节点失败: %w", err)
+			log.Errorf("Failed to connect to master node: %v", err)
+			return fmt.Errorf("failed to connect to master node: %w", err)
 		}
 		defer sshClient.Close()
 
-		// 使用统一的kubeconfig下载功能
+		// Use the unified kubeconfig download function
 		kubeconfigPath, err := kubeconfig.DownloadToLocal(sshClient, clusterInfo.Name, "")
 		if err != nil {
-			return fmt.Errorf("下载 kubeconfig 失败: %w", err)
+			log.Errorf("Failed to download kubeconfig: %v", err)
+			return fmt.Errorf("failed to download kubeconfig: %w", err)
 		}
 
-		fmt.Printf("kubeconfig已下载到: %s\n", kubeconfigPath)
-		fmt.Printf("可以使用以下命令访问集群:\n")
-		fmt.Printf("export KUBECONFIG=%s\n", kubeconfigPath)
-		fmt.Printf("kubectl get nodes\n")
+		log.Infof("Kubeconfig has been downloaded to: %s", kubeconfigPath)
+		log.Info("You can access the cluster with the following commands:")
+		log.Infof("export KUBECONFIG=%s", kubeconfigPath)
+		log.Info("kubectl get nodes")
 
 		return nil
 	},

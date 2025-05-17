@@ -7,16 +7,17 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/default/containerd"
 	"github.com/monshunter/ohmykube/pkg/default/ipvs"
+	"github.com/monshunter/ohmykube/pkg/log"
 )
 
-// Initializer 用于初始化单个Kubernetes节点环境
+// Initializer used to initialize a single Kubernetes node environment
 type Initializer struct {
 	sshRunner SSHCommandRunner
 	nodeName  string
 	options   InitOptions
 }
 
-// NewInitializer 创建一个新的节点初始化器
+// NewInitializer creates a new node initializer
 func NewInitializer(sshRunner SSHCommandRunner, nodeName string) *Initializer {
 	return &Initializer{
 		sshRunner: sshRunner,
@@ -25,7 +26,7 @@ func NewInitializer(sshRunner SSHCommandRunner, nodeName string) *Initializer {
 	}
 }
 
-// NewInitializerWithOptions 创建一个新的节点初始化器并指定选项
+// NewInitializerWithOptions creates a new node initializer with specified options
 func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, options InitOptions) *Initializer {
 	return &Initializer{
 		sshRunner: sshRunner,
@@ -34,13 +35,13 @@ func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, opti
 	}
 }
 
-// waitForAptLock 等待apt锁释放
+// waitForAptLock waits for apt lock to be released
 func (i *Initializer) waitForAptLock() error {
-	maxRetries := 30          // 最多等待30次
-	retryDelay := time.Second // 每次等待1秒
+	maxRetries := 30          // maximum 30 retries
+	retryDelay := time.Second // wait 1 second each time
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// 检查apt锁状态
+		// Check apt lock status
 		cmd := `if fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null; then
 	echo "locked"
 else
@@ -49,27 +50,27 @@ fi`
 
 		output, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 		if err != nil {
-			return fmt.Errorf("检查apt锁状态失败: %w", err)
+			return fmt.Errorf("failed to check apt lock status: %w", err)
 		}
 
-		// 如果不再锁定，则继续
+		// If no longer locked, continue
 		if attempt > 1 && strings.TrimSpace(output) == "unlocked" {
-			fmt.Printf("在节点 %s 上apt锁已释放，继续安装\n", i.nodeName)
+			log.Infof("Apt lock released on node %s, continuing installation", i.nodeName)
 			return nil
 		}
 
-		// 如果仍然锁定，等待一段时间再试
+		// If still locked, wait a while and try again
 		if attempt < maxRetries {
-			fmt.Printf("在节点 %s 上apt仍然被锁定，等待释放 (尝试 %d/%d)...\n", i.nodeName, attempt, maxRetries)
+			log.Infof("Apt still locked on node %s, waiting for release (attempt %d/%d)...", i.nodeName, attempt, maxRetries)
 			time.Sleep(retryDelay)
 		} else {
-			// 如果达到最大重试次数，尝试强制释放锁
-			fmt.Printf("在节点 %s 上等待apt锁释放超时，尝试强制释放...\n", i.nodeName)
+			// If max retries reached, attempt to forcefully release the lock
+			log.Infof("Timed out waiting for apt lock release on node %s, attempting to force release...", i.nodeName)
 
 			killCmd := "sudo killall apt apt-get dpkg 2>/dev/null || true"
 			_, err = i.sshRunner.RunSSHCommand(i.nodeName, killCmd)
 			if err != nil {
-				// 忽略killall可能的错误，因为进程可能不存在
+				// Ignore potential errors from killall as processes may not exist
 			}
 
 			unlockCmd := `sudo rm -f /var/lib/apt/lists/lock
@@ -80,64 +81,64 @@ fi`
 
 			_, err = i.sshRunner.RunSSHCommand(i.nodeName, unlockCmd)
 			if err != nil {
-				return fmt.Errorf("强制释放apt锁失败: %w", err)
+				return fmt.Errorf("failed to force release apt lock: %w", err)
 			}
 
-			fmt.Printf("在节点 %s 上已强制释放apt锁\n", i.nodeName)
+			log.Infof("Apt lock forcefully released on node %s", i.nodeName)
 
-			// 修复：强制释放锁后额外等待一段时间确保锁真正释放
+			// Fix: wait an extra period after force releasing the lock to ensure it's truly released
 			extraWaitTime := 10 * time.Second
-			fmt.Printf("在节点 %s 上等待额外的 %s 确保锁已完全释放...\n", i.nodeName, extraWaitTime)
+			log.Infof("Waiting an extra %s on node %s to ensure lock is fully released...", extraWaitTime, i.nodeName)
 			time.Sleep(extraWaitTime)
 
-			// 再次检查锁状态
+			// Check lock status again
 			output, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 			if err != nil {
-				return fmt.Errorf("强制释放后检查apt锁状态失败: %w", err)
+				return fmt.Errorf("failed to check apt lock status after force release: %w", err)
 			}
 
 			if strings.TrimSpace(output) != "unlocked" {
-				return fmt.Errorf("在节点 %s 上强制释放apt锁后仍然被锁定", i.nodeName)
+				return fmt.Errorf("apt lock still locked on node %s after force release", i.nodeName)
 			}
 
-			fmt.Printf("在节点 %s 上确认apt锁已完全释放\n", i.nodeName)
+			log.Infof("Confirmed apt lock fully released on node %s", i.nodeName)
 			return nil
 		}
 	}
 
-	return fmt.Errorf("等待apt锁释放超时")
+	return fmt.Errorf("timed out waiting for apt lock release")
 }
 
-// DisableSwap 禁用swap
+// DisableSwap disables swap
 func (i *Initializer) DisableSwap() error {
-	// 执行swapoff -a命令
+	// Execute swapoff -a command
 	cmd := "sudo swapoff -a"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上禁用swap失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to disable swap on node %s: %w", i.nodeName, err)
 	}
 
-	// 修改/etc/fstab文件注释掉swap行
+	// Modify /etc/fstab file to comment out swap lines
 	cmd = "sudo sed -i '/swap/s/^/#/' /etc/fstab"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上修改/etc/fstab文件失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to modify /etc/fstab file on node %s: %w", i.nodeName, err)
 	}
 
 	return nil
 }
 
-// EnableIPVS 启用IPVS模块
+// EnableIPVS enables IPVS module
 func (i *Initializer) EnableIPVS() error {
-	// 创建/etc/modules-load.d/k8s.conf文件
+	// Create /etc/modules-load.d/k8s.conf file
 	modulesFile := "/etc/modules-load.d/k8s.conf"
 	cmd := fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", modulesFile, ipvs.K8S_MODULES_CONFIG)
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建%s文件失败: %w", i.nodeName, modulesFile, err)
+		return fmt.Errorf("failed to create %s file on node %s: %w", modulesFile, i.nodeName, err)
 	}
 
-	// 加载内核模块
+	// Load kernel modules
 	modules := []string{
 		"overlay",
 		"br_netfilter",
@@ -152,52 +153,52 @@ func (i *Initializer) EnableIPVS() error {
 		cmd := fmt.Sprintf("sudo modprobe %s", module)
 		_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 		if err != nil {
-			return fmt.Errorf("在节点 %s 上加载%s模块失败: %w", i.nodeName, module, err)
+			return fmt.Errorf("failed to load %s module on node %s: %w", module, i.nodeName, err)
 		}
 	}
 
-	// 等待apt锁释放
+	// Wait for apt lock release
 	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("在节点 %s 上安装IPVS工具失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install IPVS tools on node %s: %w", i.nodeName, err)
 	}
 
-	// 安装IPVS工具
+	// Install IPVS tools
 	cmd = "sudo apt-get install -y ipvsadm ipset"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上安装IPVS工具失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install IPVS tools on node %s: %w", i.nodeName, err)
 	}
 
-	// 设置系统参数
+	// Set system parameters
 	sysctlFile := "/etc/sysctl.d/k8s.conf"
 	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", sysctlFile, ipvs.K8S_SYSCTL_CONFIG)
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建%s文件失败: %w", i.nodeName, sysctlFile, err)
+		return fmt.Errorf("failed to create %s file on node %s: %w", sysctlFile, i.nodeName, err)
 	}
 
-	// 应用系统参数
+	// Apply system parameters
 	cmd = "sudo sysctl --system"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上应用系统参数失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to apply system parameters on node %s: %w", i.nodeName, err)
 	}
 
 	return nil
 }
 
-// EnableNetworkBridge 启用网络桥接
+// EnableNetworkBridge enables network bridging
 func (i *Initializer) EnableNetworkBridge() error {
-	// 创建/etc/modules-load.d/k8s.conf文件
+	// Create /etc/modules-load.d/k8s.conf file
 	modulesFile := "/etc/modules-load.d/k8s.conf"
 	modulesContent := "overlay\nbr_netfilter\n"
 	cmd := fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", modulesFile, modulesContent)
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建%s文件失败: %w", i.nodeName, modulesFile, err)
+		return fmt.Errorf("failed to create %s file on node %s: %w", modulesFile, i.nodeName, err)
 	}
 
-	// 加载基本模块
+	// Load basic modules
 	modules := []string{
 		"overlay",
 		"br_netfilter",
@@ -207,11 +208,11 @@ func (i *Initializer) EnableNetworkBridge() error {
 		cmd := fmt.Sprintf("sudo modprobe %s", module)
 		_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 		if err != nil {
-			return fmt.Errorf("在节点 %s 上加载%s模块失败: %w", i.nodeName, module, err)
+			return fmt.Errorf("failed to load %s module on node %s: %w", module, i.nodeName, err)
 		}
 	}
 
-	// 设置基本系统参数
+	// Set basic system parameters
 	sysctlFile := "/etc/sysctl.d/k8s.conf"
 	sysctlContent := `net.bridge.bridge-nf-call-iptables  = 1
 net.bridge.bridge-nf-call-ip6tables = 1
@@ -220,110 +221,110 @@ net.ipv4.ip_forward                 = 1
 	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", sysctlFile, sysctlContent)
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建%s文件失败: %w", i.nodeName, sysctlFile, err)
+		return fmt.Errorf("failed to create %s file on node %s: %w", sysctlFile, i.nodeName, err)
 	}
 
-	// 应用系统参数
+	// Apply system parameters
 	cmd = "sudo sysctl --system"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上应用系统参数失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to apply system parameters on node %s: %w", i.nodeName, err)
 	}
 
 	return nil
 }
 
-// InstallContainerd 安装和配置containerd
+// InstallContainerd installs and configures containerd
 func (i *Initializer) InstallContainerd() error {
-	// 等待apt锁释放
+	// Wait for apt lock release
 	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("在节点 %s 上安装containerd失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install containerd on node %s: %w", i.nodeName, err)
 	}
 
-	// 安装containerd
+	// Install containerd
 	cmd := "sudo apt-get install -y containerd"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上安装containerd失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install containerd on node %s: %w", i.nodeName, err)
 	}
 
-	// 创建containerd配置目录
+	// Create containerd configuration directory
 	cmd = "sudo mkdir -p /etc/containerd"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建containerd配置目录失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to create containerd configuration directory on node %s: %w", i.nodeName, err)
 	}
 
 	cmd = "sudo mkdir -p /etc/containerd/certs.d"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建containerd证书目录失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
 	}
 
-	// 写入默认配置
+	// Write default configuration
 	configFile := "/etc/containerd/config.toml"
 	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", configFile, containerd.CONTAINERD_CONFIG_1_7_24)
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建containerd配置文件失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to create containerd configuration file on node %s: %w", i.nodeName, err)
 	}
 
-	// 重启containerd
+	// Restart containerd
 	cmd = "sudo systemctl restart containerd"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上重启containerd失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to restart containerd on node %s: %w", i.nodeName, err)
 	}
 
-	// 启用containerd开机自启
+	// Enable containerd auto-start on boot
 	cmd = "sudo systemctl enable containerd"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上设置containerd开机自启失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to enable containerd auto-start on node %s: %w", i.nodeName, err)
 	}
 
 	return nil
 }
 
-// InstallK8sComponents 安装kubeadm、kubectl、kubelet
+// InstallK8sComponents installs kubeadm, kubectl, kubelet
 func (i *Initializer) InstallK8sComponents() error {
-	// 等待apt锁释放
+	// Wait for apt lock release
 	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
 	}
 
-	// 更新apt
+	// Update apt
 	cmd := "sudo apt-get update"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
 	}
 
-	// 等待apt锁释放
+	// Wait for apt lock release
 	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("在节点 %s 上安装依赖失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install dependencies on node %s: %w", i.nodeName, err)
 	}
 
-	// 安装依赖
+	// Install dependencies
 	cmd = "sudo apt-get install -y apt-transport-https ca-certificates curl gpg"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上安装依赖失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install dependencies on node %s: %w", i.nodeName, err)
 	}
 
-	// 创建证书目录
+	// Create certificate directory
 	cmd = "sudo mkdir -p -m 755 /etc/apt/keyrings"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上创建证书目录失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to create certificate directory on node %s: %w", i.nodeName, err)
 	}
 
-	// 下载k8s公钥并导入（增加重试机制）
-	// 使用配置的K8sMirrorURL或默认值
+	// Download k8s public key and import (add retry mechanism)
+	// Use configured K8sMirrorURL or default value
 	mirrorURL := i.options.K8sMirrorURL
 	keyURL := fmt.Sprintf("%s/Release.key", mirrorURL)
 
-	// 添加重试机制
+	// Add retry mechanism
 	maxRetries := 3
 	retryDelay := 5 * time.Second
 	var downloadErr error
@@ -333,35 +334,35 @@ func (i *Initializer) InstallK8sComponents() error {
 		_, downloadErr = i.sshRunner.RunSSHCommand(i.nodeName, downloadKeyCmd)
 
 		if downloadErr == nil {
-			// 成功下载和导入密钥
+			// Successfully downloaded and imported key
 			break
 		}
 
 		if retry < maxRetries-1 {
-			fmt.Printf("在节点 %s 上下载K8s密钥失败，%v后重试(%d/%d)...\n",
+			log.Infof("Failed to download and import K8s key on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
 	}
 
 	if downloadErr != nil {
-		return fmt.Errorf("在节点 %s 上下载并导入K8s密钥失败: %w", i.nodeName, downloadErr)
+		return fmt.Errorf("failed to download and import K8s key on node %s: %w", i.nodeName, downloadErr)
 	}
 
-	// 添加k8s源
+	// Add k8s source
 	repoURL := fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] %s/ /", mirrorURL)
 	cmd = fmt.Sprintf("echo '%s' | sudo tee /etc/apt/sources.list.d/kubernetes.list", repoURL)
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上添加Kubernetes源失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to add Kubernetes source on node %s: %w", i.nodeName, err)
 	}
 
-	// 等待apt锁释放
+	// Wait for apt lock release
 	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
 	}
 
-	// 再次更新apt（增加重试机制）
+	// Update apt again (add retry mechanism)
 	maxRetries = 3
 	for retry := 0; retry < maxRetries; retry++ {
 		cmd = "sudo apt-get update"
@@ -372,22 +373,22 @@ func (i *Initializer) InstallK8sComponents() error {
 		}
 
 		if retry < maxRetries-1 {
-			fmt.Printf("在节点 %s 上更新apt失败，%v后重试(%d/%d)...\n",
+			log.Infof("Failed to update apt on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
 	}
 
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上更新apt失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
 	}
 
-	// 等待apt锁释放
+	// Wait for apt lock release
 	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("在节点 %s 上安装Kubernetes组件失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install Kubernetes components on node %s: %w", i.nodeName, err)
 	}
 
-	// 安装k8s组件（增加重试机制）
+	// Install k8s components (add retry mechanism)
 	maxRetries = 3
 	for retry := 0; retry < maxRetries; retry++ {
 		cmd = "sudo apt-get install -y kubelet kubeadm kubectl"
@@ -398,44 +399,44 @@ func (i *Initializer) InstallK8sComponents() error {
 		}
 
 		if retry < maxRetries-1 {
-			fmt.Printf("在节点 %s 上安装Kubernetes组件失败，%v后重试(%d/%d)...\n",
+			log.Infof("Failed to install Kubernetes components on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
 	}
 
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上安装Kubernetes组件失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install Kubernetes components on node %s: %w", i.nodeName, err)
 	}
 
-	// 锁定版本
+	// Lock version
 	cmd = "sudo apt-mark hold kubelet kubeadm kubectl"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上锁定Kubernetes组件版本失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to lock Kubernetes components version on node %s: %w", i.nodeName, err)
 	}
 
-	// 启用kubelet
+	// Enable kubelet
 	cmd = "sudo systemctl enable --now kubelet"
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上启用kubelet失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to enable kubelet on node %s: %w", i.nodeName, err)
 	}
 
 	return nil
 }
 
-// InstallHelm 安装Helm
+// InstallHelm installs Helm
 func (i *Initializer) InstallHelm() error {
-	// 检查Helm是否已安装
-	cmd := "command -v helm && echo 'Helm已安装' || echo 'Helm未安装'"
+	// Check if Helm is already installed
+	cmd := "command -v helm && echo 'Helm installed' || echo 'Helm not installed'"
 	output, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err == nil && output == "Helm已安装" {
-		fmt.Printf("在节点 %s 上Helm已安装，跳过\n", i.nodeName)
+	if err == nil && output == "Helm installed" {
+		log.Infof("Helm already installed on node %s, skipping", i.nodeName)
 		return nil
 	}
 
-	// 安装Helm（增加重试机制）
+	// Install Helm (add retry mechanism)
 	maxRetries := 3
 	retryDelay := 5 * time.Second
 
@@ -448,42 +449,42 @@ func (i *Initializer) InstallHelm() error {
 		}
 
 		if retry < maxRetries-1 {
-			fmt.Printf("在节点 %s 上安装Helm失败，%v后重试(%d/%d)...\n",
+			log.Infof("Failed to install Helm on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
 	}
 
 	if err != nil {
-		return fmt.Errorf("在节点 %s 上安装Helm失败: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install Helm on node %s: %w", i.nodeName, err)
 	}
 
-	fmt.Printf("在节点 %s 上成功安装Helm\n", i.nodeName)
+	log.Infof("Successfully installed Helm on node %s", i.nodeName)
 	return nil
 }
 
-// Initialize 执行所有初始化步骤
+// Initialize executes all initialization steps
 func (i *Initializer) Initialize() error {
-	// 根据选项决定是否禁用swap
+	// Based on options, disable swap if specified
 	if i.options.DisableSwap {
 		if err := i.DisableSwap(); err != nil {
 			return err
 		}
 	}
 
-	// 根据选项决定是否启用IPVS
+	// Based on options, enable IPVS if specified
 	if i.options.EnableIPVS {
 		if err := i.EnableIPVS(); err != nil {
 			return err
 		}
 	} else {
-		// 如果不启用IPVS，仍然需要设置网络桥接
+		// If not enabling IPVS, still need to set network bridging
 		if err := i.EnableNetworkBridge(); err != nil {
 			return err
 		}
 	}
 
-	// 安装容器运行时
+	// Install container runtime
 	if i.options.ContainerRuntime == "containerd" {
 		if err := i.InstallContainerd(); err != nil {
 			return err
@@ -494,7 +495,7 @@ func (i *Initializer) Initialize() error {
 		return err
 	}
 
-	// 安装Helm
+	// Install Helm
 	if err := i.InstallHelm(); err != nil {
 		return err
 	}

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
-// CiliumInstaller 负责安装 Cilium CNI
+// CiliumInstaller is responsible for installing Cilium CNI
 type CiliumInstaller struct {
 	SSHClient     *ssh.Client
 	MasterNode    string
@@ -16,20 +17,20 @@ type CiliumInstaller struct {
 	APIServerPort string
 }
 
-// NewCiliumInstaller 创建 Cilium 安装器
+// NewCiliumInstaller creates a Cilium installer
 func NewCiliumInstaller(sshClient *ssh.Client, masterNode string, masterIP string) *CiliumInstaller {
 	return &CiliumInstaller{
 		SSHClient:     sshClient,
 		MasterNode:    masterNode,
-		Version:       "1.14.5", // Cilium 版本
-		APIServerHost: masterIP, // 使用主节点IP作为API服务器地址
-		APIServerPort: "6443",   // 默认API服务器端口
+		Version:       "1.14.5", // Cilium version
+		APIServerHost: masterIP, // Use master node IP as API server address
+		APIServerPort: "6443",   // Default API server port
 	}
 }
 
-// Install 安装 Cilium CNI
+// Install installs Cilium CNI
 func (c *CiliumInstaller) Install() error {
-	// 准备 Cilium 配置
+	// Prepare Cilium configuration
 	ciliumConfig := `apiVersion: helm.k8s.io/v1
 kind: HelmRelease
 metadata:
@@ -54,46 +55,36 @@ spec:
 `
 	ciliumConfig = fmt.Sprintf(ciliumConfig, c.Version, c.APIServerHost, c.APIServerPort)
 
-	// 创建临时文件
+	// Create temporary file
 	tmpfile, err := os.CreateTemp("", "cilium-config-*.yaml")
 	if err != nil {
-		return fmt.Errorf("创建临时 Cilium 配置文件失败: %w", err)
+		return fmt.Errorf("failed to create temporary Cilium config file: %w", err)
 	}
 	defer os.Remove(tmpfile.Name())
 
 	if _, err := tmpfile.Write([]byte(ciliumConfig)); err != nil {
-		return fmt.Errorf("写入 Cilium 配置文件失败: %w", err)
+		return fmt.Errorf("failed to write to Cilium config file: %w", err)
 	}
 	if err := tmpfile.Close(); err != nil {
-		return fmt.Errorf("关闭 Cilium 配置文件失败: %w", err)
+		return fmt.Errorf("failed to close Cilium config file: %w", err)
 	}
 
-	// 将配置文件传输到虚拟机
+	// Transfer config file to VM
 	remoteConfigPath := "/tmp/cilium-config.yaml"
 	if err := c.SSHClient.TransferFile(tmpfile.Name(), remoteConfigPath); err != nil {
-		return fmt.Errorf("传输 Cilium 配置文件到虚拟机失败: %w", err)
+		return fmt.Errorf("failed to transfer Cilium config file to VM: %w", err)
 	}
-
-	// 安装 Helm (如果需要)
-	_, err = c.SSHClient.RunCommand(`
-if ! command -v helm &> /dev/null; then
-  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-fi
-`)
-	if err != nil {
-		return fmt.Errorf("安装 Helm 失败: %w", err)
-	}
-
-	// 添加 Cilium Helm 仓库
+	// Add Cilium Helm repository
 	_, err = c.SSHClient.RunCommand(`
 helm repo add cilium https://helm.cilium.io
 helm repo update
 `)
 	if err != nil {
-		return fmt.Errorf("添加 Cilium Helm 仓库失败: %w", err)
+		return fmt.Errorf("failed to add Cilium Helm repository: %w", err)
 	}
 
-	// 安装 Cilium
+	// Install Cilium
+	log.Info("Installing Cilium...")
 	installCmd := fmt.Sprintf(`
 helm install cilium cilium/cilium --version %s \
   --namespace kube-system \
@@ -107,16 +98,18 @@ helm install cilium cilium/cilium --version %s \
 
 	_, err = c.SSHClient.RunCommand(installCmd)
 	if err != nil {
-		return fmt.Errorf("安装 Cilium 失败: %w", err)
+		return fmt.Errorf("failed to install Cilium: %w", err)
 	}
 
-	// 等待 Cilium 启动完成
+	// Wait for Cilium to be ready
+	log.Info("Waiting for Cilium to become ready...")
 	_, err = c.SSHClient.RunCommand(`
 kubectl -n kube-system wait --for=condition=ready pod -l k8s-app=cilium --timeout=5m
 `)
 	if err != nil {
-		return fmt.Errorf("等待 Cilium 就绪超时: %w", err)
+		return fmt.Errorf("timed out waiting for Cilium to be ready: %w", err)
 	}
 
+	log.Info("Cilium installation completed successfully")
 	return nil
 }

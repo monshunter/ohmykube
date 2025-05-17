@@ -4,7 +4,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 加载默认的InitConfiguration配置
+// loadDefaultInitConfig loads the default InitConfiguration configuration
 func loadDefaultInitConfig() YAMLDocument {
 	yamlStr := `
 apiVersion: kubeadm.k8s.io/v1beta4
@@ -32,7 +32,7 @@ nodeRegistration:
 	return doc
 }
 
-// 加载默认的ClusterConfiguration配置
+// loadDefaultClusterConfig loads the default ClusterConfiguration configuration
 func loadDefaultClusterConfig() YAMLDocument {
 	yamlStr := `
 # ClusterConfiguration
@@ -63,7 +63,7 @@ scheduler: {}
 	return doc
 }
 
-// 加载默认的KubeletConfiguration配置
+// loadDefaultKubeletConfig loads the default KubeletConfiguration configuration
 func loadDefaultKubeletConfig() YAMLDocument {
 	yamlStr := `
 # KubeletConfiguration
@@ -122,7 +122,7 @@ volumeStatsAggPeriod: 0s
 	return doc
 }
 
-// 加载默认的KubeProxyConfiguration配置
+// loadDefaultKubeProxyConfig loads the default KubeProxyConfiguration configuration
 func loadDefaultKubeProxyConfig() YAMLDocument {
 	yamlStr := `
 # KubeProxyConfiguration

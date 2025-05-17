@@ -1,21 +1,21 @@
 package cni
 
-// CNIType 表示支持的CNI类型
+// CNIType represents the supported CNI types
 type CNIType string
 
 const (
-	// CNITypeCilium Cilium CNI类型
+	// CNITypeCilium Cilium CNI type
 	CNITypeCilium CNIType = "cilium"
 
-	// CNITypeFlannel Flannel CNI类型
+	// CNITypeFlannel Flannel CNI type
 	CNITypeFlannel CNIType = "flannel"
 
-	// CNITypeNone 不安装CNI
+	// CNITypeNone No CNI installation
 	CNITypeNone CNIType = "none"
 )
 
-// CNIInstaller CNI安装器接口
+// CNIInstaller CNI installer interface
 type CNIInstaller interface {
-	// Install 安装CNI
+	// Install installs the CNI
 	Install() error
 }
