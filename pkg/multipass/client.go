@@ -111,8 +111,15 @@ func (c *Client) InitAuth(name string) error {
 
 // DeleteVM 删除一个虚拟机
 func (c *Client) DeleteVM(name string) error {
-	cmd := exec.Command("multipass", "delete", name)
+	// 停止虚拟机
+	cmd := exec.Command("multipass", "stop", name, "--force")
 	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("停止虚拟机失败: %w, 错误信息: %s", err, stderr.String())
+	}
+
+	cmd = exec.Command("multipass", "delete", name)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {

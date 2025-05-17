@@ -19,24 +19,31 @@ func NewRookInstaller(sshClient *ssh.Client, masterNode string) *RookInstaller {
 	return &RookInstaller{
 		SSHClient:   sshClient,
 		MasterNode:  masterNode,
-		RookVersion: "v1.12.9", // Rook 版本
+		RookVersion: "v1.17.2", // Rook 版本
 		CephVersion: "17.2.6",  // Ceph 版本
 	}
 }
 
 // Install 安装 Rook-Ceph
 func (r *RookInstaller) Install() error {
-	// 克隆 Rook 仓库到主节点
-	cloneCmd := fmt.Sprintf(`
-git clone --single-branch --branch %s https://github.com/rook/rook.git
-cd rook/deploy/examples
-kubectl create -f crds.yaml
-kubectl create -f common.yaml
-kubectl create -f operator.yaml
-kubectl create -f cluster.yaml
-`, r.RookVersion)
+	// 使用Helm安装Rook-Ceph
+	helmInstallCmd := fmt.Sprintf(`
+# 添加Rook Helm仓库
+helm repo add rook-release https://charts.rook.io/release
+helm repo update
 
-	_, err := r.SSHClient.RunCommand(cloneCmd)
+# 安装Rook Ceph Operator
+helm install --create-namespace --namespace rook-ceph rook-ceph rook-release/rook-ceph
+
+# 等待operator pod就绪
+kubectl wait --for=condition=ready pod -l app=rook-ceph-operator -n rook-ceph --timeout=300s
+
+# 安装Rook Ceph Cluster
+helm install --create-namespace --namespace rook-ceph rook-ceph-cluster \
+   --set operatorNamespace=rook-ceph rook-release/rook-ceph-cluster
+`)
+
+	_, err := r.SSHClient.RunCommand(helmInstallCmd)
 	if err != nil {
 		return fmt.Errorf("安装 Rook-Ceph CSI 失败: %w", err)
 	}
