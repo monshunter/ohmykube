@@ -39,10 +39,14 @@ var addCmd = &cobra.Command{
 		}
 		// Create cluster configuration
 		config := &cluster.Config{
-			Name:       clusterInfo.Name,
-			K8sVersion: clusterInfo.K8sVersion,
-			Master:     cluster.Node{Name: clusterInfo.Master.Name},
+			Name:   clusterInfo.Name,
+			Master: cluster.Node{Name: clusterInfo.Master.Name},
 		}
+		config.SetKubernetesVersion(clusterInfo.K8sVersion)
+		config.SetLauncherType(clusterInfo.Launcher)
+		config.SetImage(multipassImage)
+		config.SetTemplate(limaFile)
+		config.SetParallel(parallel)
 
 		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, clusterInfo)
@@ -64,9 +68,9 @@ var addCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(addCmd)
-	addCmd.Flags().IntVar(&addNodeMemory, "memory", 2048, "Node memory (MB)")
-	addCmd.Flags().IntVar(&addNodeCPU, "cpu", 2, "Node CPU cores")
-	addCmd.Flags().IntVar(&addNodeDisk, "disk", 20, "Node disk space (GB)")
+	addCmd.Flags().IntVar(&addNodeMemory, "memory", 2, "Node memory (GB)")
+	addCmd.Flags().IntVar(&addNodeCPU, "cpu", 1, "Node CPU cores")
+	addCmd.Flags().IntVar(&addNodeDisk, "disk", 10, "Node disk space (GB)")
 	addCmd.Flags().StringVar(&addNodeRole, "role", "worker", "Node role (worker/master)")
 	addCmd.Flags().IntVar(&count, "count", 1, "Number of nodes to add")
 }

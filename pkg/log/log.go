@@ -179,7 +179,7 @@ func Fatal(args ...any) {
 	if stackTraceEnabled {
 		fmt.Fprintf(os.Stderr, "Stack trace:\n%s\n", debug.Stack())
 	} else {
-		fmt.Fprintln(os.Stderr, "For detailed stack trace, set GOAT_STACK_TRACE=1")
+		fmt.Fprintln(os.Stderr, "For detailed stack trace, set PRINT_STACK_TRACE=1")
 	}
 	osExit(1)
 }
@@ -190,7 +190,7 @@ func Fatalf(format string, args ...any) {
 	if stackTraceEnabled {
 		fmt.Fprintf(os.Stderr, "Stack trace:\n%s\n", debug.Stack())
 	} else {
-		fmt.Fprintln(os.Stderr, "For detailed stack trace, set GOAT_STACK_TRACE=1")
+		fmt.Fprintln(os.Stderr, "For detailed stack trace, set PRINT_STACK_TRACE=1")
 	}
 	osExit(1)
 }

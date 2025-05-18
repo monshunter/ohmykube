@@ -38,6 +38,10 @@ var (
 	defaultSSHKeyFile    string
 	defaultSSHPubKeyFile string
 	clusterName          string
+	launcher             string
+	parallel             int
+	multipassImage       string
+	limaFile             string
 )
 
 func init() {
@@ -52,6 +56,10 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&sshKeyFile, "ssh-key", defaultSSHKeyFile, "SSH private key file")
 	rootCmd.PersistentFlags().StringVar(&sshPubKeyFile, "ssh-pub-key", defaultSSHPubKeyFile, "SSH public key file")
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")
+	rootCmd.PersistentFlags().StringVar(&launcher, "launcher", "limactl", "Launcher to use (multipass, limactl), default limactl")
+	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
+	rootCmd.PersistentFlags().StringVar(&multipassImage, "multipass-image", "24.04", "Multipass image")
+	rootCmd.PersistentFlags().StringVar(&limaFile, "lima-file", "template://ubuntu-24.04", "Lima file or template")
 	// Add subcommands
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -59,3 +67,5 @@ func init() {
 	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(deleteCmd)
 }
+
+// limactl start template://ubuntu-24.04 --disk 10 --plain

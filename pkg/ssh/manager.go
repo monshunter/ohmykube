@@ -66,6 +66,11 @@ type SSHManager struct {
 	healthCheckActive   bool
 }
 
+// GetSSHConfig returns the SSH configuration
+func (sm *SSHManager) GetSSHConfig() *SSHConfig {
+	return sm.sshConfig
+}
+
 // NewSSHManager creates a new SSH manager
 func NewSSHManager(cluster *cluster.Cluster, sshConfig *SSHConfig) *SSHManager {
 	manager := &SSHManager{

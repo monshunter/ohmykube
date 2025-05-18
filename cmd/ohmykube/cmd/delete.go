@@ -39,10 +39,11 @@ var deleteCmd = &cobra.Command{
 
 		// Create cluster configuration
 		config := &cluster.Config{
-			Name:       clusterInfo.Name,
-			K8sVersion: clusterInfo.K8sVersion,
-			Master:     cluster.Node{Name: clusterInfo.Master.Name},
+			Name:   clusterInfo.Name,
+			Master: cluster.Node{Name: clusterInfo.Master.Name},
 		}
+		config.SetParallel(parallel)
+		config.SetLauncherType(clusterInfo.Launcher)
 
 		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, clusterInfo)

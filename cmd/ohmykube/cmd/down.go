@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -16,18 +19,28 @@ var downCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		if launcher == "" && cluster.CheckClusterInfomationExists(clusterName) {
+			clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
+			if err != nil {
+				return fmt.Errorf("failed to load cluster information: %w", err)
+			}
+			launcher = clusterInfo.Launcher
+		}
+		launcherType := myLauncher.LauncherType(launcher)
+		if !launcherType.IsValid() {
+			return fmt.Errorf("invalid launcher type: %s, please use %s or %s",
+				launcher, myLauncher.MultipassLauncher, myLauncher.LimactlLauncher)
+		}
+
 		// Create cluster configuration
-		config := cluster.NewConfig(clusterName, k8sVersion, workersCount,
-			cluster.Resource{
-				CPU:    masterCPU,
-				Memory: masterMemory,
-				Disk:   masterDisk,
-			}, cluster.Resource{
-				CPU:    workerCPU,
-				Memory: workerMemory,
-				Disk:   workerDisk,
-			})
-		config.K8sVersion = k8sVersion
+		config := cluster.NewConfig(clusterName, workersCount,
+			cluster.Resource{}, cluster.Resource{})
+		config.SetKubernetesVersion("")
+		config.SetLauncherType(launcherType.String())
+		config.SetImage(multipassImage)
+		config.SetTemplate(limaFile)
+
 		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, nil)
 		if err != nil {

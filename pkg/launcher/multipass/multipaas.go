@@ -2,31 +2,36 @@ package multipass
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 )
 
-// Client is a wrapper for the Multipass command-line tool
-type Client struct {
+// MultipassLauncher is a wrapper for the Multipass command-line tool
+type MultipassLauncher struct {
 	// Configuration options
 	Image     string
 	Password  string
 	SSHKey    string
 	SSHPubKey string
+	semaphore chan struct{}
 }
 
-// NewClient creates a new Multipass client
-func NewClient(image, password, sshKey, sshPubKey string) (*Client, error) {
+// NewMultipassLauncher creates a new Multipass MultipassLauncher
+func NewMultipassLauncher(image, password, sshKey, sshPubKey string, parallel int) (*MultipassLauncher, error) {
 	// Ensure multipass is installed
 	if err := checkMultipassInstalled(); err != nil {
 		return nil, err
 	}
-	return &Client{
+	return &MultipassLauncher{
 		Image:     image,
 		Password:  password,
 		SSHKey:    sshKey,
 		SSHPubKey: sshPubKey,
+		semaphore: make(chan struct{}, parallel),
 	}, nil
 }
 
@@ -40,7 +45,7 @@ func checkMultipassInstalled() error {
 }
 
 // InfoVM gets information about a VM
-func (c *Client) InfoVM(name string) error {
+func (c *MultipassLauncher) InfoVM(name string) error {
 	cmd := exec.Command("multipass", "info", name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -51,8 +56,15 @@ func (c *Client) InfoVM(name string) error {
 }
 
 // CreateVM creates a new virtual machine
-func (c *Client) CreateVM(name, cpus, memory, disk string) error {
-	cmd := exec.Command("multipass", "launch", "--name", name, "--cpus", cpus, "--memory", memory, "--disk", disk, c.Image)
+func (c *MultipassLauncher) CreateVM(name string, cpus, memory, disk int) error {
+	// Use semaphore to limit the number of concurrent VM creations
+	c.semaphore <- struct{}{}
+	defer func() { <-c.semaphore }()
+	cpusStr := strconv.Itoa(cpus)
+	memoryStr := strconv.Itoa(memory) + "G"
+	diskStr := strconv.Itoa(disk) + "G"
+
+	cmd := exec.Command("multipass", "launch", "--name", name, "--cpus", cpusStr, "--memory", memoryStr, "--disk", diskStr, c.Image)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
@@ -63,45 +75,40 @@ func (c *Client) CreateVM(name, cpus, memory, disk string) error {
 }
 
 // InitAuth initializes authentication for the VM
-func (c *Client) InitAuth(name string) error {
-	// Set ubuntu and root user passwords, and enable SSH password authentication
-	// Original command: multipass exec "$VM_NAME" -- bash -c "echo 'ubuntu:$NEW_PASSWORD' | sudo chpasswd && echo 'root:$NEW_PASSWORD' | sudo chpasswd && echo 'PasswordAuthentication yes' | sudo tee /etc/ssh/sshd_config.d/60-cloudimg-settings.conf > /dev/null && sudo systemctl restart ssh || sudo systemctl restart sshd"
-	passwordCmd := fmt.Sprintf("echo 'ubuntu:%s' | sudo chpasswd && echo 'root:%s' | sudo chpasswd && echo 'PasswordAuthentication yes' | sudo tee /etc/ssh/sshd_config.d/60-cloudimg-settings.conf > /dev/null && sudo systemctl restart ssh || sudo systemctl restart sshd", c.Password, c.Password)
+func (c *MultipassLauncher) InitAuth(name string) error {
+	// Set host name
+	hostNameCmd := fmt.Sprintf("sudo hostnamectl set-hostname %s && sudo systemctl restart systemd-hostnamed", name)
+	if _, err := c.ExecCommand(name, hostNameCmd); err != nil {
+		return fmt.Errorf("failed to set host name: %w", err)
+	}
+	// Set root user password
+	passwordCmd := fmt.Sprintf("echo 'root:%s' | sudo chpasswd", c.Password)
 	if _, err := c.ExecCommand(name, passwordCmd); err != nil {
-		return fmt.Errorf("failed to set password and SSH configuration: %w", err)
+		return fmt.Errorf("failed to set root password: %w", err)
 	}
 
-	// Create .ssh directories and set permissions
-	// Original command: multipass exec "$VM_NAME" -- sudo bash -c "mkdir -p /home/ubuntu/.ssh /root/.ssh && chmod 700 /home/ubuntu/.ssh /root/.ssh && chown ubuntu:ubuntu /home/ubuntu/.ssh"
-	sshDirCmd := `sudo bash -c "mkdir -p /home/ubuntu/.ssh /root/.ssh && chmod 700 /home/ubuntu/.ssh /root/.ssh && chown ubuntu:ubuntu /home/ubuntu/.ssh"`
+	// Create a new SSH config file to enable password authentication
+	sshConfigCmd := `sudo bash -c "echo 'PasswordAuthentication yes' | sudo tee /etc/ssh/sshd_config.d/99-ohmykube-settings.conf > /dev/null && sudo systemctl restart ssh || sudo systemctl restart sshd"`
+	if _, err := c.ExecCommand(name, sshConfigCmd); err != nil {
+		return fmt.Errorf("failed to configure SSH password authentication: %w", err)
+	}
+
+	// Create root .ssh directory and set permissions
+	sshDirCmd := `sudo bash -c "mkdir -p /root/.ssh && chmod 700 /root/.ssh"`
 	if _, err := c.ExecCommand(name, sshDirCmd); err != nil {
 		return fmt.Errorf("failed to create SSH directories: %w", err)
 	}
 
-	// Add SSH public key to authorized_keys
+	// Add SSH public key to authorized_keys for root user
 	if c.SSHPubKey != "" {
-		// Original command: multipass exec "$VM_NAME" -- bash -c "echo '$SSH_PUB_KEY' >> /home/ubuntu/.ssh/authorized_keys"
-		ubuntuKeyCmd := fmt.Sprintf("echo '%s' >> /home/ubuntu/.ssh/authorized_keys", c.SSHPubKey)
-		if _, err := c.ExecCommand(name, ubuntuKeyCmd); err != nil {
-			return fmt.Errorf("failed to add SSH public key for ubuntu user: %w", err)
-		}
-
-		// Original command: multipass exec "$VM_NAME" -- sudo bash -c "echo '$SSH_PUB_KEY' >> /root/.ssh/authorized_keys"
 		rootKeyCmd := fmt.Sprintf("sudo bash -c \"echo '%s' >> /root/.ssh/authorized_keys\"", c.SSHPubKey)
 		if _, err := c.ExecCommand(name, rootKeyCmd); err != nil {
 			return fmt.Errorf("failed to add SSH public key for root user: %w", err)
 		}
 	}
 
-	// Copy SSH private key
+	// Copy SSH private key for root user
 	if c.SSHKey != "" {
-		// Original command: multipass exec "$VM_NAME" -- bash -c "echo '$SSH_KEY' > /home/ubuntu/.ssh/id_rsa && chmod 600 /home/ubuntu/.ssh/id_rsa && chown ubuntu:ubuntu /home/ubuntu/.ssh/id_rsa"
-		ubuntuPrivKeyCmd := fmt.Sprintf("echo '%s' > /home/ubuntu/.ssh/id_rsa && chmod 600 /home/ubuntu/.ssh/id_rsa && chown ubuntu:ubuntu /home/ubuntu/.ssh/id_rsa", c.SSHKey)
-		if _, err := c.ExecCommand(name, ubuntuPrivKeyCmd); err != nil {
-			return fmt.Errorf("failed to configure SSH private key for ubuntu user: %w", err)
-		}
-
-		// Original command: multipass exec "$VM_NAME" -- sudo bash -c "echo '$SSH_KEY' > /root/.ssh/id_rsa && chmod 600 /root/.ssh/id_rsa"
 		rootPrivKeyCmd := fmt.Sprintf("sudo bash -c \"echo '%s' > /root/.ssh/id_rsa && chmod 600 /root/.ssh/id_rsa\"", c.SSHKey)
 		if _, err := c.ExecCommand(name, rootPrivKeyCmd); err != nil {
 			return fmt.Errorf("failed to configure SSH private key for root user: %w", err)
@@ -112,7 +119,11 @@ func (c *Client) InitAuth(name string) error {
 }
 
 // DeleteVM deletes a virtual machine
-func (c *Client) DeleteVM(name string) error {
+func (c *MultipassLauncher) DeleteVM(name string) error {
+	// Use semaphore to limit the number of concurrent VM deletions
+	c.semaphore <- struct{}{}
+	defer func() { <-c.semaphore }()
+
 	// Stop the VM
 	cmd := exec.Command("multipass", "stop", name, "--force")
 	var stderr bytes.Buffer
@@ -138,7 +149,7 @@ func (c *Client) DeleteVM(name string) error {
 }
 
 // ExecCommand executes a command on the specified virtual machine
-func (c *Client) ExecCommand(vmName, command string) (string, error) {
+func (c *MultipassLauncher) ExecCommand(vmName, command string) (string, error) {
 	cmd := exec.Command("multipass", "exec", vmName, "--", "bash", "-c", command)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -151,8 +162,8 @@ func (c *Client) ExecCommand(vmName, command string) (string, error) {
 	return stdout.String(), nil
 }
 
-// ListVMs lists all virtual machines
-func (c *Client) ListVMs(prefix string) ([]string, error) {
+// ListVM lists all virtual machines
+func (c *MultipassLauncher) ListVM(prefix string) ([]string, error) {
 	cmd := exec.Command("multipass", "list", "--format", "csv")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -185,7 +196,7 @@ func (c *Client) ListVMs(prefix string) ([]string, error) {
 }
 
 // TransferFile transfers a local file to the virtual machine
-func (c *Client) TransferFile(localPath, vmName, remotePath string) error {
+func (c *MultipassLauncher) TransferFile(localPath, vmName, remotePath string) error {
 	cmd := exec.Command("multipass", "transfer", localPath, fmt.Sprintf("%s:%s", vmName, remotePath))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -195,4 +206,44 @@ func (c *Client) TransferFile(localPath, vmName, remotePath string) error {
 	}
 
 	return nil
+}
+
+// GetNodeIP gets the IP address of a node
+func (c *MultipassLauncher) GetNodeIP(nodeName string) (string, error) {
+	// Retry a few times, as the node may need some time to fully start
+	var err error
+	maxRetries := 5
+	retryDelay := 2 * time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		// Use multipass info command to get node information
+		cmd := exec.Command("multipass", "info", nodeName, "--format", "json")
+		output, err := cmd.Output()
+		if err == nil {
+			// Parse JSON output
+			var info struct {
+				Info map[string]struct {
+					Ipv4 []string `json:"ipv4"`
+				} `json:"info"`
+			}
+
+			if err := json.Unmarshal(output, &info); err != nil {
+				return "", fmt.Errorf("failed to parse node information: %w", err)
+			}
+
+			nodeInfo, ok := info.Info[nodeName]
+			if !ok || len(nodeInfo.Ipv4) == 0 {
+				// If node info not found in this attempt, continue retrying
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			return nodeInfo.Ipv4[0], nil
+		}
+
+		// If failed, wait a while before retrying
+		time.Sleep(retryDelay)
+	}
+
+	return "", fmt.Errorf("failed to get IP address for node %s after %d retries: %w", nodeName, maxRetries, err)
 }

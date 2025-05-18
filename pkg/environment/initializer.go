@@ -109,6 +109,26 @@ fi`
 	return fmt.Errorf("timed out waiting for apt lock release")
 }
 
+func (i *Initializer) AptUpdate() error {
+	// Update apt
+	cmd := "sudo apt-get update"
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
+	}
+	return nil
+}
+
+func (i *Initializer) AptUpdateForFixMissing() error {
+	// Update apt
+	cmd := "sudo apt-get update --fix-missing -y"
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
+	}
+	return nil
+}
+
 // DisableSwap disables swap
 func (i *Initializer) DisableSwap() error {
 	// Execute swapoff -a command
@@ -293,21 +313,9 @@ func (i *Initializer) InstallK8sComponents() error {
 		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
 	}
 
-	// Update apt
-	cmd := "sudo apt-get update"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
-	}
-
-	// Wait for apt lock release
-	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("failed to install dependencies on node %s: %w", i.nodeName, err)
-	}
-
 	// Install dependencies
-	cmd = "sudo apt-get install -y apt-transport-https ca-certificates curl gpg"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	cmd := "sudo apt-get install -y apt-transport-https ca-certificates curl gpg"
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to install dependencies on node %s: %w", i.nodeName, err)
 	}
@@ -361,33 +369,6 @@ func (i *Initializer) InstallK8sComponents() error {
 	if err := i.waitForAptLock(); err != nil {
 		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
 	}
-
-	// Update apt again (add retry mechanism)
-	maxRetries = 3
-	for retry := 0; retry < maxRetries; retry++ {
-		cmd = "sudo apt-get update"
-		_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-
-		if err == nil {
-			break
-		}
-
-		if retry < maxRetries-1 {
-			log.Infof("Failed to update apt on node %s, retrying in %v (%d/%d)...",
-				i.nodeName, retryDelay, retry+1, maxRetries)
-			time.Sleep(retryDelay)
-		}
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
-	}
-
-	// Wait for apt lock release
-	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("failed to install Kubernetes components on node %s: %w", i.nodeName, err)
-	}
-
 	// Install k8s components (add retry mechanism)
 	maxRetries = 3
 	for retry := 0; retry < maxRetries; retry++ {
@@ -465,6 +446,9 @@ func (i *Initializer) InstallHelm() error {
 
 // Initialize executes all initialization steps
 func (i *Initializer) Initialize() error {
+	if err := i.AptUpdate(); err != nil {
+		return err
+	}
 	// Based on options, disable swap if specified
 	if i.options.DisableSwap {
 		if err := i.DisableSwap(); err != nil {
@@ -475,7 +459,12 @@ func (i *Initializer) Initialize() error {
 	// Based on options, enable IPVS if specified
 	if i.options.EnableIPVS {
 		if err := i.EnableIPVS(); err != nil {
-			return err
+			if err := i.AptUpdateForFixMissing(); err != nil {
+				return err
+			}
+			if err := i.EnableIPVS(); err != nil {
+				return err
+			}
 		}
 	} else {
 		// If not enabling IPVS, still need to set network bridging
@@ -487,12 +476,22 @@ func (i *Initializer) Initialize() error {
 	// Install container runtime
 	if i.options.ContainerRuntime == "containerd" {
 		if err := i.InstallContainerd(); err != nil {
-			return err
+			if err := i.AptUpdateForFixMissing(); err != nil {
+				return err
+			}
+			if err := i.InstallContainerd(); err != nil {
+				return err
+			}
 		}
 	}
 
 	if err := i.InstallK8sComponents(); err != nil {
-		return err
+		if err := i.AptUpdateForFixMissing(); err != nil {
+			return err
+		}
+		if err := i.InstallK8sComponents(); err != nil {
+			return err
+		}
 	}
 
 	// Install Helm

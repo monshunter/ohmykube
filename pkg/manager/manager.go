@@ -1,11 +1,9 @@
 package manager
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,16 +16,17 @@ import (
 	"github.com/monshunter/ohmykube/pkg/environment"
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/kubeconfig"
+	"github.com/monshunter/ohmykube/pkg/launcher"
 	"github.com/monshunter/ohmykube/pkg/lb"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/multipass"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // Manager cluster manager
 type Manager struct {
 	Config             *cluster.Config
-	MultipassClient    *multipass.Client
+	VMProvider         launcher.Launcher
+	LauncherType       launcher.LauncherType
 	KubeadmConfig      *kubeadm.KubeadmConfig
 	SSHManager         *ssh.SSHManager
 	Cluster            *cluster.Cluster
@@ -39,9 +38,23 @@ type Manager struct {
 
 // NewManager creates a new cluster manager
 func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *cluster.Cluster) (*Manager, error) {
-	mpClient, err := multipass.NewClient(config.Image, sshConfig.Password, sshConfig.GetSSHKey(), sshConfig.GetSSHPubKey())
+	// Get default launcher type for platform
+	launcherType := launcher.LauncherType(config.LauncherType)
+
+	// Create the VM launcher
+	vmLauncher, err := launcher.NewLauncher(
+		launcherType,
+		launcher.Config{
+			Image:     config.Image,
+			Template:  config.Template,
+			Password:  sshConfig.Password,
+			SSHKey:    sshConfig.GetSSHKey(),
+			SSHPubKey: sshConfig.GetSSHPubKey(),
+			Parallel:  config.Parallel,
+		},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Multipass client: %w", err)
+		return nil, fmt.Errorf("failed to create VM launcher: %w", err)
 	}
 
 	// Create cluster information object
@@ -51,7 +64,8 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *clust
 
 	manager := &Manager{
 		Config:             config,
-		MultipassClient:    mpClient,
+		VMProvider:         vmLauncher,
+		LauncherType:       launcherType,
 		SSHManager:         ssh.NewSSHManager(cluster, sshConfig),
 		Cluster:            cluster,
 		InitOptions:        environment.DefaultInitOptions(),
@@ -59,6 +73,9 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *clust
 		CSIType:            "local-path-provisioner", // Default to local-path-provisioner
 		DownloadKubeconfig: true,                     // Default to download kubeconfig
 	}
+
+	// Create KubeadmConfig
+	manager.KubeadmConfig = kubeadm.NewKubeadmConfig(manager.SSHManager, config.KubernetesVersion, config.Master.Name)
 
 	// SSH clients and KubeadmConfig will be created later when needed
 	// KubeadmConfig will be set when initializing the Master node
@@ -92,7 +109,7 @@ func clusterFromConfig(config *cluster.Config) *cluster.Cluster {
 		})
 	}
 
-	return cluster.NewCluster(config.Name, config.K8sVersion, master, workers)
+	return cluster.NewCluster(config, master, workers)
 }
 
 // SetInitOptions sets environment initialization options
@@ -102,43 +119,7 @@ func (m *Manager) SetInitOptions(options environment.InitOptions) {
 
 // GetNodeIP gets the node IP address
 func (m *Manager) GetNodeIP(nodeName string) (string, error) {
-	// Retry a few times, as the node may need some time to fully start
-	var err error
-	maxRetries := 5
-	retryDelay := 2 * time.Second
-
-	for i := 0; i < maxRetries; i++ {
-		// Use multipass info command to get node information
-		cmd := exec.Command("multipass", "info", nodeName, "--format", "json")
-		output, err := cmd.Output()
-		if err == nil {
-			// Parse JSON output
-			var info struct {
-				Info map[string]struct {
-					Ipv4 []string `json:"ipv4"`
-				} `json:"info"`
-			}
-
-			if err := json.Unmarshal(output, &info); err != nil {
-				return "", fmt.Errorf("failed to parse node information: %w", err)
-			}
-
-			nodeInfo, ok := info.Info[nodeName]
-			if !ok || len(nodeInfo.Ipv4) == 0 {
-				// If node info not found in this attempt, continue retrying
-				time.Sleep(retryDelay)
-				continue
-			}
-
-			return nodeInfo.Ipv4[0], nil
-		}
-
-		// If failed, wait a while before retrying
-		log.Infof("Failed to get IP address for node %s, retrying (%d/%d)...", nodeName, i+1, maxRetries)
-		time.Sleep(retryDelay)
-	}
-
-	return "", fmt.Errorf("failed to get IP address for node %s after %d retries: %w", nodeName, maxRetries, err)
+	return m.VMProvider.GetNodeIP(nodeName)
 }
 
 // WaitForSSHReady waits for the node's SSH service to be ready
@@ -170,6 +151,7 @@ func (m *Manager) AddNodeInfo(nodeName string, cpu int, memory int, disk int) er
 	}
 	nodeInfo := cluster.NewNodeInfo(nodeName, cluster.RoleWorker, cpu, memory, disk)
 	nodeInfo.ExtraInfo = extraInfo
+	nodeInfo.GenerateSSHCommand()
 	m.Cluster.AddNode(nodeInfo)
 	return nil
 }
@@ -308,13 +290,13 @@ func (m *Manager) CreateCluster() error {
 		return fmt.Errorf("failed to update cluster information: %w", err)
 	}
 
-	log.Info("Connecting to nodes via SSH as root user...")
-
+	log.Info("Connected to nodes via SSH as root user")
 	// 3. Initialize environment
 	err = m.InitializeEnvironment()
 	if err != nil {
 		return fmt.Errorf("failed to initialize environment: %w", err)
 	}
+
 	// 4. Configure master node
 	log.Info("Configuring Kubernetes Master node...")
 	joinCommand, err := m.InitializeMaster()
@@ -375,9 +357,9 @@ func (m *Manager) CreateCluster() error {
 		log.Info("Skipping kubeconfig download...")
 	}
 
-	log.Info("\nCluster created successfully! You can access the cluster with the following commands:")
-	log.Infof("\texport KUBECONFIG=%s", kubeconfigPath)
-	log.Info("\tkubectl get nodes")
+	log.Info("\nCluster created successfully! \nYou can access the cluster with the following commands:")
+	log.Infof("\t\texport KUBECONFIG=%s", kubeconfigPath)
+	log.Info("\t\tkubectl get nodes")
 
 	return nil
 }
@@ -387,52 +369,19 @@ func (m *Manager) CreateClusterNodes() error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(m.Config.Workers)+1) // Create error channel for all nodes (including master)
 
-	// Create a slice containing configurations for all nodes
-	allNodes := make([]struct {
-		name   string
-		cpu    string
-		memory string
-		disk   string
-	}, 0, len(m.Config.Workers)+1)
-
-	// Add master node configuration
-	allNodes = append(allNodes, struct {
-		name   string
-		cpu    string
-		memory string
-		disk   string
-	}{
-		name:   m.Config.Master.Name,
-		cpu:    strconv.Itoa(m.Config.Master.CPU),
-		memory: strconv.Itoa(m.Config.Master.Memory) + "M",
-		disk:   strconv.Itoa(m.Config.Master.Disk) + "G",
-	})
-
-	// Add worker node configurations
-	for i := range m.Config.Workers {
-		allNodes = append(allNodes, struct {
-			name   string
-			cpu    string
-			memory string
-			disk   string
-		}{
-			name:   m.Config.Workers[i].Name,
-			cpu:    strconv.Itoa(m.Config.Workers[i].CPU),
-			memory: strconv.Itoa(m.Config.Workers[i].Memory) + "M",
-			disk:   strconv.Itoa(m.Config.Workers[i].Disk) + "G",
-		})
-	}
-
-	// Create all nodes in parallel
-	for _, node := range allNodes {
+	allNodes := make([]cluster.Node, 0, len(m.Config.Workers)+1)
+	allNodes = append(allNodes, m.Config.Master)
+	allNodes = append(allNodes, m.Config.Workers...)
+	// Create worker nodes in parallel
+	for i := range allNodes {
 		wg.Add(1)
-		go func(nodeName, cpus, memory, disk string) {
+		go func(nodeName string, cpus, memory, disk int) {
 			defer wg.Done()
 			log.Infof("Creating node: %s", nodeName)
-			if err := m.MultipassClient.CreateVM(nodeName, cpus, memory, disk); err != nil {
+			if err := m.VMProvider.CreateVM(nodeName, cpus, memory, disk); err != nil {
 				errChan <- fmt.Errorf("failed to create node %s: %w", nodeName, err)
 			}
-		}(node.name, node.cpu, node.memory, node.disk)
+		}(allNodes[i].Name, allNodes[i].CPU, allNodes[i].Memory, allNodes[i].Disk)
 	}
 
 	// Wait for all node creation to complete
@@ -452,22 +401,14 @@ func (m *Manager) CreateClusterNodes() error {
 // CreateMasterNode creates master node
 func (m *Manager) CreateMasterNode() error {
 	masterName := m.Config.Master.Name
-	cpus := strconv.Itoa(m.Config.Master.CPU)
-	memory := strconv.Itoa(m.Config.Master.Memory) + "M"
-	disk := strconv.Itoa(m.Config.Master.Disk) + "G"
-
-	return m.MultipassClient.CreateVM(masterName, cpus, memory, disk)
+	return m.VMProvider.CreateVM(masterName, m.Config.Master.CPU, m.Config.Master.Memory, m.Config.Master.Disk)
 }
 
 // CreateWorkerNodes creates worker nodes
 func (m *Manager) CreateWorkerNodes() error {
 	for i := range m.Config.Workers {
 		nodeName := m.Config.Workers[i].Name
-		cpus := strconv.Itoa(m.Config.Workers[i].CPU)
-		memory := strconv.Itoa(m.Config.Workers[i].Memory) + "M"
-		disk := strconv.Itoa(m.Config.Workers[i].Disk) + "G"
-
-		err := m.MultipassClient.CreateVM(nodeName, cpus, memory, disk)
+		err := m.VMProvider.CreateVM(nodeName, m.Config.Workers[i].CPU, m.Config.Workers[i].Memory, m.Config.Workers[i].Disk)
 		if err != nil {
 			return fmt.Errorf("failed to create Worker node %s: %w", nodeName, err)
 		}
@@ -495,9 +436,7 @@ func (m *Manager) InitializeEnvironment() error {
 
 // InitializeMaster initializes master node
 func (m *Manager) InitializeMaster() (string, error) {
-	// Create KubeadmConfig
-	m.KubeadmConfig = kubeadm.NewKubeadmConfig(m.SSHManager, m.Config.K8sVersion, m.Config.Master.Name)
-
+	log.Info("Initializing Master node...")
 	// Use new config system to generate config file and initialize Master
 	err := m.KubeadmConfig.InitMaster()
 	if err != nil {
@@ -633,11 +572,8 @@ func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
 
 	nodeName = m.Config.GetWorkerVMName(index + 1)
 	// Create virtual machine
-	cpuStr := strconv.Itoa(cpu)
-	memoryStr := strconv.Itoa(memory) + "M"
-	diskStr := strconv.Itoa(disk) + "G"
-	log.Infof("Creating node %s, cpu: %s, memory: %s, disk: %s", nodeName, cpuStr, memoryStr, diskStr)
-	err := m.MultipassClient.CreateVM(nodeName, cpuStr, memoryStr, diskStr)
+	log.Infof("Creating node %s, cpu: %d, memory: %d, disk: %d", nodeName, cpu, memory, disk)
+	err := m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
 	if err != nil {
 		return fmt.Errorf("failed to create node %s: %w", nodeName, err)
 	}
@@ -697,7 +633,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 
 	// Delete virtual machine
 	log.Infof("Deleting node %s...", nodeName)
-	err := m.MultipassClient.DeleteVM(nodeName)
+	err := m.VMProvider.DeleteVM(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", nodeName, err)
 	}
@@ -735,7 +671,7 @@ func (m *Manager) DeleteCluster() error {
 
 	// List all virtual machines
 	prefix := m.Config.Prefix()
-	vms, err := m.MultipassClient.ListVMs(prefix)
+	vms, err := m.VMProvider.ListVM(prefix)
 	if err != nil {
 		return fmt.Errorf("failed to list virtual machines: %w", err)
 	}
@@ -747,7 +683,7 @@ func (m *Manager) DeleteCluster() error {
 			// Close SSH connection
 			m.SSHManager.CloseClient(vm)
 
-			err := m.MultipassClient.DeleteVM(vm)
+			err := m.VMProvider.DeleteVM(vm)
 			if err != nil {
 				log.Errorf("failed to delete node %s: %v", vm, err)
 			}
@@ -761,11 +697,10 @@ func (m *Manager) DeleteCluster() error {
 		os.Remove(ohmykubeConfig)
 	}
 
-	// Delete cluster information file
-	homeDir, _ := os.UserHomeDir()
-	clusterYaml := filepath.Join(homeDir, ".ohmykube", "cluster.yaml")
-	if _, err := os.Stat(clusterYaml); err == nil {
-		os.Remove(clusterYaml)
+	// Delete cluster information
+	err = cluster.RemoveCluster(m.Config.Name)
+	if err != nil {
+		return fmt.Errorf("failed to delete cluster information: %w", err)
 	}
 
 	log.Info("Cluster deleted successfully!")
@@ -780,4 +715,35 @@ func (m *Manager) SetKubeadmConfigPath(configPath string) {
 		return
 	}
 	m.KubeadmConfig.SetCustomConfig(configPath)
+}
+
+// SetLauncherType sets the VM launcher type
+func (m *Manager) SetLauncherType(launcherType launcher.LauncherType) error {
+	// If the launcher type is the same, no need to change
+	if m.LauncherType == launcherType {
+		return nil
+	}
+
+	// Get SSH configuration
+	sshConfig := m.SSHManager.GetSSHConfig()
+
+	// Create a new launcher with the specified type
+	vmLauncher, err := launcher.NewLauncher(
+		launcherType,
+		launcher.Config{
+			Image:     m.Config.Image,
+			Password:  sshConfig.Password,
+			SSHKey:    sshConfig.GetSSHKey(),
+			SSHPubKey: sshConfig.GetSSHPubKey(),
+			Parallel:  m.Config.Parallel,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create VM launcher: %w", err)
+	}
+
+	// Update the manager with the new launcher
+	m.VMProvider = vmLauncher
+	m.LauncherType = launcherType
+	return nil
 }

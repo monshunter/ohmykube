@@ -59,22 +59,29 @@ func NewNodeInfo(name string, role string, cpu int, memory int, disk int) NodeIn
 	}
 }
 
+// GenerateSSHCommand generates SSH command string
+func (n *NodeInfo) GenerateSSHCommand() {
+	n.SSHCommand = fmt.Sprintf("ssh -p %s %s@%s", n.SSHPort, n.SSHUser, n.ExtraInfo.IP)
+}
+
 // Cluster stores cluster information
 type Cluster struct {
 	ApiVersion string     `yaml:"apiVersion"`
 	Kind       string     `yaml:"kind"`
 	Name       string     `yaml:"name"`
 	K8sVersion string     `yaml:"k8sVersion"`
+	Launcher   string     `yaml:"launcher"`
 	Master     NodeInfo   `yaml:"master"`
 	Workers    []NodeInfo `yaml:"workers"`
 }
 
-func NewCluster(name string, k8sVersion string, master NodeInfo, workers []NodeInfo) *Cluster {
+func NewCluster(config *Config, master NodeInfo, workers []NodeInfo) *Cluster {
 	return &Cluster{
 		ApiVersion: ApiVersion,
 		Kind:       KindCluster,
-		Name:       name,
-		K8sVersion: k8sVersion,
+		Name:       config.Name,
+		K8sVersion: config.KubernetesVersion,
+		Launcher:   config.LauncherType,
 		Master:     master,
 		Workers:    workers,
 	}
@@ -150,18 +157,16 @@ func (c *Cluster) AddNode(node NodeInfo) {
 // SaveClusterInfomation saves cluster information to a file
 func SaveClusterInfomation(info *Cluster) error {
 	// Create the .ohmykube directory
-	homeDir, err := os.UserHomeDir()
+	clusterDir, err := ClusterDir(info.Name)
 	if err != nil {
-		return fmt.Errorf("failed to get user home directory: %w", err)
+		return fmt.Errorf("failed to get cluster directory: %w", err)
 	}
-
-	ohmykubeDir := filepath.Join(homeDir, ".ohmykube", info.Name)
-	if err := os.MkdirAll(ohmykubeDir, 0755); err != nil {
+	if err := os.MkdirAll(clusterDir, 0755); err != nil {
 		return fmt.Errorf("failed to create .ohmykube directory: %w", err)
 	}
 
 	// Save cluster information to YAML file
-	clusterYaml := filepath.Join(ohmykubeDir, "cluster.yaml")
+	clusterYaml := filepath.Join(clusterDir, "cluster.yaml")
 	data, err := yaml.Marshal(info)
 	if err != nil {
 		return fmt.Errorf("failed to serialize cluster information: %w", err)
@@ -176,12 +181,12 @@ func SaveClusterInfomation(info *Cluster) error {
 
 // LoadClusterInfomation loads cluster information from a file
 func LoadClusterInfomation(name string) (*Cluster, error) {
-	homeDir, err := os.UserHomeDir()
+	clusterDir, err := ClusterDir(name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user home directory: %w", err)
+		return nil, fmt.Errorf("failed to get cluster directory: %w", err)
 	}
 
-	clusterYaml := filepath.Join(homeDir, ".ohmykube", name, "cluster.yaml")
+	clusterYaml := filepath.Join(clusterDir, "cluster.yaml")
 	data, err := os.ReadFile(clusterYaml)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cluster information file: %w", err)
@@ -195,7 +200,35 @@ func LoadClusterInfomation(name string) (*Cluster, error) {
 	return &info, nil
 }
 
-// GenerateSSHCommand generates SSH command string
-func (n *NodeInfo) GenerateSSHCommand() {
-	n.SSHCommand = fmt.Sprintf("ssh -p %s %s@%s", n.SSHPort, n.SSHUser, n.ExtraInfo.IP)
+func CheckClusterInfomationExists(name string) bool {
+	clusterDir, err := ClusterDir(name)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(clusterDir, "cluster.yaml"))
+	return err == nil
+}
+
+func RemoveCluster(name string) error {
+	clusterDir, err := ClusterDir(name)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster directory: %w", err)
+	}
+	return os.RemoveAll(clusterDir)
+}
+
+func OhMyKubeDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".ohmykube"), nil
+}
+
+func ClusterDir(name string) (string, error) {
+	ohmykubeDir, err := OhMyKubeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(ohmykubeDir, name), nil
 }

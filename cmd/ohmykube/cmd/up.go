@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/monshunter/ohmykube/pkg/cluster"
 	"github.com/monshunter/ohmykube/pkg/environment"
+	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -18,7 +21,6 @@ var (
 	workerCPU          int
 	masterDisk         int
 	workerDisk         int
-	vmImage            string
 	proxyMode          string
 	enableSwap         bool
 	kubeadmConfigPath  string
@@ -39,8 +41,16 @@ var upCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		launcherType := myLauncher.LauncherType(launcher)
+		if !launcherType.IsValid() {
+			return fmt.Errorf("invalid launcher type: %s, please use %s or %s", launcherType, myLauncher.MultipassLauncher, myLauncher.LimactlLauncher)
+		}
+
 		// Create cluster configuration
-		config := cluster.NewConfig(clusterName, k8sVersion, workersCount,
+		config := cluster.NewConfig(
+			clusterName,
+			workersCount,
 			cluster.Resource{
 				CPU:    masterCPU,
 				Memory: masterMemory,
@@ -50,8 +60,10 @@ var upCmd = &cobra.Command{
 				Memory: workerMemory,
 				Disk:   workerDisk,
 			})
-		config.K8sVersion = k8sVersion
-
+		config.SetKubernetesVersion(k8sVersion)
+		config.SetLauncherType(launcherType.String())
+		config.SetImage(multipassImage)
+		config.SetTemplate(limaFile)
 		// Create environment initialization options
 		enableIPVS := proxyMode == "ipvs"
 
@@ -92,14 +104,13 @@ var upCmd = &cobra.Command{
 func init() {
 	// Add command line parameters
 	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 2, "Number of worker nodes")
-	upCmd.Flags().IntVar(&masterMemory, "master-memory", 4096, "Master node memory (MB)")
+	upCmd.Flags().IntVar(&masterMemory, "master-memory", 4, "Master node memory (GB)")
 	upCmd.Flags().IntVar(&masterCPU, "master-cpu", 2, "Master node CPU cores")
-	upCmd.Flags().IntVar(&workerMemory, "worker-memory", 2048, "Worker node memory (MB)")
+	upCmd.Flags().IntVar(&workerMemory, "worker-memory", 2, "Worker node memory (GB)")
 	upCmd.Flags().IntVar(&workerCPU, "worker-cpu", 1, "Worker node CPU cores")
 	upCmd.Flags().IntVar(&masterDisk, "master-disk", 20, "Master node disk size (GB)")
 	upCmd.Flags().IntVar(&workerDisk, "worker-disk", 10, "Worker node disk size (GB)")
 	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes version")
-	upCmd.Flags().StringVar(&vmImage, "vm-image", "24.04", "VM image")
 	upCmd.Flags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
 	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "Enable Swap (only for K8s 1.28+)")
 	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "Custom kubeadm config file path")
