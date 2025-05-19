@@ -67,5 +67,3 @@ func init() {
 	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(deleteCmd)
 }
-
-// limactl start template://ubuntu-24.04 --disk 10 --plain

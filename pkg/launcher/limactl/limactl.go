@@ -57,7 +57,11 @@ func (c *LimactlLauncher) CreateVM(name string, cpus, memory, disk int) error {
 	cpusStr := strconv.Itoa(cpus)
 	memoryStr := strconv.Itoa(memory)
 	diskStr := strconv.Itoa(disk)
+	// shared network interface
+	const networks = `.networks = [{"lima": "user-v2"}, {"lima": "shared", "interface": "eth1"}]`
 
+	// vzNAT network interface
+	// networksYqStrings := `networks=[{"lima": "user-v2"}, {"vzNAT": true, "interface": "eth1"}]`
 	cmd := exec.Command("limactl", "start", c.FileOrTemplate,
 		"--name", name,
 		"--cpus", cpusStr,
@@ -65,7 +69,8 @@ func (c *LimactlLauncher) CreateVM(name string, cpus, memory, disk int) error {
 		"--disk", diskStr,
 		"--mount-type", "virtiofs",
 		// "--network", "vzNAT",
-		"--network", "lima:shared",
+		// "--network", "lima:shared",
+		"--set", networks,
 		"--plain",
 		"--tty=false",
 	)
@@ -214,7 +219,7 @@ func (c *LimactlLauncher) GetNodeIP(nodeName string) (string, error) {
 
 	for i := 0; i < maxRetries; i++ {
 		// Lima stores IP addresses differently, let's get them from the VM directly
-		ipCmd := `ip -4 addr show dev lima0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'`
+		ipCmd := `ip -4 addr show dev eth1 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'`
 		ip, err := c.ExecCommand(nodeName, ipCmd)
 		if err != nil {
 			// Continue retrying
