@@ -1,11 +1,13 @@
 package kubeadm
 
 import (
+	"fmt"
+
 	"gopkg.in/yaml.v3"
 )
 
-// loadDefaultInitConfig loads the default InitConfiguration configuration
-func loadDefaultInitConfig() YAMLDocument {
+// loadInitConfig loads the default InitConfiguration configuration
+func loadInitConfig() YAMLDocument {
 	yamlStr := `
 apiVersion: kubeadm.k8s.io/v1beta4
 # Bootstrap tokens are used for node joining
@@ -32,9 +34,9 @@ nodeRegistration:
 	return doc
 }
 
-// loadDefaultClusterConfig loads the default ClusterConfiguration configuration
-func loadDefaultClusterConfig() YAMLDocument {
-	yamlStr := `
+// loadClusterConfig loads the default ClusterConfiguration configuration
+func loadClusterConfig(version string) YAMLDocument {
+	const template = `
 # ClusterConfiguration
 apiServer: {}
 apiVersion: kubeadm.k8s.io/v1beta4
@@ -50,7 +52,7 @@ etcd:
     dataDir: /var/lib/etcd
 imageRepository: registry.k8s.io
 kind: ClusterConfiguration
-kubernetesVersion: v1.33.0
+kubernetesVersion: %s
 networking:
   dnsDomain: cluster.local
   podSubnet: 10.244.0.0/16
@@ -58,13 +60,14 @@ networking:
 proxy: {}
 scheduler: {}
 `
+	yamlStr := fmt.Sprintf(template, version)
 	var doc YAMLDocument
 	yaml.Unmarshal([]byte(yamlStr), &doc)
 	return doc
 }
 
-// loadDefaultKubeletConfig loads the default KubeletConfiguration configuration
-func loadDefaultKubeletConfig() YAMLDocument {
+// loadKubeletConfig loads the default KubeletConfiguration configuration
+func loadKubeletConfig() YAMLDocument {
 	yamlStr := `
 # KubeletConfiguration
 apiVersion: kubelet.config.k8s.io/v1beta1
@@ -122,9 +125,9 @@ volumeStatsAggPeriod: 0s
 	return doc
 }
 
-// loadDefaultKubeProxyConfig loads the default KubeProxyConfiguration configuration
-func loadDefaultKubeProxyConfig() YAMLDocument {
-	yamlStr := `
+// loadKubeProxyConfig loads the default KubeProxyConfiguration configuration
+func loadKubeProxyConfig(proxyMode string) YAMLDocument {
+	const template = `
 # KubeProxyConfiguration
 apiVersion: kubeproxy.config.k8s.io/v1alpha1
 bindAddress: 0.0.0.0
@@ -162,7 +165,7 @@ ipvs:
   excludeCIDRs: null
   minSyncPeriod: 0s
   scheduler: ""
-  strictARP: true
+  strictARP: %v
   syncPeriod: 0s
   tcpFinTimeout: 0s
   tcpTimeout: 0s
@@ -177,7 +180,7 @@ logging:
       infoBufferSize: "0"
   verbosity: 0
 metricsBindAddress: ""
-mode: ipvs
+mode: %s
 nftables:
   masqueradeAll: false
   masqueradeBit: null
@@ -194,6 +197,10 @@ winkernel:
   rootHnsEndpointName: ""
   sourceVip: ""
 `
+	if proxyMode == "" {
+		proxyMode = "iptables"
+	}
+	yamlStr := fmt.Sprintf(template, proxyMode == "ipvs", proxyMode)
 	var doc YAMLDocument
 	yaml.Unmarshal([]byte(yamlStr), &doc)
 	return doc

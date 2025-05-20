@@ -1,4 +1,4 @@
-package environment
+package initializer
 
 import (
 	"fmt"

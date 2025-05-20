@@ -2,6 +2,9 @@ package cni
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/clusterinfo"
@@ -29,6 +32,7 @@ func NewFlannelInstaller(sshClient *ssh.Client, masterNode string) *FlannelInsta
 
 // Install installs Flannel CNI
 func (f *FlannelInstaller) Install() error {
+	ymlURL := fmt.Sprintf("https://github.com/flannel-io/flannel/releases/download/%s/kube-flannel.yml", f.Version)
 	// Ensure br_netfilter module is loaded
 	brNetfilterCmd := `
 sudo modprobe br_netfilter
@@ -47,85 +51,55 @@ echo "br_netfilter" | sudo tee /etc/modules-load.d/br_netfilter.conf
 		log.Infof("Retrieved cluster Pod CIDR: %s", f.PodCIDR)
 	}
 
-	// Check if Flannel helm repository has been added
-	checkRepoCmd := `helm repo list | grep -q "flannel" && echo "Added" || echo "NotAdded"`
-	output, err := f.SSHClient.RunCommand(checkRepoCmd)
+	// Step 1: Download the flannel manifest locally
+	log.Info("Downloading Flannel manifest")
+	resp, err := http.Get(ymlURL)
 	if err != nil {
-		return fmt.Errorf("failed to check Flannel Helm repository: %w", err)
+		return fmt.Errorf("failed to download Flannel manifest: %w", err)
 	}
+	defer resp.Body.Close()
 
-	// Add the repository if not added
-	if strings.TrimSpace(output) != "Added" {
-		log.Info("Adding Flannel Helm repository...")
-		_, err = f.SSHClient.RunCommand(`
-helm repo add flannel https://flannel-io.github.io/flannel/
-helm repo update
-`)
-		if err != nil {
-			return fmt.Errorf("failed to add Flannel Helm repository: %w", err)
-		}
-	} else {
-		log.Info("Flannel Helm repository already exists, skipping addition")
-	}
-
-	// Check if kube-flannel namespace already exists
-	checkNsCmd := `kubectl get ns kube-flannel -o name 2>/dev/null || echo ""`
-	output, err = f.SSHClient.RunCommand(checkNsCmd)
+	// Step 2: Read and modify the YAML content
+	yamlContent, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to check kube-flannel namespace: %w", err)
+		return fmt.Errorf("failed to read Flannel manifest: %w", err)
 	}
 
-	// Create namespace and set labels (if needed)
-	if strings.TrimSpace(output) == "" {
-		log.Info("Creating kube-flannel namespace...")
-		_, err = f.SSHClient.RunCommand(`
-kubectl create ns kube-flannel
-kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
-`)
-		if err != nil {
-			return fmt.Errorf("failed to create kube-flannel namespace: %w", err)
-		}
-	} else {
-		// Namespace exists, just set labels
-		log.Info("kube-flannel namespace already exists, just updating labels")
-		_, err = f.SSHClient.RunCommand(`kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged`)
-		if err != nil {
-			return fmt.Errorf("failed to set kube-flannel namespace labels: %w", err)
-		}
-	}
+	// Replace the default Pod CIDR with the specified one
+	log.Infof("Replacing default Pod CIDR with %s", f.PodCIDR)
+	oldCIDR := `"Network": "10.244.0.0/16"`
+	newCIDR := fmt.Sprintf(`"Network": "%s"`, f.PodCIDR)
+	modifiedYaml := strings.Replace(string(yamlContent), oldCIDR, newCIDR, -1)
 
-	// Check if Flannel is already installed
-	checkFlannelCmd := `helm ls -n kube-flannel | grep -q "flannel" && echo "Installed" || echo "NotInstalled"`
-	output, err = f.SSHClient.RunCommand(checkFlannelCmd)
+	// Step 3: Save the modified YAML to a temporary file and transfer to the remote server
+	localTempFile, err := os.CreateTemp("", "kube-flannel-*.yml")
 	if err != nil {
-		return fmt.Errorf("failed to check Flannel installation status: %w", err)
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(localTempFile.Name())
+
+	if _, err = localTempFile.WriteString(modifiedYaml); err != nil {
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	localTempFile.Close()
+
+	// Upload the modified file to the remote server
+	remoteTempFile := "/tmp/kube-flannel.yml"
+	log.Info("Transferring modified Flannel manifest to remote server")
+	if err = f.SSHClient.TransferFile(localTempFile.Name(), remoteTempFile); err != nil {
+		return fmt.Errorf("failed to transfer file to remote server: %w", err)
 	}
 
-	// Install or upgrade Flannel
-	if strings.TrimSpace(output) != "Installed" {
-		log.Info("Installing Flannel...")
-		helmInstallCmd := fmt.Sprintf(`
-helm install flannel --set podCidr="%s" --namespace kube-flannel flannel/flannel
-`, f.PodCIDR)
-		_, err = f.SSHClient.RunCommand(helmInstallCmd)
-		if err != nil {
-			return fmt.Errorf("failed to install Flannel with Helm: %w", err)
-		}
-	} else {
-		log.Info("Flannel is already installed, performing upgrade to update configuration...")
-		helmUpgradeCmd := fmt.Sprintf(`
-helm upgrade flannel --set podCidr="%s" --namespace kube-flannel flannel/flannel
-`, f.PodCIDR)
-		_, err = f.SSHClient.RunCommand(helmUpgradeCmd)
-		if err != nil {
-			return fmt.Errorf("failed to upgrade Flannel with Helm: %w", err)
-		}
+	// Step 4: Apply the modified YAML on the remote server
+	log.Info("Applying Flannel manifest on the remote server")
+	applyCmd := fmt.Sprintf("kubectl apply -f %s", remoteTempFile)
+	_, err = f.SSHClient.RunCommand(applyCmd)
+	if err != nil {
+		return fmt.Errorf("failed to apply Flannel manifest: %w", err)
 	}
 
 	// Wait for Flannel to be ready
-	waitCmd := `
-kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=120s
-`
+	waitCmd := `kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=120s`
 	_, err = f.SSHClient.RunCommand(waitCmd)
 	if err != nil {
 		log.Infof("Warning: Timed out waiting for Flannel to be ready, but will continue: %v", err)

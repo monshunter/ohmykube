@@ -34,7 +34,7 @@ var downCmd = &cobra.Command{
 		}
 
 		// Create cluster configuration
-		config := cluster.NewConfig(clusterName, workersCount,
+		config := cluster.NewConfig(clusterName, workersCount, "iptables",
 			cluster.Resource{}, cluster.Resource{})
 		config.SetKubernetesVersion("")
 		config.SetLauncherType(launcherType.String())

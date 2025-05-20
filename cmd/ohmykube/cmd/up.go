@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
-	"github.com/monshunter/ohmykube/pkg/environment"
+	"github.com/monshunter/ohmykube/pkg/initializer"
 	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
@@ -21,7 +21,6 @@ var (
 	workerCPU          int
 	masterDisk         int
 	workerDisk         int
-	proxyMode          string
 	enableSwap         bool
 	kubeadmConfigPath  string
 	cniType            string
@@ -46,11 +45,12 @@ var upCmd = &cobra.Command{
 		if !launcherType.IsValid() {
 			return fmt.Errorf("invalid launcher type: %s, please use %s or %s", launcherType, myLauncher.MultipassLauncher, myLauncher.LimactlLauncher)
 		}
-
+		// Create environment initialization options
 		// Create cluster configuration
 		config := cluster.NewConfig(
 			clusterName,
 			workersCount,
+			proxyMode,
 			cluster.Resource{
 				CPU:    masterCPU,
 				Memory: masterMemory,
@@ -64,13 +64,11 @@ var upCmd = &cobra.Command{
 		config.SetLauncherType(launcherType.String())
 		config.SetImage(multipassImage)
 		config.SetTemplate(limaFile)
-		// Create environment initialization options
-		enableIPVS := proxyMode == "ipvs"
 
 		// Get default initialization options and modify required fields
-		initOptions := environment.DefaultInitOptions()
+		initOptions := initializer.DefaultInitOptions()
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
-		initOptions.EnableIPVS = enableIPVS   // Enable IPVS when proxyMode is ipvs
+		initOptions.EnableIPVS = proxyMode == "ipvs"
 
 		// Create cluster manager and pass options
 		manager, err := manager.NewManager(config, sshConfig, nil)
@@ -111,7 +109,6 @@ func init() {
 	upCmd.Flags().IntVar(&masterDisk, "master-disk", 20, "Master node disk size (GB)")
 	upCmd.Flags().IntVar(&workerDisk, "worker-disk", 10, "Worker node disk size (GB)")
 	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes version")
-	upCmd.Flags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
 	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "Enable Swap (only for K8s 1.28+)")
 	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "Custom kubeadm config file path")
 	upCmd.Flags().StringVar(&cniType, "cni", "flannel", "CNI type to install (flannel, cilium, none)")

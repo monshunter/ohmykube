@@ -71,6 +71,7 @@ type Cluster struct {
 	Name       string     `yaml:"name"`
 	K8sVersion string     `yaml:"k8sVersion"`
 	Launcher   string     `yaml:"launcher"`
+	ProxyMode  string     `yaml:"proxyMode"`
 	Master     NodeInfo   `yaml:"master"`
 	Workers    []NodeInfo `yaml:"workers"`
 }
@@ -82,6 +83,7 @@ func NewCluster(config *Config, master NodeInfo, workers []NodeInfo) *Cluster {
 		Name:       config.Name,
 		K8sVersion: config.KubernetesVersion,
 		Launcher:   config.LauncherType,
+		ProxyMode:  config.ProxyMode,
 		Master:     master,
 		Workers:    workers,
 	}

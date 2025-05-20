@@ -42,6 +42,7 @@ var (
 	parallel             int
 	multipassImage       string
 	limaFile             string
+	proxyMode            string
 )
 
 func init() {
@@ -60,6 +61,7 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
 	rootCmd.PersistentFlags().StringVar(&multipassImage, "multipass-image", "24.04", "Multipass image")
 	rootCmd.PersistentFlags().StringVar(&limaFile, "lima-file", "template://ubuntu-24.04", "Lima file or template")
+	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
 	// Add subcommands
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)

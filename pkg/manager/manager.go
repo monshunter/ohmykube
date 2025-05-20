@@ -13,7 +13,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/cluster"
 	"github.com/monshunter/ohmykube/pkg/cni"
 	"github.com/monshunter/ohmykube/pkg/csi"
-	"github.com/monshunter/ohmykube/pkg/environment"
+	"github.com/monshunter/ohmykube/pkg/initializer"
 	"github.com/monshunter/ohmykube/pkg/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/kubeconfig"
 	"github.com/monshunter/ohmykube/pkg/launcher"
@@ -30,7 +30,7 @@ type Manager struct {
 	KubeadmConfig      *kubeadm.KubeadmConfig
 	SSHManager         *ssh.SSHManager
 	Cluster            *cluster.Cluster
-	InitOptions        environment.InitOptions
+	InitOptions        initializer.InitOptions
 	CNIType            string // CNI type to use, default is flannel
 	CSIType            string // CSI type to use, default is local-path-provisioner
 	DownloadKubeconfig bool   // Whether to download kubeconfig to local
@@ -68,14 +68,14 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *clust
 		LauncherType:       launcherType,
 		SSHManager:         ssh.NewSSHManager(cluster, sshConfig),
 		Cluster:            cluster,
-		InitOptions:        environment.DefaultInitOptions(),
+		InitOptions:        initializer.DefaultInitOptions(),
 		CNIType:            "flannel",                // Default to flannel
 		CSIType:            "local-path-provisioner", // Default to local-path-provisioner
 		DownloadKubeconfig: true,                     // Default to download kubeconfig
 	}
 
 	// Create KubeadmConfig
-	manager.KubeadmConfig = kubeadm.NewKubeadmConfig(manager.SSHManager, config.KubernetesVersion, config.Master.Name)
+	manager.KubeadmConfig = kubeadm.NewKubeadmConfig(manager.SSHManager, config.KubernetesVersion, config.Master.Name, config.ProxyMode)
 
 	// SSH clients and KubeadmConfig will be created later when needed
 	// KubeadmConfig will be set when initializing the Master node
@@ -113,7 +113,7 @@ func clusterFromConfig(config *cluster.Config) *cluster.Cluster {
 }
 
 // SetInitOptions sets environment initialization options
-func (m *Manager) SetInitOptions(options environment.InitOptions) {
+func (m *Manager) SetInitOptions(options initializer.InitOptions) {
 	m.InitOptions = options
 }
 
@@ -275,7 +275,6 @@ func (m *Manager) SetupKubeconfig() (string, error) {
 // CreateCluster creates a new cluster
 func (m *Manager) CreateCluster() error {
 	log.Info("Starting to create Kubernetes cluster...")
-
 	// 1. Create all nodes (in parallel)
 	log.Info("Creating cluster nodes...")
 	err := m.CreateClusterNodes()
@@ -296,7 +295,7 @@ func (m *Manager) CreateCluster() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize environment: %w", err)
 	}
-
+	// return nil
 	// 4. Configure master node
 	log.Info("Configuring Kubernetes Master node...")
 	joinCommand, err := m.InitializeMaster()
@@ -424,7 +423,7 @@ func (m *Manager) InitializeEnvironment() error {
 	}
 
 	// Use parallel batch initializer to support parallel initialization of multiple nodes
-	batchInitializer := environment.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
+	batchInitializer := initializer.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
 
 	// Use concurrency limit to execute initialization (limit to 2 nodes at a time to avoid apt lock contention)
 	if err := batchInitializer.InitializeWithConcurrencyLimit(3); err != nil {
@@ -592,7 +591,7 @@ func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
 
 	// Use initializer to set environment
 	log.Infof("Initializing node %s", nodeName)
-	initializer := environment.NewInitializerWithOptions(m, nodeName, m.InitOptions)
+	initializer := initializer.NewInitializerWithOptions(m, nodeName, m.InitOptions)
 	if err := initializer.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize node %s environment: %w", nodeName, err)
 	}

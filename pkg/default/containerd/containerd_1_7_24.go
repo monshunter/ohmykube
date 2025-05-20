@@ -1,6 +1,6 @@
 package containerd
 
-const CONTAINERD_CONFIG_1_7_24 = `# containerd config for 1.7.24
+const CONFIG = `# containerd config for 1.7.24
 disabled_plugins = []
 imports = []
 oom_score = 0
@@ -67,7 +67,7 @@ version = 2
     max_container_log_line_size = 16384
     netns_mounts_under_state_dir = false
     restrict_oom_score_adj = false
-    sandbox_image = "registry.k8s.io/pause:3.8"
+    sandbox_image = "registry.k8s.io/pause:3.10"
     selinux_category_range = 1024
     stats_collect_period = 10
     stream_idle_timeout = "4h0m0s"
@@ -293,3 +293,46 @@ version = 2
   gid = 0
   uid = 0
 `
+
+const (
+	DOCKER_MIRROR = `
+server = "https://docker.io"
+
+[host."https://registry.cn-hangzhou.aliyuncs.com"]
+  capabilities = ["pull", "resolve"]
+`
+	K8S_MIRROR = `
+server = "https://registry.k8s.io"
+
+[host."https://k8s.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+`
+	QUAY_MIRROR = `
+server = "https://quay.io"
+
+[host."https://quay.mirrors.ustc.edu.cn"]
+  capabilities = ["pull", "resolve"]
+`
+)
+
+type Mirror struct {
+	Name   string
+	Config string
+}
+
+func Mirrors() []Mirror {
+	return []Mirror{
+		{
+			Name:   "docker.io",
+			Config: DOCKER_MIRROR,
+		},
+		{
+			Name:   "registry.k8s.io",
+			Config: K8S_MIRROR,
+		},
+		{
+			Name:   "quay.io",
+			Config: QUAY_MIRROR,
+		},
+	}
+}

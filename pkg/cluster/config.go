@@ -31,9 +31,10 @@ type Config struct {
 	Master            Node
 	Workers           []Node
 	KubernetesVersion string
+	ProxyMode         string
 }
 
-func NewConfig(name string, workers int, masterResource Resource, workerResource Resource) *Config {
+func NewConfig(name string, workers int, proxyMode string, masterResource Resource, workerResource Resource) *Config {
 	c := &Config{
 		Name:    name,
 		Master:  Node{},
@@ -45,6 +46,7 @@ func NewConfig(name string, workers int, masterResource Resource, workerResource
 	}
 	c.Master.Name = c.GetMasterVMName(0)
 	c.Master.Resource = masterResource
+	c.ProxyMode = proxyMode
 	return c
 }
 

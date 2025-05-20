@@ -1,4 +1,4 @@
-package environment
+package initializer
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/default/containerd"
 	"github.com/monshunter/ohmykube/pkg/default/ipvs"
 	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/utils"
 )
 
 // Initializer used to initialize a single Kubernetes node environment
@@ -281,9 +282,25 @@ func (i *Initializer) InstallContainerd() error {
 		return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
 	}
 
+	// Set mirrors
+	if utils.IsCN {
+		for _, mirror := range containerd.Mirrors() {
+			cmd = fmt.Sprintf("sudo mkdir -p /etc/containerd/certs.d/%s", mirror.Name)
+			_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+			if err != nil {
+				return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
+			}
+			cmd = fmt.Sprintf("sudo tee /etc/containerd/certs.d/%s/hosts.toml <<EOF\n%sEOF", mirror.Name, mirror.Config)
+			_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+			if err != nil {
+				return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
+			}
+		}
+	}
+
 	// Write default configuration
 	configFile := "/etc/containerd/config.toml"
-	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", configFile, containerd.CONTAINERD_CONFIG_1_7_24)
+	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", configFile, containerd.CONFIG)
 	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to create containerd configuration file on node %s: %w", i.nodeName, err)

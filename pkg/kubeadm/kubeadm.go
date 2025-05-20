@@ -17,17 +17,21 @@ type KubeadmConfig struct {
 	MasterNode        string
 	PodCIDR           string
 	ServiceCIDR       string
+	ClusterDNS        string
+	ProxyMode         string
 	KubernetesVersion string
 	CustomConfigPath  string // Added: custom configuration path
 }
 
 // NewKubeadmConfig creates a new kubeadm configuration
-func NewKubeadmConfig(sshManager *ssh.SSHManager, k8sVersion string, masterNode string) *KubeadmConfig {
+func NewKubeadmConfig(sshManager *ssh.SSHManager, k8sVersion string, masterNode string, proxyMode string) *KubeadmConfig {
 	return &KubeadmConfig{
 		SSHManager:        sshManager,
 		MasterNode:        masterNode,
 		PodCIDR:           "10.244.0.0/16",
 		ServiceCIDR:       "10.96.0.0/12",
+		ClusterDNS:        "10.96.0.10",
+		ProxyMode:         proxyMode,
 		KubernetesVersion: k8sVersion,
 	}
 }
@@ -37,9 +41,8 @@ func (k *KubeadmConfig) InitMaster() error {
 	// Use new configuration generation system
 	configPath, err := kubeadm.GenerateKubeadmConfig(
 		k.KubernetesVersion,
-		k.PodCIDR,
-		k.ServiceCIDR,
 		k.CustomConfigPath,
+		k.ProxyMode,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate kubeadm configuration: %w", err)
