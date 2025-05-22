@@ -6,6 +6,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/cluster"
 	"github.com/monshunter/ohmykube/pkg/initializer"
 	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
+	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -36,6 +37,18 @@ var upCmd = &cobra.Command{
 - Optional CSI: local-path-provisioner(default) or rook-ceph
 - MetalLB as LoadBalancer implementation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		var cls *cluster.Cluster
+		var err error
+		if cluster.CheckExists(clusterName) {
+			cls, err = cluster.Load(clusterName)
+			if err != nil {
+				log.Errorf("Failed to load cluster information: %v", err)
+				return fmt.Errorf("failed to load cluster information: %w", err)
+			}
+			launcher = cls.Spec.Launcher
+			proxyMode = cls.Spec.ProxyMode
+		}
+
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
 		if err != nil {
 			return err
@@ -71,7 +84,7 @@ var upCmd = &cobra.Command{
 		initOptions.EnableIPVS = proxyMode == "ipvs"
 
 		// Create cluster manager and pass options
-		manager, err := manager.NewManager(config, sshConfig, nil)
+		manager, err := manager.NewManager(config, sshConfig, cls)
 		if err != nil {
 			return err
 		}

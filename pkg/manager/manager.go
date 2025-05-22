@@ -121,36 +121,25 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func (m *Manager) addClusterNode(nodeName string, cpu int, memory int, disk int) error {
-	status, err := m.GetStatusFromRemote(nodeName)
-	if err != nil {
-		return fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
-	}
-	node := cluster.NewNode(nodeName, cluster.RoleWorker, cpu, memory, disk)
-	node.UpdateStatus(status)
-	m.Cluster.AddNode(node)
-	return nil
-}
-
 // UpdateClusterStatus updates cluster status
-func (m *Manager) UpdateClusterStatus() error {
+func (m *Manager) UpdateVMsInternalStatus() error {
 	status, err := m.GetStatusFromRemote(m.Cluster.Spec.Master.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get Master node information: %w", err)
 	}
-	m.Cluster.Spec.Master.UpdateStatus(status)
+	m.Cluster.Spec.Master.SetInternalStatus(status)
 	for i := range m.Cluster.Spec.Workers {
 		status, err := m.GetStatusFromRemote(m.Cluster.Spec.Workers[i].Name)
 		if err != nil {
 			return fmt.Errorf("failed to get Worker node information: %w", err)
 		}
-		m.Cluster.Spec.Workers[i].UpdateStatus(status)
+		m.Cluster.Spec.Workers[i].SetInternalStatus(status)
 	}
 	// Save cluster information to local file
 	return m.Cluster.Save()
 }
 
-func (m *Manager) GetStatusFromRemote(nodeName string) (status cluster.NodeStatus, err error) {
+func (m *Manager) GetStatusFromRemote(nodeName string) (status cluster.NodeInternalStatus, err error) {
 	// Get IP information
 	ip, err := m.GetNodeIP(nodeName)
 	if err != nil {
@@ -248,62 +237,156 @@ func (m *Manager) SetupKubeconfig() (string, error) {
 // CreateCluster creates a new cluster
 func (m *Manager) CreateCluster() error {
 	log.Info("Starting to create Kubernetes cluster...")
-	// 1. Create all nodes (in parallel)
-	log.Info("Creating cluster nodes...")
-	err := m.CreateClusterVMs()
-	if err != nil {
-		return fmt.Errorf("failed to create cluster nodes: %w", err)
+
+	// Check if we can resume from a previous state
+	if m.canResumeClusterCreation() {
+		log.Info("Resuming cluster creation from previous state...")
+	} else {
+		// Initialize cluster conditions
+		m.Cluster.SetCondition(cluster.ConditionTypeClusterReady, cluster.ConditionStatusFalse,
+			"ClusterCreationStarted", "Starting cluster creation process")
 	}
-	// 2. Initialize environment
-	err = m.InitializeVMs()
-	if err != nil {
-		return fmt.Errorf("failed to initialize environment: %w", err)
+
+	// 1. Create all nodes (in parallel) if not already done
+	if !m.Cluster.HasCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue) ||
+		!m.Cluster.HasAllNodeCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue) {
+		log.Info("Creating cluster nodes...")
+		err := m.CreateClusterVMs()
+		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+				"VMCreationFailed", fmt.Sprintf("Failed to create VMs: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to create cluster nodes: %w", err)
+		}
+		m.Cluster.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue,
+			"VMsCreated", "All cluster VMs created successfully")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping VM creation as it was already completed")
 	}
-	// 3. Configure master node
-	log.Info("Configuring Kubernetes Master node...")
-	joinCommand, err := m.InitializeMaster()
-	if err != nil {
-		return fmt.Errorf("failed to initialize Master node: %w", err)
+
+	// 2. Initialize environment if not already done
+	if !m.Cluster.HasCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue) ||
+		!m.Cluster.HasAllNodeCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue) {
+		log.Info("Initializing VM environments...")
+		err := m.InitializeVMs()
+		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
+				"EnvironmentInitFailed", fmt.Sprintf("Failed to initialize environments: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to initialize environment: %w", err)
+		}
+		m.Cluster.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue,
+			"EnvironmentsInitialized", "All VM environments initialized successfully")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping environment initialization as it was already completed")
+	}
+
+	// 3. Configure master node if not already done
+	if !m.Cluster.HasCondition(cluster.ConditionTypeMasterInitialized, cluster.ConditionStatusTrue) {
+		log.Info("Configuring Kubernetes Master node...")
+		_, err := m.InitializeMaster()
+		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeMasterInitialized, cluster.ConditionStatusFalse,
+				"MasterInitFailed", fmt.Sprintf("Failed to initialize master: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to initialize Master node: %w", err)
+		}
+		m.Cluster.SetCondition(cluster.ConditionTypeMasterInitialized, cluster.ConditionStatusTrue,
+			"MasterInitialized", "Master node initialized successfully")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping master initialization as it was already completed")
 	}
 
 	// 4. Configure worker nodes
-	log.Info("Joining Worker nodes to the cluster...")
-	err = m.JoinWorkerNodes(joinCommand)
-	if err != nil {
-		return fmt.Errorf("failed to join Worker nodes to the cluster: %w", err)
+	if !m.Cluster.HasCondition(cluster.ConditionTypeWorkersJoined, cluster.ConditionStatusTrue) ||
+		!m.Cluster.HasAllNodeCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusTrue) {
+		log.Info("Joining Worker nodes to the cluster...")
+		joinCommand, err := m.getJoinCommand()
+		if err != nil {
+			return fmt.Errorf("failed to get join command: %w", err)
+		}
+
+		err = m.JoinWorkerNodes(joinCommand)
+		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeWorkersJoined, cluster.ConditionStatusFalse,
+				"WorkersJoinFailed", fmt.Sprintf("Failed to join workers: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to join Worker nodes to the cluster: %w", err)
+		}
+		m.Cluster.SetCondition(cluster.ConditionTypeWorkersJoined, cluster.ConditionStatusTrue,
+			"WorkersJoined", "All worker nodes joined the cluster successfully")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping worker joining as it was already completed")
 	}
 
-	// 5. Install CNI
-	if m.CNIType != "none" {
+	// 5. Install CNI if not already done
+	if m.CNIType != "none" && !m.Cluster.HasCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusTrue) {
 		log.Infof("Installing %s CNI...", m.CNIType)
-		err = m.InstallCNI()
+		err := m.InstallCNI()
 		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusFalse,
+				"CNIInstallFailed", fmt.Sprintf("Failed to install CNI: %v", err))
+			m.Cluster.Save()
 			return fmt.Errorf("failed to install CNI: %w", err)
 		}
-	} else {
+		m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusTrue,
+			"CNIInstalled", fmt.Sprintf("%s CNI installed successfully", m.CNIType))
+		m.Cluster.Save()
+	} else if m.CNIType == "none" {
 		log.Info("Skipping CNI installation...")
+		m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusTrue,
+			"CNISkipped", "CNI installation was skipped as configured")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping CNI installation as it was already completed")
 	}
 
-	// 6. Install CSI
-	if m.CSIType != "none" {
+	// 6. Install CSI if not already done
+	if m.CSIType != "none" && !m.Cluster.HasCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue) {
 		log.Infof("Installing %s CSI...", m.CSIType)
-		err = m.InstallCSI()
+		err := m.InstallCSI()
 		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusFalse,
+				"CSIInstallFailed", fmt.Sprintf("Failed to install CSI: %v", err))
+			m.Cluster.Save()
 			return fmt.Errorf("failed to install CSI: %w", err)
 		}
-	} else {
+		m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue,
+			"CSIInstalled", fmt.Sprintf("%s CSI installed successfully", m.CSIType))
+		m.Cluster.Save()
+	} else if m.CSIType == "none" {
 		log.Info("Skipping CSI installation...")
+		m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue,
+			"CSISkipped", "CSI installation was skipped as configured")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping CSI installation as it was already completed")
 	}
 
-	// 7. Install MetalLB
-	log.Info("Installing MetalLB LoadBalancer...")
-	err = m.InstallLoadBalancer()
-	if err != nil {
-		return fmt.Errorf("failed to install LoadBalancer: %w", err)
+	// 7. Install MetalLB if not already done
+	if !m.Cluster.HasCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusTrue) {
+		log.Info("Installing MetalLB LoadBalancer...")
+		err := m.InstallLoadBalancer()
+		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusFalse,
+				"LoadBalancerInstallFailed", fmt.Sprintf("Failed to install LoadBalancer: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to install LoadBalancer: %w", err)
+		}
+		m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusTrue,
+			"LoadBalancerInstalled", "MetalLB LoadBalancer installed successfully")
+		m.Cluster.Save()
+	} else {
+		log.Info("Skipping LoadBalancer installation as it was already completed")
 	}
 
 	// 8. Download kubeconfig to local (optional step)
 	var kubeconfigPath string
+	var err error
 	if m.DownloadKubeconfig {
 		log.Info("Downloading kubeconfig to local...")
 		kubeconfigPath, err = m.SetupKubeconfig()
@@ -318,6 +401,12 @@ func (m *Manager) CreateCluster() error {
 		}
 		log.Info("Skipping kubeconfig download...")
 	}
+
+	// Mark cluster as ready
+	m.Cluster.SetCondition(cluster.ConditionTypeClusterReady, cluster.ConditionStatusTrue,
+		"ClusterReady", "Kubernetes cluster is ready for use")
+	m.Cluster.Status.Phase = cluster.ClusterPhaseRunning
+	m.Cluster.Save()
 
 	log.Info("Cluster created successfully! You can access the cluster with the following commands:")
 	fmt.Printf("\t\texport KUBECONFIG=%s\n", kubeconfigPath)
@@ -337,7 +426,7 @@ func (m *Manager) CreateClusterVMs() error {
 	if err != nil {
 		return fmt.Errorf("failed to create Worker nodes: %w", err)
 	}
-	err = m.UpdateClusterStatus()
+	err = m.UpdateVMsInternalStatus()
 	if err != nil {
 		return fmt.Errorf("failed to update cluster status: %w", err)
 	}
@@ -347,7 +436,31 @@ func (m *Manager) CreateClusterVMs() error {
 // CreateMasterVM creates master node
 func (m *Manager) CreateMasterVM() error {
 	masterName := m.Cluster.GetMasterName()
-	return m.VMProvider.CreateVM(masterName, m.Cluster.Spec.Master.Spec.CPU, m.Cluster.Spec.Master.Spec.Memory, m.Cluster.Spec.Master.Spec.Disk)
+
+	// Check if VM is already created
+	if m.Cluster.Spec.Master.HasCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue) {
+		log.Infof("Master VM %s already created, skipping creation", masterName)
+		return nil
+	}
+
+	// Set condition to pending
+	m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+		"Creating", "Creating master VM")
+
+	err := m.VMProvider.CreateVM(masterName, m.Cluster.Spec.Master.Spec.CPU,
+		m.Cluster.Spec.Master.Spec.Memory, m.Cluster.Spec.Master.Spec.Disk)
+
+	if err != nil {
+		m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+			"CreationFailed", fmt.Sprintf("Failed to create master VM: %v", err))
+		return err
+	}
+
+	// Set condition to success
+	m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue,
+		"Created", "Master VM created successfully")
+
+	return nil
 }
 
 // CreateWorkerVMs creates worker nodes
@@ -399,9 +512,37 @@ func (m *Manager) createWorkerVMsParallel() error {
 	return nil
 }
 
-// CreateMasterVM creates master node
+// CreateWorkerVM creates a worker node
 func (m *Manager) CreateWorkerVM(nodeName string, cpu int, memory int, disk int) error {
-	return m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
+	// Find the node in the cluster
+	node := m.Cluster.GetNodeByName(nodeName)
+	if node == nil {
+		return fmt.Errorf("node %s not found in cluster", nodeName)
+	}
+
+	// Check if VM is already created
+	if node.HasCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue) {
+		log.Infof("Worker VM %s already created, skipping creation", nodeName)
+		return nil
+	}
+
+	// Set condition to pending
+	node.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+		"Creating", "Creating worker VM")
+
+	err := m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
+
+	if err != nil {
+		node.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+			"CreationFailed", fmt.Sprintf("Failed to create worker VM: %v", err))
+		return err
+	}
+
+	// Set condition to success
+	node.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue,
+		"Created", "Worker VM created successfully")
+
+	return nil
 }
 
 // CreateWorkerVMs creates worker nodes
@@ -459,27 +600,71 @@ func (m *Manager) initializeVMsParallel() error {
 }
 
 func (m *Manager) InitializeVM(nodeName string) error {
+	// Find the node in the cluster
+	node := m.Cluster.GetNodeByName(nodeName)
+	if node == nil {
+		return fmt.Errorf("node %s not found in cluster", nodeName)
+	}
+
+	// Check if environment is already initialized
+	if node.HasCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue) {
+		log.Infof("Environment for node %s already initialized, skipping initialization", nodeName)
+		return nil
+	}
+
+	// Set condition to pending
+	node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
+		"Initializing", "Initializing node environment")
+
+	// Create and run the initializer
 	initializer := initializer.NewInitializerWithOptions(m, nodeName, m.InitOptions)
 	if err := initializer.Initialize(); err != nil {
+		node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
+			"InitializationFailed", fmt.Sprintf("Failed to initialize environment: %v", err))
 		return fmt.Errorf("failed to initialize VM %s: %w", nodeName, err)
 	}
+
+	// Set condition to success
+	node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue,
+		"Initialized", "Node environment initialized successfully")
+
 	return nil
 }
 
 // InitializeMaster initializes master node
 func (m *Manager) InitializeMaster() (string, error) {
 	log.Info("Initializing Master node...")
+
+	// Check if master is already initialized
+	if m.Cluster.Spec.Master.HasCondition(cluster.ConditionTypeKubeInitialized, cluster.ConditionStatusTrue) {
+		log.Info("Master node already initialized, skipping initialization")
+		return m.getJoinCommand()
+	}
+
+	// Set condition to pending
+	m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeKubeInitialized, cluster.ConditionStatusFalse,
+		"Initializing", "Initializing Kubernetes master node")
+
 	// Use new config system to generate config file and initialize Master
 	err := m.KubeadmConfig.InitMaster()
 	if err != nil {
+		m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeKubeInitialized, cluster.ConditionStatusFalse,
+			"InitializationFailed", fmt.Sprintf("Failed to initialize master: %v", err))
 		return "", fmt.Errorf("failed to initialize Master node: %w", err)
 	}
+
+	// Set condition to success
+	m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeKubeInitialized, cluster.ConditionStatusTrue,
+		"Initialized", "Master node initialized successfully")
+	m.Cluster.Spec.Master.SetCondition(cluster.ConditionTypeNodeReady, cluster.ConditionStatusTrue,
+		"NodeReady", "Master node is ready")
+
 	return m.getJoinCommand()
 }
 
 // JoinWorkerNodes joins worker nodes to the cluster
 func (m *Manager) JoinWorkerNodes(joinCommand string) error {
-	for i := range m.Config.Workers {
+	for i := range m.Cluster.Spec.Workers {
 		err := m.JoinWorkerNode(m.Cluster.Spec.Workers[i].Name, joinCommand)
 		if err != nil {
 			return err
@@ -495,88 +680,185 @@ func (m *Manager) getJoinCommand() (string, error) {
 
 // JoinWorkerNode joins a worker node to the cluster
 func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
-	return m.KubeadmConfig.JoinNode(nodeName, joinCommand)
+	// Find the node in the cluster
+	log.Infof("Try to Join node %s to the cluster", nodeName)
+	node := m.Cluster.GetNodeByName(nodeName)
+	if node == nil {
+		return fmt.Errorf("node %s not found in cluster", nodeName)
+	}
+
+	// Check if node is already joined
+	if node.HasCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusTrue) {
+		log.Infof("Node %s already joined the cluster, skipping join", nodeName)
+		return nil
+	}
+
+	// Set condition to pending
+	node.SetCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusFalse,
+		"Joining", "Joining node to the cluster")
+
+	// Join the node to the cluster
+	err := m.KubeadmConfig.JoinNode(nodeName, joinCommand)
+	if err != nil {
+		node.SetCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusFalse,
+			"JoinFailed", fmt.Sprintf("Failed to join node to cluster: %v", err))
+		return err
+	}
+
+	// Set condition to success
+	node.SetCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusTrue,
+		"Joined", "Node joined the cluster successfully")
+	node.SetCondition(cluster.ConditionTypeNodeReady, cluster.ConditionStatusTrue,
+		"NodeReady", "Worker node is ready")
+
+	return nil
 }
 
 // InstallCNI installs CNI
 func (m *Manager) InstallCNI() error {
+	// Check if CNI is already installed
+	if m.Cluster.HasCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusTrue) {
+		log.Infof("CNI %s already installed, skipping installation", m.CNIType)
+		return nil
+	}
+
+	// Set condition to pending
+	m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusFalse,
+		"Installing", fmt.Sprintf("Installing %s CNI", m.CNIType))
+
 	// Ensure master node's SSH client is created
 	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
+		m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusFalse,
+			"SSHError", "Failed to get SSH client for Master node")
 		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
+	var err error
 	switch m.CNIType {
 	case "cilium":
 		// Get Master node IP
 		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
-		err := ciliumInstaller.Install()
+		err = ciliumInstaller.Install()
 		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusFalse,
+				"InstallationFailed", fmt.Sprintf("Failed to install Cilium CNI: %v", err))
 			return fmt.Errorf("failed to install Cilium CNI: %w", err)
 		}
 
 	case "flannel":
 		flannelInstaller := cni.NewFlannelInstaller(sshClient, m.Cluster.GetMasterName())
-		err := flannelInstaller.Install()
+		err = flannelInstaller.Install()
 		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusFalse,
+				"InstallationFailed", fmt.Sprintf("Failed to install Flannel CNI: %v", err))
 			return fmt.Errorf("failed to install Flannel CNI: %w", err)
 		}
 
 	default:
+		m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusFalse,
+			"UnsupportedType", fmt.Sprintf("Unsupported CNI type: %s", m.CNIType))
 		return fmt.Errorf("unsupported CNI type: %s", m.CNIType)
 	}
+
+	// Set condition to success
+	m.Cluster.SetCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusTrue,
+		"Installed", fmt.Sprintf("%s CNI installed successfully", m.CNIType))
 
 	return nil
 }
 
 // InstallCSI installs CSI
 func (m *Manager) InstallCSI() error {
+	// Check if CSI is already installed
+	if m.Cluster.HasCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue) {
+		log.Infof("%s CSI already installed, skipping installation", m.CSIType)
+		return nil
+	}
+
+	// Set condition to pending
+	m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusFalse,
+		"Installing", fmt.Sprintf("Installing %s CSI", m.CSIType))
+
 	// Ensure master node's SSH client is created
 	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
+		m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusFalse,
+			"SSHError", "Failed to get SSH client for Master node")
 		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
+	var err error
 	switch m.CSIType {
 	case "rook-ceph":
 		// Use Rook installer to install Rook-Ceph CSI
 		rookInstaller := csi.NewRookInstaller(sshClient, m.Cluster.GetMasterName())
-		err := rookInstaller.Install()
+		err = rookInstaller.Install()
 		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusFalse,
+				"InstallationFailed", fmt.Sprintf("Failed to install Rook-Ceph CSI: %v", err))
 			return fmt.Errorf("failed to install Rook-Ceph CSI: %w", err)
 		}
 
 	case "local-path-provisioner":
 		// Use LocalPath installer to install local-path-provisioner
 		localPathInstaller := csi.NewLocalPathInstaller(sshClient, m.Cluster.GetMasterName())
-		err := localPathInstaller.Install()
+		err = localPathInstaller.Install()
 		if err != nil {
+			m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusFalse,
+				"InstallationFailed", fmt.Sprintf("Failed to install local-path-provisioner: %v", err))
 			return fmt.Errorf("failed to install local-path-provisioner: %w", err)
 		}
 
 	case "none":
+		m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue,
+			"Skipped", "CSI installation was skipped as configured")
 		return nil
 
 	default:
+		m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusFalse,
+			"UnsupportedType", fmt.Sprintf("Unsupported CSI type: %s", m.CSIType))
 		return fmt.Errorf("unsupported CSI type: %s", m.CSIType)
 	}
+
+	// Set condition to success
+	m.Cluster.SetCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue,
+		"Installed", fmt.Sprintf("%s CSI installed successfully", m.CSIType))
 
 	return nil
 }
 
 // InstallLoadBalancer installs LoadBalancer (MetalLB)
 func (m *Manager) InstallLoadBalancer() error {
+	// Check if LoadBalancer is already installed
+	if m.Cluster.HasCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusTrue) {
+		log.Info("LoadBalancer already installed, skipping installation")
+		return nil
+	}
+
+	// Set condition to pending
+	m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusFalse,
+		"Installing", "Installing MetalLB LoadBalancer")
+
 	// Ensure master node's SSH client is created
 	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
+		m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusFalse,
+			"SSHError", "Failed to get SSH client for Master node")
 		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
 	// Use MetalLB installer
 	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Cluster.GetMasterName())
 	if err := metallbInstaller.Install(); err != nil {
+		m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusFalse,
+			"InstallationFailed", fmt.Sprintf("Failed to install MetalLB: %v", err))
 		return fmt.Errorf("failed to install MetalLB: %w", err)
 	}
+
+	// Set condition to success
+	m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusTrue,
+		"Installed", "MetalLB LoadBalancer installed successfully")
 
 	return nil
 }
@@ -585,37 +867,81 @@ func (m *Manager) InstallLoadBalancer() error {
 func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	// Determine node name
 	nodeName := m.Cluster.GenWorkerName()
+
+	// Create a new node object
+	node := cluster.NewNode(nodeName, cluster.RoleWorker, cpu, memory, disk)
+
+	// Add the node to the cluster
+	m.Cluster.AddNode(node)
+
 	// Create virtual machine
 	log.Infof("Creating node %s, cpu: %d, memory: %d, disk: %d", nodeName, cpu, memory, disk)
+	node.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+		"Creating", "Creating worker VM")
+
 	err := m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
 	if err != nil {
+		node.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusFalse,
+			"CreationFailed", fmt.Sprintf("Failed to create worker VM: %v", err))
+		m.Cluster.Save()
 		return fmt.Errorf("failed to create node %s: %w", nodeName, err)
 	}
 
+	node.SetCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue,
+		"Created", "Worker VM created successfully")
+	m.Cluster.Save()
+
 	// Update node information and get IP
 	log.Infof("Adding node %s to cluster", nodeName)
-	err = m.addClusterNode(nodeName, cpu, memory, disk)
+	status, err := m.GetStatusFromRemote(nodeName)
 	if err != nil {
-		return fmt.Errorf("failed to add node to cluster: %w", err)
+		return fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
 	}
+	node.SetInternalStatus(status)
+	m.Cluster.Save()
+
 	// Use initializer to set environment
 	log.Infof("Initializing node %s", nodeName)
+	node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
+		"Initializing", "Initializing node environment")
+
 	err = m.InitializeVM(nodeName)
 	if err != nil {
+		node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
+			"InitializationFailed", fmt.Sprintf("Failed to initialize environment: %v", err))
+		m.Cluster.Save()
 		return fmt.Errorf("failed to initialize node %s: %w", nodeName, err)
 	}
 
+	node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue,
+		"Initialized", "Node environment initialized successfully")
+	m.Cluster.Save()
+
 	// Get join command
-	log.Infof("Getting join command %s", nodeName)
+	log.Infof("Getting join command for %s", nodeName)
 	joinCmd, err := m.getJoinCommand()
 	if err != nil {
 		return fmt.Errorf("failed to get join command: %w", err)
 	}
-	log.Infof("Joining cluster %s", nodeName)
+
+	log.Infof("Joining cluster with node %s", nodeName)
+	node.SetCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusFalse,
+		"Joining", "Joining node to the cluster")
+
 	err = m.JoinWorkerNode(nodeName, joinCmd)
 	if err != nil {
+		node.SetCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusFalse,
+			"JoinFailed", fmt.Sprintf("Failed to join node to cluster: %v", err))
+		m.Cluster.Save()
 		return fmt.Errorf("failed to join node %s to cluster: %w", nodeName, err)
 	}
+
+	node.SetCondition(cluster.ConditionTypeJoinedCluster, cluster.ConditionStatusTrue,
+		"Joined", "Node joined the cluster successfully")
+	node.SetCondition(cluster.ConditionTypeNodeReady, cluster.ConditionStatusTrue,
+		"NodeReady", "Worker node is ready")
+	m.Cluster.Save()
+
 	return nil
 }
 
@@ -711,6 +1037,8 @@ func (m *Manager) DeleteCluster() error {
 		return fmt.Errorf("failed to delete cluster information: %w", err)
 	}
 
+	// Mark cluster as deleted
+	m.Cluster.MarkDeleted()
 	log.Info("Cluster deleted successfully!")
 	return nil
 }
@@ -754,4 +1082,47 @@ func (m *Manager) SetLauncherType(launcherType launcher.LauncherType) error {
 	m.VMProvider = vmLauncher
 	m.LauncherType = launcherType
 	return nil
+}
+
+// canResumeClusterCreation checks if there are any conditions set that indicate
+// a previous cluster creation attempt that can be resumed
+func (m *Manager) canResumeClusterCreation() bool {
+	// Check if any workflow conditions are set to true
+	if m.Cluster.HasCondition(cluster.ConditionTypeVMCreated, cluster.ConditionStatusTrue) ||
+		m.Cluster.HasCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue) ||
+		m.Cluster.HasCondition(cluster.ConditionTypeMasterInitialized, cluster.ConditionStatusTrue) ||
+		m.Cluster.HasCondition(cluster.ConditionTypeWorkersJoined, cluster.ConditionStatusTrue) ||
+		m.Cluster.HasCondition(cluster.ConditionTypeCNIInstalled, cluster.ConditionStatusTrue) ||
+		m.Cluster.HasCondition(cluster.ConditionTypeCSIInstalled, cluster.ConditionStatusTrue) ||
+		m.Cluster.HasCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusTrue) {
+		return true
+	}
+
+	// Check if any node has workflow conditions set
+	if m.Cluster.Spec.Master != nil {
+		for _, cond := range m.Cluster.Spec.Master.Status.Conditions {
+			if (cond.Type == cluster.ConditionTypeVMCreated ||
+				cond.Type == cluster.ConditionTypeEnvironmentInit ||
+				cond.Type == cluster.ConditionTypeKubeInitialized ||
+				cond.Type == cluster.ConditionTypeJoinedCluster) &&
+				cond.Status == cluster.ConditionStatusTrue {
+				return true
+			}
+		}
+	}
+
+	for _, worker := range m.Cluster.Spec.Workers {
+		if worker != nil {
+			for _, cond := range worker.Status.Conditions {
+				if (cond.Type == cluster.ConditionTypeVMCreated ||
+					cond.Type == cluster.ConditionTypeEnvironmentInit ||
+					cond.Type == cluster.ConditionTypeJoinedCluster) &&
+					cond.Status == cluster.ConditionStatusTrue {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }

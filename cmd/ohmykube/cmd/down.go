@@ -46,7 +46,7 @@ var downCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
+		defer manager.Close()
 		// Delete cluster
 		return manager.DeleteCluster()
 	},

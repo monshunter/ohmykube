@@ -44,6 +44,7 @@ type Metadata struct {
 	Labels      map[string]string `yaml:"labels,omitempty"`
 	Annotations map[string]string `yaml:"annotations,omitempty"`
 	Taints      []Taint           `yaml:"taints,omitempty"`
+	Deleted     bool              `yaml:"deleted,omitempty"`
 }
 
 type Taint struct {
@@ -67,26 +68,42 @@ type NodeSpec struct {
 }
 
 type NodeStatus struct {
+	NodeInternalStatus `yaml:",inline"`
+	Conditions         []Condition `yaml:"conditions,omitempty"`
+}
+
+type NodeInternalStatus struct {
+	// Internal status fields
 	Phase    Phase  `yaml:"phase,omitempty"`
 	Hostname string `yaml:"hostname,omitempty"`
 	// IP ipv4 address
-	IP         string      `yaml:"ip,omitempty"`
-	IPv6       string      `yaml:"ipv6,omitempty"`
-	IPs        []string    `yaml:"ips,omitempty"`
-	Release    string      `yaml:"release,omitempty"`
-	Kernel     string      `yaml:"kernel,omitempty"`
-	Arch       string      `yaml:"arch,omitempty"`
-	OS         string      `yaml:"os,omitempty"`
-	Ready      bool        `yaml:"ready,omitempty"`
-	Conditions []Condition `yaml:"conditions,omitempty"`
+	IP      string   `yaml:"ip,omitempty"`
+	IPv6    string   `yaml:"ipv6,omitempty"`
+	IPs     []string `yaml:"ips,omitempty"`
+	Release string   `yaml:"release,omitempty"`
+	Kernel  string   `yaml:"kernel,omitempty"`
+	Arch    string   `yaml:"arch,omitempty"`
+	OS      string   `yaml:"os,omitempty"`
 }
 
 type ConditionType string
 
 const (
-	ConditionTypeReady           ConditionType = "Ready"
-	ConditionTypeNodeInitialized ConditionType = "NodeInitialized"
+
+	// Workflow stage conditions for nodes
 	ConditionTypeNodeReady       ConditionType = "NodeReady"
+	ConditionTypeVMCreated       ConditionType = "VMCreated"
+	ConditionTypeEnvironmentInit ConditionType = "EnvironmentInitialized"
+	ConditionTypeKubeInitialized ConditionType = "KubernetesInitialized"
+	ConditionTypeJoinedCluster   ConditionType = "JoinedCluster"
+
+	// Cluster-level workflow conditions
+	ConditionTypeMasterInitialized ConditionType = "MasterInitialized"
+	ConditionTypeWorkersJoined     ConditionType = "WorkersJoined"
+	ConditionTypeCNIInstalled      ConditionType = "CNIInstalled"
+	ConditionTypeCSIInstalled      ConditionType = "CSIInstalled"
+	ConditionTypeLBInstalled       ConditionType = "LoadBalancerInstalled"
+	ConditionTypeClusterReady      ConditionType = "ClusterReady"
 )
 
 type ConditionStatus string
@@ -107,27 +124,108 @@ type Condition struct {
 
 func NewCondition(t ConditionType, s ConditionStatus, r string, m string) Condition {
 	return Condition{
-		Type:    t,
-		Status:  s,
-		Reason:  r,
-		Message: m,
+		Type:               t,
+		Status:             s,
+		Reason:             r,
+		Message:            m,
+		LastTransitionTime: time.Now(),
 	}
 }
 
-func (c Condition) IsReady() bool {
-	return c.Type == ConditionTypeReady && c.Status == ConditionStatusTrue
+// FindCondition finds a condition by type in a slice of conditions
+func FindCondition(conditions []Condition, conditionType ConditionType) (Condition, bool) {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition, true
+		}
+	}
+	return Condition{}, false
 }
 
-func (c Condition) IsFailed() bool {
-	return c.Type == ConditionTypeReady && c.Status == ConditionStatusFalse
+// SetNodeCondition sets or updates a condition in a node's status
+func (n *Node) SetCondition(conditionType ConditionType, status ConditionStatus, reason, message string) {
+	condition := NewCondition(conditionType, status, reason, message)
+
+	// Find and update existing condition or append new one
+	for i, c := range n.Status.Conditions {
+		if c.Type == conditionType {
+			// Only update if status changed to avoid unnecessary updates
+			if c.Status != status {
+				condition.LastTransitionTime = time.Now()
+				n.Status.Conditions[i] = condition
+			} else {
+				// Just update reason and message if status didn't change
+				n.Status.Conditions[i].Reason = reason
+				n.Status.Conditions[i].Message = message
+			}
+			return
+		}
+	}
+
+	// Condition not found, append new one
+	n.Status.Conditions = append(n.Status.Conditions, condition)
 }
 
-func (c Condition) IsUnknown() bool {
-	return c.Type == ConditionTypeReady && c.Status == ConditionStatusUnknown
+// GetCondition gets a condition by type from a node
+func (n *Node) GetCondition(conditionType ConditionType) (Condition, bool) {
+	return FindCondition(n.Status.Conditions, conditionType)
 }
 
-func (c Condition) IsPending() bool {
-	return c.Status != ConditionStatusTrue
+// HasCondition checks if a node has a condition with the specified type and status
+func (n *Node) HasCondition(conditionType ConditionType, status ConditionStatus) bool {
+	if condition, found := n.GetCondition(conditionType); found {
+		return condition.Status == status
+	}
+	return false
+}
+
+// SetClusterCondition sets or updates a condition in a cluster's status
+func (c *Cluster) SetCondition(conditionType ConditionType, status ConditionStatus, reason, message string) {
+	condition := NewCondition(conditionType, status, reason, message)
+
+	// Find and update existing condition or append new one
+	for i, cond := range c.Status.Conditions {
+		if cond.Type == conditionType {
+			// Only update if status changed to avoid unnecessary updates
+			if cond.Status != status {
+				condition.LastTransitionTime = time.Now()
+				c.Status.Conditions[i] = condition
+			} else {
+				// Just update reason and message if status didn't change
+				c.Status.Conditions[i].Reason = reason
+				c.Status.Conditions[i].Message = message
+			}
+			return
+		}
+	}
+
+	// Condition not found, append new one
+	c.Status.Conditions = append(c.Status.Conditions, condition)
+}
+
+// GetCondition gets a condition by type from a cluster
+func (c *Cluster) GetCondition(conditionType ConditionType) (Condition, bool) {
+	return FindCondition(c.Status.Conditions, conditionType)
+}
+
+// HasCondition checks if a cluster has a condition with the specified type and status
+func (c *Cluster) HasCondition(conditionType ConditionType, status ConditionStatus) bool {
+	if condition, found := c.GetCondition(conditionType); found {
+		return condition.Status == status
+	}
+	return false
+}
+
+func (c *Cluster) HasAllNodeCondition(conditionType ConditionType, status ConditionStatus) bool {
+	if c.Spec.Master != nil && !c.Spec.Master.HasCondition(conditionType, status) {
+		return false
+	}
+	for _, node := range c.Spec.Workers {
+		if node != nil && !node.HasCondition(conditionType, status) {
+			return false
+		}
+	}
+	return true
 }
 
 func NewNode(name string, role string, cpu int, memory int, disk int) *Node {
@@ -144,8 +242,12 @@ func NewNode(name string, role string, cpu int, memory int, disk int) *Node {
 	}
 }
 
-func (n *Node) UpdateStatus(status NodeStatus) {
+func (n *Node) SetStatus(status NodeStatus) {
 	n.Status = status
+}
+
+func (n *Node) SetInternalStatus(status NodeInternalStatus) {
+	n.Status.NodeInternalStatus = status
 }
 
 type Auth struct {
@@ -172,9 +274,9 @@ type ClusterSpec struct {
 }
 
 type ClusterStatus struct {
-	Phase      Phase       `yaml:"phase,omitempty"`
-	Auth       Auth        `yaml:"auth,omitempty"`
-	Conditions []Condition `yaml:"conditions,omitempty"`
+	Phase      ClusterPhase `yaml:"phase,omitempty"`
+	Auth       Auth         `yaml:"auth,omitempty"`
+	Conditions []Condition  `yaml:"conditions,omitempty"`
 }
 
 func NewCluster(config *Config) *Cluster {
@@ -199,7 +301,7 @@ func NewCluster(config *Config) *Cluster {
 			Workers:    make([]*Node, len(config.Workers)),
 		},
 		Status: ClusterStatus{
-			Phase: PhasePending,
+			Phase: ClusterPhasePending,
 		},
 	}
 	cls.Spec.Master = NewNode(cls.GenMasterName(), RoleMaster, config.Master.CPU,
@@ -301,6 +403,9 @@ func (c *Cluster) GenWorkerName() string {
 
 // Save saves cluster information to a file
 func (c *Cluster) Save() error {
+	if c.Deleted {
+		return nil
+	}
 	// Create the .ohmykube directory
 	clusterDir, err := ClusterDir(c.Name)
 	if err != nil {
@@ -322,6 +427,15 @@ func (c *Cluster) Save() error {
 	}
 
 	return nil
+}
+
+// Clear clears the cluster data but keeps the name
+// Note: This doesn't set the pointer to nil, as that wouldn't affect the caller's pointer
+func (c *Cluster) MarkDeleted() {
+	if c == nil {
+		return
+	}
+	c.Metadata.Deleted = true
 }
 
 // Load loads cluster information from a file
