@@ -14,7 +14,6 @@ var (
 	addNodeMemory int
 	addNodeCPU    int
 	addNodeDisk   int
-	addNodeRole   string
 	count         int
 )
 
@@ -25,7 +24,7 @@ var addCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load cluster information
-		clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
+		clusterInfo, err := cluster.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
@@ -40,7 +39,7 @@ var addCmd = &cobra.Command{
 		// Create cluster configuration
 		config := &cluster.Config{
 			Name:   clusterInfo.Name,
-			Master: cluster.Node{Name: clusterInfo.Master.Name},
+			Master: cluster.Resource{},
 		}
 		config.SetKubernetesVersion(clusterInfo.K8sVersion)
 		config.SetLauncherType(clusterInfo.Launcher)
@@ -54,10 +53,10 @@ var addCmd = &cobra.Command{
 			log.Errorf("Failed to create cluster manager: %v", err)
 			return fmt.Errorf("failed to create cluster manager: %w", err)
 		}
-		defer manager.CloseSSHClient()
+		defer manager.Close()
 		for range count {
 			// Add node (InitOptions is already initialized in NewManager with DefaultInitOptions)
-			if err := manager.AddNode(addNodeRole, addNodeCPU, addNodeMemory, addNodeDisk); err != nil {
+			if err := manager.AddWorkerNode(addNodeCPU, addNodeMemory, addNodeDisk); err != nil {
 				log.Errorf("Failed to add node: %v", err)
 				return fmt.Errorf("failed to add node: %w", err)
 			}
@@ -71,6 +70,5 @@ func init() {
 	addCmd.Flags().IntVar(&addNodeMemory, "memory", 2, "Node memory (GB)")
 	addCmd.Flags().IntVar(&addNodeCPU, "cpu", 1, "Node CPU cores")
 	addCmd.Flags().IntVar(&addNodeDisk, "disk", 10, "Node disk space (GB)")
-	addCmd.Flags().StringVar(&addNodeRole, "role", "worker", "Node role (worker/master)")
 	addCmd.Flags().IntVar(&count, "count", 1, "Number of nodes to add")
 }

@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +36,7 @@ type Manager struct {
 }
 
 // NewManager creates a new cluster manager
-func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *cluster.Cluster) (*Manager, error) {
+func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cls *cluster.Cluster) (*Manager, error) {
 	// Get default launcher type for platform
 	launcherType := launcher.LauncherType(config.LauncherType)
 
@@ -58,16 +57,16 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *clust
 	}
 
 	// Create cluster information object
-	if cluster == nil {
-		cluster = clusterFromConfig(config)
+	if cls == nil {
+		cls = cluster.NewCluster(config)
 	}
 
 	manager := &Manager{
 		Config:             config,
 		VMProvider:         vmLauncher,
 		LauncherType:       launcherType,
-		SSHManager:         ssh.NewSSHManager(cluster, sshConfig),
-		Cluster:            cluster,
+		SSHManager:         ssh.NewSSHManager(cls, sshConfig),
+		Cluster:            cls,
 		InitOptions:        initializer.DefaultInitOptions(),
 		CNIType:            "flannel",                // Default to flannel
 		CSIType:            "local-path-provisioner", // Default to local-path-provisioner
@@ -75,41 +74,10 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cluster *clust
 	}
 
 	// Create KubeadmConfig
-	manager.KubeadmConfig = kubeadm.NewKubeadmConfig(manager.SSHManager, config.KubernetesVersion, config.Master.Name, config.ProxyMode)
-
-	// SSH clients and KubeadmConfig will be created later when needed
-	// KubeadmConfig will be set when initializing the Master node
+	manager.KubeadmConfig = kubeadm.NewKubeadmConfig(manager.SSHManager, config.KubernetesVersion,
+		cls.Master.Name, config.ProxyMode)
 
 	return manager, nil
-}
-
-func clusterFromConfig(config *cluster.Config) *cluster.Cluster {
-
-	var master cluster.NodeInfo
-	var workers []cluster.NodeInfo
-	master = cluster.NodeInfo{
-		Name:    config.Master.Name,
-		Role:    cluster.RoleMaster,
-		CPU:     config.Master.CPU,
-		Memory:  config.Master.Memory,
-		Disk:    config.Master.Disk,
-		SSHUser: "root",
-		SSHPort: "22",
-	}
-
-	for _, worker := range config.Workers {
-		workers = append(workers, cluster.NodeInfo{
-			Name:    worker.Name,
-			Role:    cluster.RoleWorker,
-			CPU:     worker.CPU,
-			Memory:  worker.Memory,
-			Disk:    worker.Disk,
-			SSHUser: "root",
-			SSHPort: "22",
-		})
-	}
-
-	return cluster.NewCluster(config, master, workers)
 }
 
 // SetInitOptions sets environment initialization options
@@ -140,72 +108,77 @@ func (m *Manager) WaitForSSHReady(ip string, port string, maxRetries int) error 
 	return fmt.Errorf("timeout waiting for SSH service to be ready (%s:%s)", ip, port)
 }
 
-func (m *Manager) CloseSSHClient() {
-	m.SSHManager.CloseAllClients()
-}
-
-func (m *Manager) AddNodeInfo(nodeName string, cpu int, memory int, disk int) error {
-	extraInfo, err := m.GetExtraInfoFromRemote(nodeName)
+func (m *Manager) Close() error {
+	var err error
+	err = m.Cluster.Save()
 	if err != nil {
-		return fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
+		return fmt.Errorf("failed to save cluster information: %w", err)
 	}
-	nodeInfo := cluster.NewNodeInfo(nodeName, cluster.RoleWorker, cpu, memory, disk)
-	nodeInfo.ExtraInfo = extraInfo
-	nodeInfo.GenerateSSHCommand()
-	m.Cluster.AddNode(nodeInfo)
+	err = m.SSHManager.CloseAllClients()
+	if err != nil {
+		return fmt.Errorf("failed to close SSH clients: %w", err)
+	}
 	return nil
 }
 
-// UpdateClusterInfo updates cluster information
-func (m *Manager) UpdateClusterInfo() error {
-	extraInfomations := make([]cluster.NodeExtraInfo, 0, 1+len(m.Cluster.Workers))
-	masterInfo, err := m.GetExtraInfoFromRemote(m.Cluster.Master.Name)
+func (m *Manager) addClusterNode(nodeName string, cpu int, memory int, disk int) error {
+	status, err := m.GetStatusFromRemote(nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
+	}
+	node := cluster.NewNode(nodeName, cluster.RoleWorker, cpu, memory, disk)
+	node.UpdateStatus(status)
+	m.Cluster.AddNode(node)
+	return nil
+}
+
+// UpdateClusterStatus updates cluster status
+func (m *Manager) UpdateClusterStatus() error {
+	status, err := m.GetStatusFromRemote(m.Cluster.Master.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get Master node information: %w", err)
 	}
-	extraInfomations = append(extraInfomations, masterInfo)
+	m.Cluster.Master.UpdateStatus(status)
 	for i := range m.Cluster.Workers {
-		workerInfo, err := m.GetExtraInfoFromRemote(m.Cluster.Workers[i].Name)
+		status, err := m.GetStatusFromRemote(m.Cluster.Workers[i].Name)
 		if err != nil {
 			return fmt.Errorf("failed to get Worker node information: %w", err)
 		}
-		extraInfomations = append(extraInfomations, workerInfo)
+		m.Cluster.Workers[i].UpdateStatus(status)
 	}
-	m.Cluster.UpdateWithExtraInfo(extraInfomations)
 	// Save cluster information to local file
-	return cluster.SaveClusterInfomation(m.Cluster)
+	return m.Cluster.Save()
 }
 
-func (m *Manager) GetExtraInfoFromRemote(nodeName string) (info cluster.NodeExtraInfo, err error) {
+func (m *Manager) GetStatusFromRemote(nodeName string) (status cluster.NodeStatus, err error) {
 	// Get IP information
 	ip, err := m.GetNodeIP(nodeName)
 	if err != nil {
-		return info, fmt.Errorf("failed to get IP for node %s: %w", nodeName, err)
+		return status, fmt.Errorf("failed to get IP for node %s: %w", nodeName, err)
 	}
 
 	// Fill in basic information
-	info.Name = nodeName
-	info.IP = ip
-	info.Status = cluster.NodeStatusRunning
+	status.IP = ip
+	status.Phase = cluster.PhaseRunning
 	sshClient, err := m.SSHManager.CreateClient(nodeName, ip)
 	if err != nil {
-		return info, fmt.Errorf("failed to create SSH client: %w", err)
+		return status, fmt.Errorf("failed to create SSH client: %w", err)
 	}
 	// Get hostname
 	hostnameCmd := "hostname"
 	hostnameOutput, err := sshClient.RunCommand(hostnameCmd)
 	if err == nil {
-		info.Hostname = strings.TrimSpace(hostnameOutput)
+		status.Hostname = strings.TrimSpace(hostnameOutput)
 	} else {
 		log.Infof("Warning: failed to get hostname for node %s: %v", nodeName, err)
-		return info, fmt.Errorf("failed to get hostname for node %s: %w", nodeName, err)
+		return status, fmt.Errorf("failed to get hostname for node %s: %w", nodeName, err)
 	}
 
 	// Get OS distribution information
 	releaseCmd := `cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2`
 	releaseOutput, err := sshClient.RunCommand(releaseCmd)
 	if err == nil {
-		info.Release = strings.TrimSpace(releaseOutput)
+		status.Release = strings.TrimSpace(releaseOutput)
 	} else {
 		log.Infof("Warning: failed to get distribution information for node %s: %v", nodeName, err)
 	}
@@ -214,7 +187,7 @@ func (m *Manager) GetExtraInfoFromRemote(nodeName string) (info cluster.NodeExtr
 	kernelCmd := "uname -r"
 	kernelOutput, err := sshClient.RunCommand(kernelCmd)
 	if err == nil {
-		info.Kernel = strings.TrimSpace(kernelOutput)
+		status.Kernel = strings.TrimSpace(kernelOutput)
 	} else {
 		log.Infof("Warning: failed to get kernel version for node %s: %v", nodeName, err)
 	}
@@ -223,7 +196,7 @@ func (m *Manager) GetExtraInfoFromRemote(nodeName string) (info cluster.NodeExtr
 	archCmd := "uname -m"
 	archOutput, err := sshClient.RunCommand(archCmd)
 	if err == nil {
-		info.Arch = strings.TrimSpace(archOutput)
+		status.Arch = strings.TrimSpace(archOutput)
 	} else {
 		log.Infof("Warning: failed to get system architecture for node %s: %v", nodeName, err)
 	}
@@ -232,12 +205,12 @@ func (m *Manager) GetExtraInfoFromRemote(nodeName string) (info cluster.NodeExtr
 	osCmd := `uname -o`
 	osOutput, err := sshClient.RunCommand(osCmd)
 	if err == nil {
-		info.OS = strings.TrimSpace(osOutput)
+		status.OS = strings.TrimSpace(osOutput)
 	} else {
 		log.Infof("Warning: failed to get OS type for node %s: %v", nodeName, err)
 	}
 
-	return info, nil
+	return status, nil
 }
 
 // RunSSHCommand executes a command on a node via SSH
@@ -263,13 +236,13 @@ func (m *Manager) SetDownloadKubeconfig(download bool) {
 // SetupKubeconfig configures local kubeconfig
 func (m *Manager) SetupKubeconfig() (string, error) {
 	// Get SSH client for the Master node
-	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
 		return "", fmt.Errorf("failed to get SSH client for Master node")
 	}
 
 	// Use unified kubeconfig download logic
-	return kubeconfig.DownloadToLocal(sshClient, m.Config.Name, "")
+	return kubeconfig.DownloadToLocal(sshClient, m.Cluster.Name, "")
 }
 
 // CreateCluster creates a new cluster
@@ -277,40 +250,30 @@ func (m *Manager) CreateCluster() error {
 	log.Info("Starting to create Kubernetes cluster...")
 	// 1. Create all nodes (in parallel)
 	log.Info("Creating cluster nodes...")
-	err := m.CreateClusterNodes()
+	err := m.CreateClusterVMs()
 	if err != nil {
 		return fmt.Errorf("failed to create cluster nodes: %w", err)
 	}
-
-	// 2. Update cluster information
-	log.Info("Getting cluster node information...")
-	err = m.UpdateClusterInfo()
-	if err != nil {
-		return fmt.Errorf("failed to update cluster information: %w", err)
-	}
-
-	log.Info("Connected to nodes via SSH as root user")
-	// 3. Initialize environment
-	err = m.InitializeEnvironment()
+	// 2. Initialize environment
+	err = m.InitializeVMs()
 	if err != nil {
 		return fmt.Errorf("failed to initialize environment: %w", err)
 	}
-	// return nil
-	// 4. Configure master node
+	// 3. Configure master node
 	log.Info("Configuring Kubernetes Master node...")
 	joinCommand, err := m.InitializeMaster()
 	if err != nil {
 		return fmt.Errorf("failed to initialize Master node: %w", err)
 	}
 
-	// 5. Configure worker nodes
+	// 4. Configure worker nodes
 	log.Info("Joining Worker nodes to the cluster...")
 	err = m.JoinWorkerNodes(joinCommand)
 	if err != nil {
 		return fmt.Errorf("failed to join Worker nodes to the cluster: %w", err)
 	}
 
-	// 6. Install CNI
+	// 5. Install CNI
 	if m.CNIType != "none" {
 		log.Infof("Installing %s CNI...", m.CNIType)
 		err = m.InstallCNI()
@@ -321,7 +284,7 @@ func (m *Manager) CreateCluster() error {
 		log.Info("Skipping CNI installation...")
 	}
 
-	// 7. Install CSI
+	// 6. Install CSI
 	if m.CSIType != "none" {
 		log.Infof("Installing %s CSI...", m.CSIType)
 		err = m.InstallCSI()
@@ -332,14 +295,14 @@ func (m *Manager) CreateCluster() error {
 		log.Info("Skipping CSI installation...")
 	}
 
-	// 8. Install MetalLB
+	// 7. Install MetalLB
 	log.Info("Installing MetalLB LoadBalancer...")
 	err = m.InstallLoadBalancer()
 	if err != nil {
 		return fmt.Errorf("failed to install LoadBalancer: %w", err)
 	}
 
-	// 9. Download kubeconfig to local (optional step)
+	// 8. Download kubeconfig to local (optional step)
 	var kubeconfigPath string
 	if m.DownloadKubeconfig {
 		log.Info("Downloading kubeconfig to local...")
@@ -356,80 +319,150 @@ func (m *Manager) CreateCluster() error {
 		log.Info("Skipping kubeconfig download...")
 	}
 
-	log.Info("\nCluster created successfully! \nYou can access the cluster with the following commands:")
-	log.Infof("\t\texport KUBECONFIG=%s", kubeconfigPath)
-	log.Info("\t\tkubectl get nodes")
+	log.Info("Cluster created successfully! \nYou can access the cluster with the following commands:")
+	fmt.Printf("\t\texport KUBECONFIG=%s\n", kubeconfigPath)
+	fmt.Println("\t\tkubectl get nodes")
 
 	return nil
 }
 
-// CreateClusterNodes creates all cluster nodes in parallel (master and workers)
-func (m *Manager) CreateClusterNodes() error {
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(m.Config.Workers)+1) // Create error channel for all nodes (including master)
-
-	allNodes := make([]cluster.Node, 0, len(m.Config.Workers)+1)
-	allNodes = append(allNodes, m.Config.Master)
-	allNodes = append(allNodes, m.Config.Workers...)
-	// Create worker nodes in parallel
-	for i := range allNodes {
-		wg.Add(1)
-		go func(nodeName string, cpus, memory, disk int) {
-			defer wg.Done()
-			log.Infof("Creating node: %s", nodeName)
-			if err := m.VMProvider.CreateVM(nodeName, cpus, memory, disk); err != nil {
-				errChan <- fmt.Errorf("failed to create node %s: %w", nodeName, err)
-			}
-		}(allNodes[i].Name, allNodes[i].CPU, allNodes[i].Memory, allNodes[i].Disk)
+// CreateClusterVMs creates all cluster VMs in parallel (master and workers)
+func (m *Manager) CreateClusterVMs() error {
+	var err error
+	err = m.CreateMasterVM()
+	if err != nil {
+		return fmt.Errorf("failed to create Master node: %w", err)
 	}
+	err = m.CreateWorkerVMs()
+	if err != nil {
+		return fmt.Errorf("failed to create Worker nodes: %w", err)
+	}
+	err = m.UpdateClusterStatus()
+	if err != nil {
+		return fmt.Errorf("failed to update cluster status: %w", err)
+	}
+	return nil
+}
 
-	// Wait for all node creation to complete
+// CreateMasterVM creates master node
+func (m *Manager) CreateMasterVM() error {
+	masterName := m.Cluster.GetMasterName()
+	return m.VMProvider.CreateVM(masterName, m.Cluster.Master.Spec.CPU, m.Cluster.Master.Spec.Memory, m.Cluster.Master.Spec.Disk)
+}
+
+// CreateWorkerVMs creates worker nodes
+func (m *Manager) CreateWorkerVMs() error {
+	if m.Config.Parallel > 1 {
+		return m.createWorkerVMsParallel()
+	}
+	return m.createWorkerVMs()
+}
+
+func (m *Manager) createWorkerVMs() error {
+	for i := range m.Cluster.Workers {
+		err := m.CreateWorkerVM(m.Cluster.Workers[i].Name, m.Cluster.Workers[i].Spec.CPU,
+			m.Cluster.Workers[i].Spec.Memory, m.Cluster.Workers[i].Spec.Disk)
+		if err != nil {
+			return fmt.Errorf("failed to create Worker node %s: %w", m.Cluster.Workers[i].Name, err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) createWorkerVMsParallel() error {
+	var wg sync.WaitGroup
+	var err error
+	// concurrent by m.Config.Parallel
+	sem := make(chan struct{}, m.Config.Parallel)
+	errChan := make(chan error, len(m.Cluster.Workers))
+
+	for i := range m.Cluster.Workers {
+		wg.Add(1)
+		go func(node *cluster.Node) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			err = m.CreateWorkerVM(node.Name, node.Spec.CPU, node.Spec.Memory, node.Spec.Disk)
+			if err != nil {
+				errChan <- fmt.Errorf("failed to create Worker node %s: %w", node.Name, err)
+			}
+		}(m.Cluster.Workers[i])
+	}
 	wg.Wait()
-	close(errChan)
+	close(sem)
 
-	// Check if any errors occurred
 	for err := range errChan {
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-// CreateMasterNode creates master node
-func (m *Manager) CreateMasterNode() error {
-	masterName := m.Config.Master.Name
-	return m.VMProvider.CreateVM(masterName, m.Config.Master.CPU, m.Config.Master.Memory, m.Config.Master.Disk)
+// CreateMasterVM creates master node
+func (m *Manager) CreateWorkerVM(nodeName string, cpu int, memory int, disk int) error {
+	return m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
 }
 
-// CreateWorkerNodes creates worker nodes
-func (m *Manager) CreateWorkerNodes() error {
-	for i := range m.Config.Workers {
-		nodeName := m.Config.Workers[i].Name
-		err := m.VMProvider.CreateVM(nodeName, m.Config.Workers[i].CPU, m.Config.Workers[i].Memory, m.Config.Workers[i].Disk)
+// CreateWorkerVMs creates worker nodes
+
+func (m *Manager) InitializeVMs() error {
+	if m.Config.Parallel > 1 {
+		return m.initializeVMsParallel()
+	}
+	return m.initializeVMs()
+}
+
+func (m *Manager) initializeVMs() error {
+	masterName := m.Cluster.GetMasterName()
+	err := m.InitializeVM(masterName)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Master node: %w", err)
+	}
+	for i := range m.Cluster.Workers {
+		err := m.InitializeVM(m.Cluster.Workers[i].Name)
 		if err != nil {
-			return fmt.Errorf("failed to create Worker node %s: %w", nodeName, err)
+			return fmt.Errorf("failed to initialize VM %s: %w", m.Cluster.Workers[i].Name, err)
 		}
 	}
 	return nil
 }
 
-func (m *Manager) InitializeEnvironment() error {
-	// Collect all node names into a slice
-	nodeNames := []string{m.Config.Master.Name}
-	for _, worker := range m.Config.Workers {
-		nodeNames = append(nodeNames, worker.Name)
+func (m *Manager) initializeVMsParallel() error {
+	var wg sync.WaitGroup
+	var err error
+	// concurrent by m.Config.Parallel
+	sem := make(chan struct{}, m.Config.Parallel)
+	errChan := make(chan error, len(m.Cluster.Workers)+1)
+	nodes := append(m.Cluster.Workers, m.Cluster.Master)
+	for i := range nodes {
+		wg.Add(1)
+		go func(node *cluster.Node) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			err = m.InitializeVM(node.Name)
+			if err != nil {
+				errChan <- fmt.Errorf("failed to initialize VM %s: %w", node.Name, err)
+			}
+		}(m.Cluster.Workers[i])
 	}
+	wg.Wait()
+	close(sem)
 
-	// Use parallel batch initializer to support parallel initialization of multiple nodes
-	batchInitializer := initializer.NewParallelBatchInitializerWithOptions(m, nodeNames, m.InitOptions)
-
-	// Use concurrency limit to execute initialization (limit to 2 nodes at a time to avoid apt lock contention)
-	if err := batchInitializer.InitializeWithConcurrencyLimit(3); err != nil {
-		return fmt.Errorf("failed to initialize environment: %w", err)
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
+func (m *Manager) InitializeVM(nodeName string) error {
+	initializer := initializer.NewInitializerWithOptions(m, nodeName, m.InitOptions)
+	if err := initializer.Initialize(); err != nil {
+		return fmt.Errorf("failed to initialize VM %s: %w", nodeName, err)
+	}
 	return nil
 }
 
@@ -447,7 +480,7 @@ func (m *Manager) InitializeMaster() (string, error) {
 // JoinWorkerNodes joins worker nodes to the cluster
 func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	for i := range m.Config.Workers {
-		err := m.JoinWorkerNode(m.Config.Workers[i].Name, joinCommand)
+		err := m.JoinWorkerNode(m.Cluster.Workers[i].Name, joinCommand)
 		if err != nil {
 			return err
 		}
@@ -468,7 +501,7 @@ func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
 // InstallCNI installs CNI
 func (m *Manager) InstallCNI() error {
 	// Ensure master node's SSH client is created
-	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
 		return fmt.Errorf("failed to get SSH client for Master node")
 	}
@@ -476,14 +509,14 @@ func (m *Manager) InstallCNI() error {
 	switch m.CNIType {
 	case "cilium":
 		// Get Master node IP
-		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Config.Master.Name, m.Cluster.GetMasterIP())
+		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
 		err := ciliumInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("failed to install Cilium CNI: %w", err)
 		}
 
 	case "flannel":
-		flannelInstaller := cni.NewFlannelInstaller(sshClient, m.Config.Master.Name)
+		flannelInstaller := cni.NewFlannelInstaller(sshClient, m.Cluster.GetMasterName())
 		err := flannelInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("failed to install Flannel CNI: %w", err)
@@ -499,7 +532,7 @@ func (m *Manager) InstallCNI() error {
 // InstallCSI installs CSI
 func (m *Manager) InstallCSI() error {
 	// Ensure master node's SSH client is created
-	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
 		return fmt.Errorf("failed to get SSH client for Master node")
 	}
@@ -507,7 +540,7 @@ func (m *Manager) InstallCSI() error {
 	switch m.CSIType {
 	case "rook-ceph":
 		// Use Rook installer to install Rook-Ceph CSI
-		rookInstaller := csi.NewRookInstaller(sshClient, m.Config.Master.Name)
+		rookInstaller := csi.NewRookInstaller(sshClient, m.Cluster.GetMasterName())
 		err := rookInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("failed to install Rook-Ceph CSI: %w", err)
@@ -515,7 +548,7 @@ func (m *Manager) InstallCSI() error {
 
 	case "local-path-provisioner":
 		// Use LocalPath installer to install local-path-provisioner
-		localPathInstaller := csi.NewLocalPathInstaller(sshClient, m.Config.Master.Name)
+		localPathInstaller := csi.NewLocalPathInstaller(sshClient, m.Cluster.GetMasterName())
 		err := localPathInstaller.Install()
 		if err != nil {
 			return fmt.Errorf("failed to install local-path-provisioner: %w", err)
@@ -534,13 +567,13 @@ func (m *Manager) InstallCSI() error {
 // InstallLoadBalancer installs LoadBalancer (MetalLB)
 func (m *Manager) InstallLoadBalancer() error {
 	// Ensure master node's SSH client is created
-	sshClient, exists := m.SSHManager.GetClient(m.Config.Master.Name)
+	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
 	if !exists {
 		return fmt.Errorf("failed to get SSH client for Master node")
 	}
 
 	// Use MetalLB installer
-	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Config.Master.Name)
+	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Cluster.GetMasterName())
 	if err := metallbInstaller.Install(); err != nil {
 		return fmt.Errorf("failed to install MetalLB: %w", err)
 	}
@@ -548,28 +581,10 @@ func (m *Manager) InstallLoadBalancer() error {
 	return nil
 }
 
-// AddNode adds a new node to the cluster
-func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
+// AddWorkerNode adds a new worker node to the cluster
+func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	// Determine node name
-	nodeName := ""
-	index := 0
-	if role == cluster.RoleMaster {
-		// Currently only support single master
-		return fmt.Errorf("currently only support single Master node")
-	} else {
-		for _, worker := range m.Cluster.Workers {
-			suffix := strings.Split(strings.TrimPrefix(worker.Name, m.Config.Prefix()), "-")[1]
-			suffixInt, err := strconv.Atoi(suffix)
-			if err != nil {
-				return fmt.Errorf("failed to convert index for node %s: %w", worker.Name, err)
-			}
-			if suffixInt > index {
-				index = suffixInt
-			}
-		}
-	}
-
-	nodeName = m.Config.GetWorkerVMName(index + 1)
+	nodeName := m.Cluster.GenWorkerName()
 	// Create virtual machine
 	log.Infof("Creating node %s, cpu: %d, memory: %d, disk: %d", nodeName, cpu, memory, disk)
 	err := m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
@@ -578,22 +593,16 @@ func (m *Manager) AddNode(role string, cpu int, memory int, disk int) error {
 	}
 
 	// Update node information and get IP
-	log.Infof("Updating node information %s", nodeName)
-	err = m.AddNodeInfo(nodeName, cpu, memory, disk)
+	log.Infof("Adding node %s to cluster", nodeName)
+	err = m.addClusterNode(nodeName, cpu, memory, disk)
 	if err != nil {
-		return fmt.Errorf("failed to update node information: %w", err)
+		return fmt.Errorf("failed to add node to cluster: %w", err)
 	}
-	log.Infof("Updating cluster information %s", nodeName)
-	err = cluster.SaveClusterInfomation(m.Cluster)
-	if err != nil {
-		return fmt.Errorf("failed to update cluster information: %w", err)
-	}
-
 	// Use initializer to set environment
 	log.Infof("Initializing node %s", nodeName)
-	initializer := initializer.NewInitializerWithOptions(m, nodeName, m.InitOptions)
-	if err := initializer.Initialize(); err != nil {
-		return fmt.Errorf("failed to initialize node %s environment: %w", nodeName, err)
+	err = m.InitializeVM(nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to initialize node %s: %w", nodeName, err)
 	}
 
 	// Get join command
@@ -618,7 +627,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 		return fmt.Errorf("node %s does not exist", nodeName)
 	}
 
-	if nodeInfo.Role == cluster.RoleMaster {
+	if nodeInfo.Spec.Role == cluster.RoleMaster {
 		return fmt.Errorf("cannot delete Master node, please delete the entire cluster first")
 	}
 
@@ -640,7 +649,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 	// Update cluster information
 	log.Infof("Updating cluster information %s", nodeName)
 	m.Cluster.RemoveNode(nodeName)
-	if err := cluster.SaveClusterInfomation(m.Cluster); err != nil {
+	if err := m.Cluster.Save(); err != nil {
 		return fmt.Errorf("failed to update cluster information: %w", err)
 	}
 
@@ -651,13 +660,13 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 func (m *Manager) drainAndDeleteNode(nodeName string) error {
 	log.Infof("Draining node %s from Kubernetes cluster...", nodeName)
 	drainCmd := fmt.Sprintf(`kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force`, nodeName)
-	_, err := m.RunSSHCommand(m.Config.Master.Name, drainCmd)
+	_, err := m.RunSSHCommand(m.Cluster.GetMasterName(), drainCmd)
 	if err != nil {
 		return fmt.Errorf("failed to drain node %s: %w", nodeName, err)
 	}
 
 	deleteNodeCmd := fmt.Sprintf(`kubectl delete node %s`, nodeName)
-	_, err = m.RunSSHCommand(m.Config.Master.Name, deleteNodeCmd)
+	_, err = m.RunSSHCommand(m.Cluster.GetMasterName(), deleteNodeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to delete node %s from cluster: %w", nodeName, err)
 	}
@@ -669,7 +678,7 @@ func (m *Manager) DeleteCluster() error {
 	log.Info("Deleting Kubernetes cluster...")
 
 	// List all virtual machines
-	prefix := m.Config.Prefix()
+	prefix := m.Cluster.Prefix()
 	vms, err := m.VMProvider.ListVM(prefix)
 	if err != nil {
 		return fmt.Errorf("failed to list virtual machines: %w", err)

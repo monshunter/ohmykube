@@ -17,14 +17,14 @@ var downloadKubeconfigCmd = &cobra.Command{
 	Long:  `Download the current cluster's kubeconfig file to the local ~/.kube directory for local debugging and cluster management`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load cluster information
-		clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
+		clusterInfo, err := cluster.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
 		}
 
 		// Check master node information
-		if clusterInfo.Master.ExtraInfo.IP == "" {
+		if clusterInfo.Master.Status.IP == "" {
 			log.Errorf("Unable to get master node IP address")
 			return fmt.Errorf("unable to get master node IP address")
 		}
@@ -38,9 +38,9 @@ var downloadKubeconfigCmd = &cobra.Command{
 
 		// Create SSH client
 		sshClient := ssh.NewClient(
-			clusterInfo.Master.ExtraInfo.IP,
-			clusterInfo.Master.SSHPort,
-			clusterInfo.Master.SSHUser,
+			clusterInfo.Master.Status.IP,
+			clusterInfo.Auth.Port,
+			clusterInfo.Auth.User,
 			password,
 			string(sshKeyContent),
 		)

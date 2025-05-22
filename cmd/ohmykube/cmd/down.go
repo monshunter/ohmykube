@@ -20,8 +20,8 @@ var downCmd = &cobra.Command{
 			return err
 		}
 
-		if launcher == "" && cluster.CheckClusterInfomationExists(clusterName) {
-			clusterInfo, err := cluster.LoadClusterInfomation(clusterName)
+		if launcher == "" && cluster.CheckExists(clusterName) {
+			clusterInfo, err := cluster.Load(clusterName)
 			if err != nil {
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}

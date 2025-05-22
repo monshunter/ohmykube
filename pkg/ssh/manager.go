@@ -150,7 +150,7 @@ func (sm *SSHManager) GetIP(nodeName string) string {
 	if node == nil {
 		return ""
 	}
-	return node.ExtraInfo.IP
+	return node.Status.IP
 }
 
 // GetClient gets an SSH client
@@ -229,14 +229,17 @@ func (sm *SSHManager) CloseClient(nodeName string) {
 }
 
 // CloseAllClients closes all SSH clients
-func (sm *SSHManager) CloseAllClients() {
+func (sm *SSHManager) CloseAllClients() error {
 	sm.StopHealthCheck()
 
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
 	for nodeName, client := range sm.clients {
-		client.Close()
+		if err := client.Close(); err != nil {
+			return fmt.Errorf("failed to close SSH client for node %s: %w", nodeName, err)
+		}
 		delete(sm.clients, nodeName)
 	}
+	return nil
 }

@@ -94,7 +94,7 @@ var upCmd = &cobra.Command{
 		}
 
 		// Create cluster
-		defer manager.CloseSSHClient()
+		defer manager.Close()
 		return manager.CreateCluster()
 	},
 }

@@ -1,19 +1,9 @@
 package cluster
 
-import (
-	"fmt"
-)
-
 const (
 	RoleMaster = "master"
 	RoleWorker = "worker"
 )
-
-// Node stores node configuration
-type Node struct {
-	Name string
-	Resource
-}
 
 type Resource struct {
 	CPU    int
@@ -28,8 +18,8 @@ type Config struct {
 	Image             string
 	Template          string
 	Name              string
-	Master            Node
-	Workers           []Node
+	Master            Resource
+	Workers           []Resource
 	KubernetesVersion string
 	ProxyMode         string
 }
@@ -37,15 +27,12 @@ type Config struct {
 func NewConfig(name string, workers int, proxyMode string, masterResource Resource, workerResource Resource) *Config {
 	c := &Config{
 		Name:    name,
-		Master:  Node{},
-		Workers: make([]Node, workers),
+		Master:  masterResource,
+		Workers: make([]Resource, workers),
 	}
 	for i := range workers {
-		c.Workers[i].Name = c.GetWorkerVMName(i)
-		c.Workers[i].Resource = workerResource
+		c.Workers[i] = workerResource
 	}
-	c.Master.Name = c.GetMasterVMName(0)
-	c.Master.Resource = masterResource
 	c.ProxyMode = proxyMode
 	return c
 }
@@ -68,16 +55,4 @@ func (c *Config) SetImage(image string) {
 
 func (c *Config) SetTemplate(template string) {
 	c.Template = template
-}
-
-func (c *Config) GetMasterVMName(index int) string {
-	return fmt.Sprintf("%smaster-%d", c.Prefix(), index)
-}
-
-func (c *Config) GetWorkerVMName(index int) string {
-	return fmt.Sprintf("%sworker-%d", c.Prefix(), index)
-}
-
-func (c *Config) Prefix() string {
-	return fmt.Sprintf("%s-", c.Name)
 }

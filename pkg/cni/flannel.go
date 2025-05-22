@@ -3,10 +3,10 @@ package cni
 import (
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/monshunter/ohmykube/pkg/clusterinfo"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
@@ -53,7 +53,7 @@ echo "br_netfilter" | sudo tee /etc/modules-load.d/br_netfilter.conf
 
 	// Step 1: Download the flannel manifest locally
 	log.Info("Downloading Flannel manifest")
-	resp, err := http.Get(ymlURL)
+	resp, err := retryablehttp.Get(ymlURL)
 	if err != nil {
 		return fmt.Errorf("failed to download Flannel manifest: %w", err)
 	}
