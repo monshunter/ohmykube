@@ -24,7 +24,7 @@ var downloadKubeconfigCmd = &cobra.Command{
 		}
 
 		// Check master node information
-		if clusterInfo.Master.Status.IP == "" {
+		if clusterInfo.Spec.Master.Status.IP == "" {
 			log.Errorf("Unable to get master node IP address")
 			return fmt.Errorf("unable to get master node IP address")
 		}
@@ -38,9 +38,9 @@ var downloadKubeconfigCmd = &cobra.Command{
 
 		// Create SSH client
 		sshClient := ssh.NewClient(
-			clusterInfo.Master.Status.IP,
-			clusterInfo.Auth.Port,
-			clusterInfo.Auth.User,
+			clusterInfo.Spec.Master.Status.IP,
+			clusterInfo.Status.Auth.Port,
+			clusterInfo.Status.Auth.User,
 			password,
 			string(sshKeyContent),
 		)

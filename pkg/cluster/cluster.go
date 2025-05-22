@@ -25,6 +25,15 @@ const (
 	PhaseUnknown Phase = "Unknown"
 )
 
+type ClusterPhase string
+
+const (
+	ClusterPhasePending ClusterPhase = "Pending"
+	ClusterPhaseRunning ClusterPhase = "Running"
+	ClusterPhaseFailed  ClusterPhase = "Failed"
+	ClusterPhaseUnknown ClusterPhase = "Unknown"
+)
+
 const (
 	KindCluster = "Cluster"
 	ApiVersion  = "ohmykube.dev/v1alpha1"
@@ -32,8 +41,6 @@ const (
 
 type Metadata struct {
 	Name        string            `yaml:"name,omitempty"`
-	Launcher    string            `yaml:"launcher,omitempty"`
-	ProxyMode   string            `yaml:"proxyMode,omitempty"`
 	Labels      map[string]string `yaml:"labels,omitempty"`
 	Annotations map[string]string `yaml:"annotations,omitempty"`
 	Taints      []Taint           `yaml:"taints,omitempty"`
@@ -60,8 +67,7 @@ type NodeSpec struct {
 }
 
 type NodeStatus struct {
-	Phase Phase `yaml:"phase,omitempty"`
-
+	Phase    Phase  `yaml:"phase,omitempty"`
 	Hostname string `yaml:"hostname,omitempty"`
 	// IP ipv4 address
 	IP         string      `yaml:"ip,omitempty"`
@@ -150,57 +156,80 @@ type Auth struct {
 
 // Cluster stores cluster information
 type Cluster struct {
-	ApiVersion string  `yaml:"apiVersion"`
-	Kind       string  `yaml:"kind"`
-	Name       string  `yaml:"name"`
-	K8sVersion string  `yaml:"k8sVersion"`
-	Launcher   string  `yaml:"launcher"`
-	ProxyMode  string  `yaml:"proxyMode"`
-	Master     *Node   `yaml:"master"`
-	Workers    []*Node `yaml:"workers"`
-	Auth       Auth    `yaml:"auth"`
+	ApiVersion string `yaml:"apiVersion,omitempty"`
+	Kind       string `yaml:"kind,omitempty"`
+	Metadata   `yaml:"metadata,omitempty"`
+	Spec       ClusterSpec   `yaml:"spec,omitempty"`
+	Status     ClusterStatus `yaml:"status,omitempty"`
+}
+
+type ClusterSpec struct {
+	K8sVersion string  `yaml:"k8sVersion,omitempty"`
+	Launcher   string  `yaml:"launcher,omitempty"`
+	ProxyMode  string  `yaml:"proxyMode,omitempty"`
+	Master     *Node   `yaml:"master,omitempty"`
+	Workers    []*Node `yaml:"workers,omitempty"`
+}
+
+type ClusterStatus struct {
+	Phase      Phase       `yaml:"phase,omitempty"`
+	Auth       Auth        `yaml:"auth,omitempty"`
+	Conditions []Condition `yaml:"conditions,omitempty"`
 }
 
 func NewCluster(config *Config) *Cluster {
 	cls := &Cluster{
 		ApiVersion: ApiVersion,
 		Kind:       KindCluster,
-		Name:       config.Name,
-		K8sVersion: config.KubernetesVersion,
-		ProxyMode:  config.ProxyMode,
-		Launcher:   config.LauncherType,
-		Master:     nil,
-		Workers:    make([]*Node, len(config.Workers)),
-		Auth:       Auth{},
+		Metadata: Metadata{
+			Name: config.Name,
+			Annotations: map[string]string{
+				"ohmykube.dev/created-at": time.Now().Format(time.RFC3339),
+			},
+
+			Labels: map[string]string{
+				"ohmykube.dev/cluster": config.Name,
+			},
+		},
+		Spec: ClusterSpec{
+			K8sVersion: config.KubernetesVersion,
+			Launcher:   config.LauncherType,
+			ProxyMode:  config.ProxyMode,
+			Master:     nil,
+			Workers:    make([]*Node, len(config.Workers)),
+		},
+		Status: ClusterStatus{
+			Phase: PhasePending,
+		},
 	}
-	cls.Master = NewNode(cls.GenMasterName(), RoleMaster, config.Master.CPU,
+	cls.Spec.Master = NewNode(cls.GenMasterName(), RoleMaster, config.Master.CPU,
 		config.Master.Memory, config.Master.Disk)
 	for i := range config.Workers {
-		cls.Workers[i] = NewNode(cls.GenWorkerName(), RoleWorker, config.Workers[i].CPU,
+		cls.Spec.Workers[i] = NewNode(cls.GenWorkerName(), RoleWorker, config.Workers[i].CPU,
 			config.Workers[i].Memory, config.Workers[i].Disk)
 	}
 	return cls
 }
 
 func (c *Cluster) GetMasterIP() string {
-	return c.Master.Status.IP
+	return c.Spec.Master.Status.IP
 }
 
 func (c *Cluster) GetMasterName() string {
-	return c.Master.Name
+	return c.Spec.Master.Name
 }
 
 func (c *Cluster) Nodes2IPsMap() map[string]string {
 	ips := make(map[string]string)
-	ips[c.Master.Name] = c.Master.Status.IP
-	for _, node := range c.Workers {
+	ips[c.Spec.Master.Name] = c.Spec.Master.Status.IP
+	for _, node := range c.Spec.Workers {
 		ips[node.Name] = node.Status.IP
 	}
 	return ips
 }
 
 func (c *Cluster) GetNodeByIP(ip string) *Node {
-	for _, node := range c.Workers {
+	for _, node := range c.Spec.Workers {
 		if node.Status.IP == ip {
 			return node
 		}
@@ -209,10 +238,10 @@ func (c *Cluster) GetNodeByIP(ip string) *Node {
 }
 
 func (c *Cluster) GetNodeByName(name string) *Node {
-	if c.Master != nil && c.Master.Name == name {
-		return c.Master
+	if c.Spec.Master != nil && c.Spec.Master.Name == name {
+		return c.Spec.Master
 	}
-	for _, node := range c.Workers {
+	for _, node := range c.Spec.Workers {
 		if node != nil && node.Name == name {
 			return node
 		}
@@ -223,12 +252,12 @@ func (c *Cluster) GetNodeByName(name string) *Node {
 func (c *Cluster) RemoveNode(name string) {
 	clusterLock.Lock()
 	defer clusterLock.Unlock()
-	if c.Master.Name == name {
-		c.Master = nil
+	if c.Spec.Master.Name == name {
+		c.Spec.Master = nil
 	}
-	for i, node := range c.Workers {
+	for i, node := range c.Spec.Workers {
 		if node.Name == name {
-			c.Workers = slices.Delete(c.Workers, i, i+1)
+			c.Spec.Workers = slices.Delete(c.Spec.Workers, i, i+1)
 			break
 		}
 	}
@@ -237,11 +266,11 @@ func (c *Cluster) RemoveNode(name string) {
 func (c *Cluster) AddNode(node *Node) {
 	clusterLock.Lock()
 	defer clusterLock.Unlock()
-	c.Workers = append(c.Workers, node)
+	c.Spec.Workers = append(c.Spec.Workers, node)
 }
 
 func (c *Cluster) SetMaster(node *Node) {
-	c.Master = node
+	c.Spec.Master = node
 }
 
 func (c *Cluster) GenMasterName() string {

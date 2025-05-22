@@ -7,8 +7,8 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/default/containerd"
 	"github.com/monshunter/ohmykube/pkg/default/ipvs"
+	"github.com/monshunter/ohmykube/pkg/envar"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/utils"
 )
 
 // Initializer used to initialize a single Kubernetes node environment
@@ -283,7 +283,7 @@ func (i *Initializer) InstallContainerd() error {
 	}
 
 	// Set mirrors
-	if utils.IsCN {
+	if envar.IsEnableDefaultMiror() {
 		for _, mirror := range containerd.Mirrors() {
 			cmd = fmt.Sprintf("sudo mkdir -p /etc/containerd/certs.d/%s", mirror.Name)
 			_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)

@@ -75,7 +75,7 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cls *cluster.C
 
 	// Create KubeadmConfig
 	manager.KubeadmConfig = kubeadm.NewKubeadmConfig(manager.SSHManager, config.KubernetesVersion,
-		cls.Master.Name, config.ProxyMode)
+		cls.Spec.Master.Name, config.ProxyMode)
 
 	return manager, nil
 }
@@ -134,17 +134,17 @@ func (m *Manager) addClusterNode(nodeName string, cpu int, memory int, disk int)
 
 // UpdateClusterStatus updates cluster status
 func (m *Manager) UpdateClusterStatus() error {
-	status, err := m.GetStatusFromRemote(m.Cluster.Master.Name)
+	status, err := m.GetStatusFromRemote(m.Cluster.Spec.Master.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get Master node information: %w", err)
 	}
-	m.Cluster.Master.UpdateStatus(status)
-	for i := range m.Cluster.Workers {
-		status, err := m.GetStatusFromRemote(m.Cluster.Workers[i].Name)
+	m.Cluster.Spec.Master.UpdateStatus(status)
+	for i := range m.Cluster.Spec.Workers {
+		status, err := m.GetStatusFromRemote(m.Cluster.Spec.Workers[i].Name)
 		if err != nil {
 			return fmt.Errorf("failed to get Worker node information: %w", err)
 		}
-		m.Cluster.Workers[i].UpdateStatus(status)
+		m.Cluster.Spec.Workers[i].UpdateStatus(status)
 	}
 	// Save cluster information to local file
 	return m.Cluster.Save()
@@ -319,7 +319,7 @@ func (m *Manager) CreateCluster() error {
 		log.Info("Skipping kubeconfig download...")
 	}
 
-	log.Info("Cluster created successfully! \nYou can access the cluster with the following commands:")
+	log.Info("Cluster created successfully! You can access the cluster with the following commands:")
 	fmt.Printf("\t\texport KUBECONFIG=%s\n", kubeconfigPath)
 	fmt.Println("\t\tkubectl get nodes")
 
@@ -347,7 +347,7 @@ func (m *Manager) CreateClusterVMs() error {
 // CreateMasterVM creates master node
 func (m *Manager) CreateMasterVM() error {
 	masterName := m.Cluster.GetMasterName()
-	return m.VMProvider.CreateVM(masterName, m.Cluster.Master.Spec.CPU, m.Cluster.Master.Spec.Memory, m.Cluster.Master.Spec.Disk)
+	return m.VMProvider.CreateVM(masterName, m.Cluster.Spec.Master.Spec.CPU, m.Cluster.Spec.Master.Spec.Memory, m.Cluster.Spec.Master.Spec.Disk)
 }
 
 // CreateWorkerVMs creates worker nodes
@@ -359,11 +359,11 @@ func (m *Manager) CreateWorkerVMs() error {
 }
 
 func (m *Manager) createWorkerVMs() error {
-	for i := range m.Cluster.Workers {
-		err := m.CreateWorkerVM(m.Cluster.Workers[i].Name, m.Cluster.Workers[i].Spec.CPU,
-			m.Cluster.Workers[i].Spec.Memory, m.Cluster.Workers[i].Spec.Disk)
+	for i := range m.Cluster.Spec.Workers {
+		err := m.CreateWorkerVM(m.Cluster.Spec.Workers[i].Name, m.Cluster.Spec.Workers[i].Spec.CPU,
+			m.Cluster.Spec.Workers[i].Spec.Memory, m.Cluster.Spec.Workers[i].Spec.Disk)
 		if err != nil {
-			return fmt.Errorf("failed to create Worker node %s: %w", m.Cluster.Workers[i].Name, err)
+			return fmt.Errorf("failed to create Worker node %s: %w", m.Cluster.Spec.Workers[i].Name, err)
 		}
 	}
 	return nil
@@ -374,9 +374,9 @@ func (m *Manager) createWorkerVMsParallel() error {
 	var err error
 	// concurrent by m.Config.Parallel
 	sem := make(chan struct{}, m.Config.Parallel)
-	errChan := make(chan error, len(m.Cluster.Workers))
+	errChan := make(chan error, len(m.Cluster.Spec.Workers))
 
-	for i := range m.Cluster.Workers {
+	for i := range m.Cluster.Spec.Workers {
 		wg.Add(1)
 		go func(node *cluster.Node) {
 			defer wg.Done()
@@ -386,7 +386,7 @@ func (m *Manager) createWorkerVMsParallel() error {
 			if err != nil {
 				errChan <- fmt.Errorf("failed to create Worker node %s: %w", node.Name, err)
 			}
-		}(m.Cluster.Workers[i])
+		}(m.Cluster.Spec.Workers[i])
 	}
 	wg.Wait()
 	close(sem)
@@ -419,10 +419,10 @@ func (m *Manager) initializeVMs() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize Master node: %w", err)
 	}
-	for i := range m.Cluster.Workers {
-		err := m.InitializeVM(m.Cluster.Workers[i].Name)
+	for i := range m.Cluster.Spec.Workers {
+		err := m.InitializeVM(m.Cluster.Spec.Workers[i].Name)
 		if err != nil {
-			return fmt.Errorf("failed to initialize VM %s: %w", m.Cluster.Workers[i].Name, err)
+			return fmt.Errorf("failed to initialize VM %s: %w", m.Cluster.Spec.Workers[i].Name, err)
 		}
 	}
 	return nil
@@ -433,8 +433,8 @@ func (m *Manager) initializeVMsParallel() error {
 	var err error
 	// concurrent by m.Config.Parallel
 	sem := make(chan struct{}, m.Config.Parallel)
-	errChan := make(chan error, len(m.Cluster.Workers)+1)
-	nodes := append(m.Cluster.Workers, m.Cluster.Master)
+	errChan := make(chan error, len(m.Cluster.Spec.Workers)+1)
+	nodes := append(m.Cluster.Spec.Workers, m.Cluster.Spec.Master)
 	for i := range nodes {
 		wg.Add(1)
 		go func(node *cluster.Node) {
@@ -445,7 +445,7 @@ func (m *Manager) initializeVMsParallel() error {
 			if err != nil {
 				errChan <- fmt.Errorf("failed to initialize VM %s: %w", node.Name, err)
 			}
-		}(m.Cluster.Workers[i])
+		}(m.Cluster.Spec.Workers[i])
 	}
 	wg.Wait()
 	close(sem)
@@ -480,7 +480,7 @@ func (m *Manager) InitializeMaster() (string, error) {
 // JoinWorkerNodes joins worker nodes to the cluster
 func (m *Manager) JoinWorkerNodes(joinCommand string) error {
 	for i := range m.Config.Workers {
-		err := m.JoinWorkerNode(m.Cluster.Workers[i].Name, joinCommand)
+		err := m.JoinWorkerNode(m.Cluster.Spec.Workers[i].Name, joinCommand)
 		if err != nil {
 			return err
 		}

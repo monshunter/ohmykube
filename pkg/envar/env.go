@@ -36,3 +36,7 @@ func OhMyKubeConfigDir() string {
 func OhMyKubeLogDir() string {
 	return filepath.Join(OhMyKubeHome(), "log")
 }
+
+func IsEnableDefaultMiror() bool {
+	return os.Getenv("OHMYKUBE_ENABLE_MIRROR") == "1"
+}

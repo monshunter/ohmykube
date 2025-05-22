@@ -25,7 +25,7 @@ var downCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}
-			launcher = clusterInfo.Launcher
+			launcher = clusterInfo.Spec.Launcher
 		}
 		launcherType := myLauncher.LauncherType(launcher)
 		if !launcherType.IsValid() {
