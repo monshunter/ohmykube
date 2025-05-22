@@ -31,48 +31,48 @@ const (
 )
 
 type Metadata struct {
-	Name        string            `yaml:"name"`
-	Launcher    string            `yaml:"launcher"`
-	ProxyMode   string            `yaml:"proxyMode"`
-	Labels      map[string]string `yaml:"labels"`
-	Annotations map[string]string `yaml:"annotations"`
-	Taints      []Taint           `yaml:"taints"`
+	Name        string            `yaml:"name,omitempty"`
+	Launcher    string            `yaml:"launcher,omitempty"`
+	ProxyMode   string            `yaml:"proxyMode,omitempty"`
+	Labels      map[string]string `yaml:"labels,omitempty"`
+	Annotations map[string]string `yaml:"annotations,omitempty"`
+	Taints      []Taint           `yaml:"taints,omitempty"`
 }
 
 type Taint struct {
-	Key    string `yaml:"key"`
-	Value  string `yaml:"value"`
-	Effect string `yaml:"effect"`
+	Key    string `yaml:"key,omitempty"`
+	Value  string `yaml:"value,omitempty"`
+	Effect string `yaml:"effect,omitempty"`
 }
 
 // Node stores detailed node information
 type Node struct {
-	Metadata `yaml:"metadata"`
-	Spec     NodeSpec   `yaml:"spec"`
-	Status   NodeStatus `yaml:"status"`
+	Metadata `yaml:"metadata,omitempty"`
+	Spec     NodeSpec   `yaml:"spec,omitempty"`
+	Status   NodeStatus `yaml:"status,omitempty"`
 }
 
 type NodeSpec struct {
-	Role   string `yaml:"role"`
-	CPU    int    `yaml:"cpu"`
-	Memory int    `yaml:"memory"`
-	Disk   int    `yaml:"disk"`
+	Role   string `yaml:"role,omitempty"`
+	CPU    int    `yaml:"cpu,omitempty"`
+	Memory int    `yaml:"memory,omitempty"`
+	Disk   int    `yaml:"disk,omitempty"`
 }
 
 type NodeStatus struct {
-	Phase Phase `yaml:"phase"`
+	Phase Phase `yaml:"phase,omitempty"`
 
-	Hostname string `yaml:"hostname"`
+	Hostname string `yaml:"hostname,omitempty"`
 	// IP ipv4 address
-	IP         string      `yaml:"ip"`
-	IPv6       string      `yaml:"ipv6"`
-	IPs        []string    `yaml:"ips"`
-	Release    string      `yaml:"release"`
-	Kernel     string      `yaml:"kernel"`
-	Arch       string      `yaml:"arch"`
-	OS         string      `yaml:"os"`
-	Ready      bool        `yaml:"ready"`
-	Conditions []Condition `yaml:"conditions"`
+	IP         string      `yaml:"ip,omitempty"`
+	IPv6       string      `yaml:"ipv6,omitempty"`
+	IPs        []string    `yaml:"ips,omitempty"`
+	Release    string      `yaml:"release,omitempty"`
+	Kernel     string      `yaml:"kernel,omitempty"`
+	Arch       string      `yaml:"arch,omitempty"`
+	OS         string      `yaml:"os,omitempty"`
+	Ready      bool        `yaml:"ready,omitempty"`
+	Conditions []Condition `yaml:"conditions,omitempty"`
 }
 
 type ConditionType string
@@ -92,11 +92,11 @@ const (
 )
 
 type Condition struct {
-	Type               ConditionType   `yaml:"type"`
-	Status             ConditionStatus `yaml:"status"`
-	Reason             string          `yaml:"reason"`
-	Message            string          `yaml:"message"`
-	LastTransitionTime time.Time       `yaml:"lastTransitionTime"`
+	Type               ConditionType   `yaml:"type,omitempty"`
+	Status             ConditionStatus `yaml:"status,omitempty"`
+	Reason             string          `yaml:"reason,omitempty"`
+	Message            string          `yaml:"message,omitempty"`
+	LastTransitionTime time.Time       `yaml:"lastTransitionTime,omitempty"`
 }
 
 func NewCondition(t ConditionType, s ConditionStatus, r string, m string) Condition {
@@ -168,6 +168,7 @@ func NewCluster(config *Config) *Cluster {
 		Name:       config.Name,
 		K8sVersion: config.KubernetesVersion,
 		ProxyMode:  config.ProxyMode,
+		Launcher:   config.LauncherType,
 		Master:     nil,
 		Workers:    make([]*Node, len(config.Workers)),
 		Auth:       Auth{},
@@ -355,4 +356,4 @@ func GetRandomString(length int) string {
 	return string(letters[:length])
 }
 
-var letters = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890")
+var letters = []byte("abcdefghijklmnopqrstuvwxyzZ1234567890")
