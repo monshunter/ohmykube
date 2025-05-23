@@ -56,17 +56,17 @@ fi`
 
 		// If no longer locked, continue
 		if attempt > 1 && strings.TrimSpace(output) == "unlocked" {
-			log.Infof("Apt lock released on node %s, continuing installation", i.nodeName)
+			log.Warningf("Apt lock released on node %s, continuing installation", i.nodeName)
 			return nil
 		}
 
 		// If still locked, wait a while and try again
 		if attempt < maxRetries {
-			log.Infof("Apt still locked on node %s, waiting for release (attempt %d/%d)...", i.nodeName, attempt, maxRetries)
+			log.Warningf("Apt still locked on node %s, waiting for release (attempt %d/%d)...", i.nodeName, attempt, maxRetries)
 			time.Sleep(retryDelay)
 		} else {
 			// If max retries reached, attempt to forcefully release the lock
-			log.Infof("Timed out waiting for apt lock release on node %s, attempting to force release...", i.nodeName)
+			log.Warningf("Timed out waiting for apt lock release on node %s, attempting to force release...", i.nodeName)
 
 			killCmd := "sudo killall apt apt-get dpkg 2>/dev/null || true"
 			_, err = i.sshRunner.RunSSHCommand(i.nodeName, killCmd)
@@ -85,7 +85,7 @@ fi`
 				return fmt.Errorf("failed to force release apt lock: %w", err)
 			}
 
-			log.Infof("Apt lock forcefully released on node %s", i.nodeName)
+			log.Warningf("Apt lock forcefully released on node %s", i.nodeName)
 
 			// Fix: wait an extra period after force releasing the lock to ensure it's truly released
 			extraWaitTime := 10 * time.Second

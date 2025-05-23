@@ -18,6 +18,8 @@ const (
 	DEBUG LogLevel = iota
 	// INFO info level, always show
 	INFO
+	// WARNING warning level, always show
+	WARNING
 	// ERROR error level, always show
 	ERROR
 	// FATAL fatal level, always show and exit program
@@ -110,6 +112,8 @@ func getLevelColor(l LogLevel) string {
 		return ColorCyan
 	case INFO:
 		return ColorGreen
+	case WARNING:
+		return ColorYellow
 	case ERROR:
 		return ColorRed
 	case FATAL:
@@ -203,4 +207,14 @@ func Debug(args ...any) {
 // Debugf output formatted debug log (only effective in verbose mode)
 func Debugf(format string, args ...any) {
 	logf("DEBUG", DEBUG, format, args...)
+}
+
+// Warning output warning log
+func Warning(args ...any) {
+	log("WARNING", WARNING, args...)
+}
+
+// Warningf output formatted warning log
+func Warningf(format string, args ...any) {
+	logf("WARNING", WARNING, format, args...)
 }
