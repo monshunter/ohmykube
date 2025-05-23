@@ -779,6 +779,13 @@ exit 0
 					} else {
 						log.Infof("Successfully installed and configured containerd on node %s", i.nodeName)
 					}
+
+					// Install crictl and nerdctl after containerd is successfully installed
+					if err := i.InstallCrictlAndNerdctl(); err != nil {
+						log.Errorf("Failed to install crictl and nerdctl on node %s: %v", i.nodeName, err)
+						// Continue even if crictl and nerdctl installation fails
+					}
+
 					return nil
 				}
 			}
@@ -796,6 +803,227 @@ exit 0
 	}
 
 	return fmt.Errorf("failed to install containerd on node %s after %d attempts", i.nodeName, maxRetries)
+}
+
+// InstallCrictlAndNerdctl installs crictl and nerdctl tools for container management
+func (i *Initializer) InstallCrictlAndNerdctl() error {
+	// Define versions for crictl and nerdctl
+	crictlVersion := i.options.CriCtlVersion   // Latest stable version as of writing
+	nerdctlVersion := i.options.NerdctlVersion // Latest stable version as of writing
+
+	// Create a script that handles the installation of crictl and nerdctl
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
+
+# Step 1: Detect architecture
+ARCH=%s
+
+echo "Detected architecture: $ARCH"
+log_step "ARCH_DETECTION" "success"
+
+# Step 2: Set file paths and versions
+CRICTL_VERSION="%s"
+NERDCTL_VERSION="%s"
+
+CRICTL_PACKAGE="crictl-${CRICTL_VERSION}-linux-${ARCH}.tar.gz"
+CRICTL_PACKAGE_PATH="/usr/local/src/${CRICTL_PACKAGE}"
+CRICTL_DOWNLOAD_URL="https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/${CRICTL_PACKAGE}"
+
+NERDCTL_PACKAGE="nerdctl-${NERDCTL_VERSION}-linux-${ARCH}.tar.gz"
+NERDCTL_PACKAGE_PATH="/usr/local/src/${NERDCTL_PACKAGE}"
+NERDCTL_DOWNLOAD_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/${NERDCTL_PACKAGE}"
+
+# Step 3: Create directories
+sudo mkdir -p /usr/local/src
+sudo mkdir -p /usr/local/bin
+
+# Step 4: Check if crictl is already installed
+if command -v crictl &> /dev/null; then
+    CRICTL_VERSION_INSTALLED=$(crictl --version 2>/dev/null | awk '{print $3}')
+    echo "crictl already installed: $CRICTL_VERSION_INSTALLED"
+    log_step "CRICTL_CHECK" "already_installed"
+else
+    log_step "CRICTL_CHECK" "not_installed"
+
+    # Step 5: Download and install crictl if needed
+    if [ -f "$CRICTL_PACKAGE_PATH" ]; then
+        echo "crictl package already exists at $CRICTL_PACKAGE_PATH"
+        log_step "CRICTL_PACKAGE_CHECK" "exists"
+    else
+        echo "Downloading crictl from $CRICTL_DOWNLOAD_URL"
+        sudo curl -L "$CRICTL_DOWNLOAD_URL" -o "$CRICTL_PACKAGE_PATH"
+        if [ $? -eq 0 ]; then
+            echo "Successfully downloaded crictl to $CRICTL_PACKAGE_PATH"
+            log_step "DOWNLOAD_CRICTL" "success"
+        else
+            echo "Failed to download crictl"
+            log_step "DOWNLOAD_CRICTL" "failure"
+            exit 1
+        fi
+    fi
+
+    # Extract and install crictl
+    echo "Extracting and installing crictl"
+    sudo tar -xzf "$CRICTL_PACKAGE_PATH" -C /usr/local/bin
+    if [ $? -ne 0 ]; then
+        echo "Failed to extract crictl"
+        log_step "EXTRACT_CRICTL" "failure"
+        exit 1
+    fi
+    log_step "EXTRACT_CRICTL" "success"
+
+    # Set up crictl configuration
+    echo "Setting up crictl configuration"
+    sudo mkdir -p /etc/crictl
+    cat <<EOF | sudo tee /etc/crictl.yaml >/dev/null
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 10
+debug: false
+EOF
+    if [ $? -ne 0 ]; then
+        echo "Failed to create crictl configuration file"
+        log_step "CREATE_CRICTL_CONFIG" "failure"
+        exit 1
+    fi
+    log_step "CREATE_CRICTL_CONFIG" "success"
+fi
+
+# Step 6: Check if nerdctl is already installed
+if command -v nerdctl &> /dev/null; then
+    NERDCTL_VERSION_INSTALLED=$(nerdctl --version 2>/dev/null | awk '{print $3}')
+    echo "nerdctl already installed: $NERDCTL_VERSION_INSTALLED"
+    log_step "NERDCTL_CHECK" "already_installed"
+else
+    log_step "NERDCTL_CHECK" "not_installed"
+
+    # Step 7: Download and install nerdctl if needed
+    if [ -f "$NERDCTL_PACKAGE_PATH" ]; then
+        echo "nerdctl package already exists at $NERDCTL_PACKAGE_PATH"
+        log_step "NERDCTL_PACKAGE_CHECK" "exists"
+    else
+        echo "Downloading nerdctl from $NERDCTL_DOWNLOAD_URL"
+        sudo curl -L "$NERDCTL_DOWNLOAD_URL" -o "$NERDCTL_PACKAGE_PATH"
+        if [ $? -eq 0 ]; then
+            echo "Successfully downloaded nerdctl to $NERDCTL_PACKAGE_PATH"
+            log_step "DOWNLOAD_NERDCTL" "success"
+        else
+            echo "Failed to download nerdctl"
+            log_step "DOWNLOAD_NERDCTL" "failure"
+            exit 1
+        fi
+    fi
+
+    # Extract and install nerdctl
+    echo "Extracting and installing nerdctl"
+    sudo tar -xzf "$NERDCTL_PACKAGE_PATH" -C /usr/local/bin
+    if [ $? -ne 0 ]; then
+        echo "Failed to extract nerdctl"
+        log_step "EXTRACT_NERDCTL" "failure"
+        exit 1
+    fi
+    log_step "EXTRACT_NERDCTL" "success"
+fi
+
+# Step 8: Verify installation
+echo "Verifying installation"
+CRICTL_INSTALLED=$(command -v crictl >/dev/null 2>&1 && echo "yes" || echo "no")
+NERDCTL_INSTALLED=$(command -v nerdctl >/dev/null 2>&1 && echo "yes" || echo "no")
+
+if [ "$CRICTL_INSTALLED" = "yes" ] && [ "$NERDCTL_INSTALLED" = "yes" ]; then
+    echo "Successfully installed container tools:"
+    echo "crictl: $(crictl --version 2>/dev/null | awk '{print $3}')"
+    echo "nerdctl: $(nerdctl --version 2>/dev/null | awk '{print $3}')"
+    log_step "VERIFY_INSTALLATION" "success"
+else
+    echo "Failed to verify installation of container tools"
+    log_step "VERIFY_INSTALLATION" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
+`, i.arch, crictlVersion, nerdctlVersion)
+
+	// Execute the script in a single SSH connection
+	log.Infof("Installing crictl and nerdctl on node %s", i.nodeName)
+
+	// Set up retry logic
+	maxRetries := 3
+	retryDelay := 5 * time.Second
+	var output string
+	var err error
+
+	for retry := 0; retry < maxRetries; retry++ {
+		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
+
+		// Parse the output to check for any failures or if already installed
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		var crictlAlreadyInstalled, nerdctlAlreadyInstalled bool
+
+		for _, line := range lines {
+			if strings.HasPrefix(line, "STEP_STATUS:") {
+				parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+				if len(parts) == 2 {
+					step := parts[0]
+					status := parts[1]
+					log.Infof("Container tools installation step %s: %s on node %s", step, status, i.nodeName)
+
+					// Check if tools are already installed
+					if step == "CRICTL_CHECK" && status == "already_installed" {
+						crictlAlreadyInstalled = true
+						log.Infof("crictl already installed on node %s", i.nodeName)
+					}
+					if step == "NERDCTL_CHECK" && status == "already_installed" {
+						nerdctlAlreadyInstalled = true
+						log.Infof("nerdctl already installed on node %s", i.nodeName)
+					}
+
+					// If any step failed, log it but continue with retry logic
+					if status == "failure" && retry < maxRetries-1 {
+						log.Infof("Container tools installation step %s failed on node %s, will retry", step, i.nodeName)
+					}
+				}
+			} else if strings.Contains(line, "already installed") {
+				log.Infof("%s on node %s", line, i.nodeName)
+			}
+		}
+
+		if err == nil {
+			// Check if overall process was successful
+			for _, line := range lines {
+				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
+					if crictlAlreadyInstalled && nerdctlAlreadyInstalled {
+						log.Infof("crictl and nerdctl already installed on node %s", i.nodeName)
+					} else if crictlAlreadyInstalled {
+						log.Infof("crictl already installed, successfully installed nerdctl on node %s", i.nodeName)
+					} else if nerdctlAlreadyInstalled {
+						log.Infof("nerdctl already installed, successfully installed crictl on node %s", i.nodeName)
+					} else {
+						log.Infof("Successfully installed crictl and nerdctl on node %s", i.nodeName)
+					}
+					return nil
+				}
+			}
+		}
+
+		if retry < maxRetries-1 {
+			log.Infof("Failed to install container tools on node %s, retrying in %v (%d/%d)...",
+				i.nodeName, retryDelay, retry+1, maxRetries)
+			time.Sleep(retryDelay)
+		}
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to install container tools on node %s after %d attempts: %w", i.nodeName, maxRetries, err)
+	}
+
+	return fmt.Errorf("failed to install container tools on node %s after %d attempts", i.nodeName, maxRetries)
 }
 
 // getMirrorSetupScript generates the script for setting up containerd mirrors
