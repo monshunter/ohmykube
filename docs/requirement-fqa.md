@@ -1,34 +1,34 @@
-1.  **明确 "真实 Kubernetes 集群" 的关键特性**：
-    *   文档提到要搭建 "真实" Kubernetes 集群以区别于 Docker 容器模拟。可以进一步明确哪些 "真实" 特性是 MVP 版本必须包含的。例如：
-        *   多节点（至少一个控制平面节点，一个工作节点）？
-        *   节点间的网络通信是否需要特殊配置或模拟特定场景？
-        *   是否会预装特定的 CNI (容器网络接口) 插件？
+1.  **Clarify the Key Features of a "Real Kubernetes Cluster"**:
+    *   The document mentions building a "real" Kubernetes cluster to differentiate from Docker container simulation. It would be helpful to further clarify which "real" features must be included in the MVP version. For example:
+        *   Multiple nodes (at least one control plane node, one worker node)?
+        *   Does inter-node network communication require special configuration or simulation of specific scenarios?
+        *   Will specific CNI (Container Network Interface) plugins be pre-installed?
 
-2.  **细化 `MVP` (最小可行产品) 的范围**：
-    *   `ohmykube registry`: 创建一个本地 `Harbor` 集群。这是一个很好的功能，但它是否是核心 MVP 的一部分？或者是一个可选的增强功能？明确这一点有助于排定优先级。如果 `Harbor` 是 MVP 的一部分，那么 `ohmykube up` 是否会自动包含 `Harbor` 的部署，还是需要用户单独执行 `ohmykube registry`？
+2.  **Refine the Scope of the `MVP` (Minimum Viable Product)**:
+    *   `ohmykube registry`: Create a local `Harbor` registry. This is a good feature, but is it part of the core MVP? Or is it an optional enhancement? Clarifying this helps prioritize development. If `Harbor` is part of the MVP, will `ohmykube up` automatically include Harbor deployment, or will users need to execute `ohmykube registry` separately?
 
-3.  **配置选项**：
-    *   用户可能需要配置集群的某些参数，例如：
-        *   虚拟机的资源分配（CPU, 内存, 磁盘）。
-        *   Kubernetes 的版本。
-        *   节点的数量（`ohmykube up` 时默认创建几个节点？）。
-        *   是否支持自定义 CNI 插件等。
-    *   是否考虑通过配置文件或命令行参数来支持这些配置？
+3.  **Configuration Options**:
+    *   Users may need to configure certain cluster parameters, such as:
+        *   Virtual machine resource allocation (CPU, memory, disk).
+        *   Kubernetes version.
+        *   Number of nodes (how many nodes are created by default with `ohmykube up`?).
+        *   Support for custom CNI plugins, etc.
+    *   Is there consideration for supporting these configurations through configuration files or command-line parameters?
 
-4.  **操作系统的兼容性**：
-    *   虽然提到了 Mac M 芯片，但 `Multipass` 支持 Windows 和 Linux。是否计划明确支持这些平台？这可能会影响实现细节。
+4.  **Operating System Compatibility**:
+    *   Although Mac M chips are mentioned, `Lima` supports Windows and Linux. Are there plans to explicitly support these platforms? This may affect implementation details.
 
-5.  **用户体验细节**：
-    *   "要求操作简单" 是一个很好的目标。可以思考一些具体场景来体现：
-        *   命令执行过程中的信息输出是否友好？
-        *   错误处理和提示信息是否清晰？
-        *   用户如何获取 kubeconfig 文件来访问集群？
+5.  **User Experience Details**:
+    *   "Simple operation" is a good goal. Consider some specific scenarios to illustrate:
+        *   Is the information output during command execution user-friendly?
+        *   Are error handling and prompts clear?
+        *   How do users obtain the kubeconfig file to access the cluster?
 
-6.  **“节点”的定义**：
-    *   `ohmykube add`: 添加一个节点。这里是指添加工作节点（worker node）吗？是否支持添加控制平面节点（control plane node）以实现高可用（HA）？（HA 可能超出了 MVP 范围，但明确一下有好处）。
-    *   `ohmykube delete`: 删除一个节点。同样，删除的是工作节点还是控制平面节点？
+6.  **Definition of "Node"**:
+    *   `ohmykube add`: Add a node. Does this refer to adding a worker node? Is there support for adding control plane nodes to achieve high availability (HA)? (HA may be beyond the MVP scope, but it's beneficial to clarify).
+    *   `ohmykube delete`: Delete a node. Similarly, is this deleting a worker node or a control plane node?
 
-7.  **对 `Multipass` 和 `kubeadm` 的版本依赖**：
-    *   是否有特定的版本要求或建议？
+7.  **Version Dependencies for `Lima` and `kubeadm`**:
+    *   Are there specific version requirements or recommendations?
 
-总的来说，这份需求文档为项目开了一个好头。上述建议主要是为了帮助细化需求，使其更具可操作性，并减少后续开发过程中可能出现的歧义。希望这些建议对您有所帮助！
+Overall, this requirements document provides a good starting point for the project. The above suggestions are primarily to help refine the requirements, make them more actionable, and reduce potential ambiguities in the subsequent development process. I hope these suggestions are helpful to you!

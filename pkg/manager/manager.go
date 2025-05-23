@@ -44,7 +44,6 @@ func NewManager(config *cluster.Config, sshConfig *ssh.SSHConfig, cls *cluster.C
 	vmLauncher, err := launcher.NewLauncher(
 		launcherType,
 		launcher.Config{
-			Image:     config.Image,
 			Template:  config.Template,
 			Password:  sshConfig.Password,
 			SSHKey:    sshConfig.GetSSHKey(),
@@ -953,7 +952,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 		return fmt.Errorf("node %s does not exist", nodeName)
 	}
 
-	if nodeInfo.Spec.Role == cluster.RoleMaster {
+	if nodeInfo.Spec.Role == cluster.RoleMaster && len(m.Cluster.Spec.Workers) > 0 {
 		return fmt.Errorf("cannot delete Master node, please delete the entire cluster first")
 	}
 
@@ -1067,7 +1066,7 @@ func (m *Manager) SetLauncherType(launcherType launcher.LauncherType) error {
 	vmLauncher, err := launcher.NewLauncher(
 		launcherType,
 		launcher.Config{
-			Image:     m.Config.Image,
+			Template:  m.Config.Template,
 			Password:  sshConfig.Password,
 			SSHKey:    sshConfig.GetSSHKey(),
 			SSHPubKey: sshConfig.GetSSHPubKey(),

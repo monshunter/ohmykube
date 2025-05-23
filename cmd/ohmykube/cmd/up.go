@@ -56,7 +56,7 @@ var upCmd = &cobra.Command{
 
 		launcherType := myLauncher.LauncherType(launcher)
 		if !launcherType.IsValid() {
-			return fmt.Errorf("invalid launcher type: %s, please use %s or %s", launcherType, myLauncher.MultipassLauncher, myLauncher.LimactlLauncher)
+			return fmt.Errorf("invalid launcher type: %s, currently only 'limactl' is supported", launcherType)
 		}
 		// Create environment initialization options
 		// Create cluster configuration
@@ -75,7 +75,6 @@ var upCmd = &cobra.Command{
 			})
 		config.SetKubernetesVersion(k8sVersion)
 		config.SetLauncherType(launcherType.String())
-		config.SetImage(multipassImage)
 		config.SetTemplate(limaFile)
 
 		// Get default initialization options and modify required fields

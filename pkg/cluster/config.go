@@ -15,7 +15,6 @@ type Resource struct {
 type Config struct {
 	Parallel          int
 	LauncherType      string
-	Image             string
 	Template          string
 	Name              string
 	Master            Resource
@@ -47,10 +46,6 @@ func (c *Config) SetLauncherType(launcherType string) {
 
 func (c *Config) SetKubernetesVersion(k8sVersion string) {
 	c.KubernetesVersion = k8sVersion
-}
-
-func (c *Config) SetImage(image string) {
-	c.Image = image
 }
 
 func (c *Config) SetTemplate(template string) {

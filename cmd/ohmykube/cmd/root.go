@@ -16,7 +16,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "ohmykube",
 	Short: "OhMyKube - Tool for quickly setting up real Kubernetes clusters locally",
-	Long: `OhMyKube is a tool based on Multipass and kubeadm, designed to quickly set up
+	Long: `OhMyKube is a tool based on Lima and kubeadm, designed to quickly set up
 real Kubernetes clusters on developer computers using virtual machines, 
 including Cilium(CNI), Rook(CSI), and MetalLB(LB).`,
 	// If preparation work is needed before execution, PersistentPreRun can be added
@@ -40,7 +40,6 @@ var (
 	clusterName          string
 	launcher             string
 	parallel             int
-	multipassImage       string
 	limaFile             string
 	proxyMode            string
 )
@@ -57,9 +56,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&sshKeyFile, "ssh-key", defaultSSHKeyFile, "SSH private key file")
 	rootCmd.PersistentFlags().StringVar(&sshPubKeyFile, "ssh-pub-key", defaultSSHPubKeyFile, "SSH public key file")
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")
-	rootCmd.PersistentFlags().StringVar(&launcher, "launcher", "limactl", "Launcher to use (multipass, limactl), default limactl")
+	rootCmd.PersistentFlags().StringVar(&launcher, "launcher", "limactl", "Launcher to use (currently only limactl is supported)")
 	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
-	rootCmd.PersistentFlags().StringVar(&multipassImage, "multipass-image", "24.04", "Multipass image")
 	rootCmd.PersistentFlags().StringVar(&limaFile, "lima-file", "template://ubuntu-24.04", "Lima file or template")
 	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
 	// Add subcommands

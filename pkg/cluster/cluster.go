@@ -499,4 +499,4 @@ func GetRandomString(length int) string {
 	return string(letters[:length])
 }
 
-var letters = []byte("abcdefghijklmnopqrstuvwxyzZ1234567890")
+var letters = []byte("abcdefghijklmnopqrstuvwxyz1234567890")

@@ -29,8 +29,7 @@ var downCmd = &cobra.Command{
 		}
 		launcherType := myLauncher.LauncherType(launcher)
 		if !launcherType.IsValid() {
-			return fmt.Errorf("invalid launcher type: %s, please use %s or %s",
-				launcher, myLauncher.MultipassLauncher, myLauncher.LimactlLauncher)
+			return fmt.Errorf("invalid launcher type: %s, currently only 'limactl' is supported", launcher)
 		}
 
 		// Create cluster configuration
@@ -38,7 +37,6 @@ var downCmd = &cobra.Command{
 			cluster.Resource{}, cluster.Resource{})
 		config.SetKubernetesVersion("")
 		config.SetLauncherType(launcherType.String())
-		config.SetImage(multipassImage)
 		config.SetTemplate(limaFile)
 
 		// Create cluster manager

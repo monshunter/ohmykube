@@ -43,7 +43,6 @@ var addCmd = &cobra.Command{
 		}
 		config.SetKubernetesVersion(clusterInfo.Spec.K8sVersion)
 		config.SetLauncherType(clusterInfo.Spec.Launcher)
-		config.SetImage(multipassImage)
 		config.SetTemplate(limaFile)
 		config.SetParallel(parallel)
 
