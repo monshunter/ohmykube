@@ -37,7 +37,7 @@ var downCmd = &cobra.Command{
 			cluster.Resource{}, cluster.Resource{})
 		config.SetKubernetesVersion("")
 		config.SetLauncherType(launcherType.String())
-		config.SetTemplate(limaFile)
+		config.SetTemplate(limaTemplate)
 
 		// Create cluster manager
 		manager, err := manager.NewManager(config, sshConfig, nil)

@@ -11,10 +11,15 @@ type SSHCommandRunner interface {
 
 // InitOptions defines environment initialization options
 type InitOptions struct {
-	DisableSwap      bool   // Whether to disable swap
-	EnableIPVS       bool   // Whether to enable IPVS mode
-	ContainerRuntime string // Container runtime, default is containerd
-	K8sMirrorURL     string // Kubernetes source URL, default is official source
+	DisableSwap       bool   // Whether to disable swap
+	EnableIPVS        bool   // Whether to enable IPVS mode
+	ContainerRuntime  string // Container runtime, default is containerd
+	K8sMirrorURL      string // Kubernetes source URL, default is official source
+	HelmVersion       string
+	ContainerdVersion string
+	RuncVersion       string
+	CNIPluginsVersion string
+	K8SVersion        string
 }
 
 // DefaultInitOptions returns default initialization options
@@ -26,10 +31,15 @@ func DefaultInitOptions() InitOptions {
 	}
 
 	return InitOptions{
-		DisableSwap:      true,         // Default to disable swap
-		EnableIPVS:       false,        // Default to not enable IPVS
-		ContainerRuntime: "containerd", // Default to use containerd
-		K8sMirrorURL:     k8sMirrorURL, // Use source configured by environment variable or default source
+		DisableSwap:       true,         // Default to disable swap
+		EnableIPVS:        false,        // Default to not enable IPVS
+		ContainerRuntime:  "containerd", // Default to use containerd
+		K8sMirrorURL:      k8sMirrorURL, // Use source configured by environment variable or default source
+		HelmVersion:       "v3.18.0",
+		ContainerdVersion: "2.1.0",
+		RuncVersion:       "v1.3.0",
+		CNIPluginsVersion: "v1.7.1",
+		K8SVersion:        "v1.33.1",
 	}
 }
 

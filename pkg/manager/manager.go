@@ -185,6 +185,9 @@ func (m *Manager) GetStatusFromRemote(nodeName string) (status cluster.NodeInter
 	archOutput, err := sshClient.RunCommand(archCmd)
 	if err == nil {
 		status.Arch = strings.TrimSpace(archOutput)
+		if status.Arch == "aarch64" {
+			status.Arch = "arm64"
+		}
 	} else {
 		log.Infof("Warning: failed to get system architecture for node %s: %v", nodeName, err)
 	}
@@ -616,7 +619,13 @@ func (m *Manager) InitializeVM(nodeName string) error {
 		"Initializing", "Initializing node environment")
 
 	// Create and run the initializer
-	initializer := initializer.NewInitializerWithOptions(m, nodeName, m.InitOptions)
+	initializer, err := initializer.NewInitializerWithOptions(m, nodeName, m.InitOptions)
+	if err != nil {
+		node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
+			"InitializationFailed", fmt.Sprintf("Failed to create initializer: %v", err))
+		return fmt.Errorf("failed to create initializer for node %s: %w", nodeName, err)
+	}
+
 	if err := initializer.Initialize(); err != nil {
 		node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusFalse,
 			"InitializationFailed", fmt.Sprintf("Failed to initialize environment: %v", err))

@@ -40,7 +40,7 @@ var (
 	clusterName          string
 	launcher             string
 	parallel             int
-	limaFile             string
+	limaTemplate         string
 	proxyMode            string
 )
 
@@ -58,7 +58,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")
 	rootCmd.PersistentFlags().StringVar(&launcher, "launcher", "limactl", "Launcher to use (currently only limactl is supported)")
 	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
-	rootCmd.PersistentFlags().StringVar(&limaFile, "lima-file", "template://ubuntu-24.04", "Lima file or template")
+	rootCmd.PersistentFlags().StringVar(&limaTemplate, "lima-template", "ubuntu-24.04", "Lima file or template")
 	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
 	// Add subcommands
 	rootCmd.AddCommand(upCmd)

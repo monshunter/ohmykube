@@ -11,106 +11,146 @@ import (
 	"github.com/monshunter/ohmykube/pkg/log"
 )
 
+type osType string
+
+const (
+	osTypeDebian osType = "debian"
+	osTypeRedhat osType = "redhat"
+)
+
+type Arch string
+
+const (
+	ArchAMD64 Arch = "amd64"
+	ArchARM64 Arch = "arm64"
+)
+
 // Initializer used to initialize a single Kubernetes node environment
 type Initializer struct {
 	sshRunner SSHCommandRunner
 	nodeName  string
 	options   InitOptions
+	osType    osType
+	arch      string
+	useDnf    bool
 }
 
 // NewInitializer creates a new node initializer
-func NewInitializer(sshRunner SSHCommandRunner, nodeName string) *Initializer {
-	return &Initializer{
+func NewInitializer(sshRunner SSHCommandRunner, nodeName string) (*Initializer, error) {
+	initializer := &Initializer{
 		sshRunner: sshRunner,
 		nodeName:  nodeName,
 		options:   DefaultInitOptions(),
+		arch:      "arm64",
 	}
+	err := initializer.detectOSType()
+	if err != nil {
+		log.Errorf("Failed to detect OS type on node %s: %v", nodeName, err)
+		return nil, err
+	}
+	// No need to call detectPackageManagerForRedhat separately as it's now handled in detectOSType
+	return initializer, nil
 }
 
 // NewInitializerWithOptions creates a new node initializer with specified options
-func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, options InitOptions) *Initializer {
-	return &Initializer{
-		sshRunner: sshRunner,
-		nodeName:  nodeName,
-		options:   options,
+func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, options InitOptions) (*Initializer, error) {
+	initializer, err := NewInitializer(sshRunner, nodeName)
+	if err != nil {
+		return nil, err
+	}
+	initializer.options = options
+	return initializer, nil
+}
+
+// DoSystemUpdate updates the system package repositories based on OS type
+func (i *Initializer) DoSystemUpdate() error {
+	// Call appropriate update function based on OS type
+	switch i.osType {
+	case osTypeDebian:
+		return i.doSystemUpdateOnDebian()
+	case osTypeRedhat:
+		return i.doSystemUpdateOnRedhat()
+	default:
+		log.Infof("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		return fmt.Errorf("unsupported OS type: %s", i.osType)
 	}
 }
 
-// waitForAptLock waits for apt lock to be released
-func (i *Initializer) waitForAptLock() error {
-	maxRetries := 30          // maximum 30 retries
-	retryDelay := time.Second // wait 1 second each time
+// detectOSType determines if the system is Debian or RedHat based
+func (i *Initializer) detectOSType() error {
+	// Create a single script that performs all checks in one SSH connection
+	script := `#!/bin/bash
+# Check for OS type using distribution-specific files
+HAS_DEBIAN_VERSION=$(test -f /etc/debian_version && echo "true" || echo "false")
+HAS_REDHAT_RELEASE=$(test -f /etc/redhat-release && echo "true" || echo "false")
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Check apt lock status
-		cmd := `if fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null; then
-	echo "locked"
-else
-	echo "unlocked"
-fi`
+# Check for package managers
+APT_GET_PATH=$(command -v apt-get 2>/dev/null || echo "")
+YUM_PATH=$(command -v yum 2>/dev/null || echo "")
+DNF_PATH=$(command -v dnf 2>/dev/null || echo "")
 
-		output, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-		if err != nil {
-			return fmt.Errorf("failed to check apt lock status: %w", err)
-		}
+# Output results in a structured format
+echo "DEBIAN_VERSION=${HAS_DEBIAN_VERSION}"
+echo "REDHAT_RELEASE=${HAS_REDHAT_RELEASE}"
+echo "APT_GET_PATH=${APT_GET_PATH}"
+echo "YUM_PATH=${YUM_PATH}"
+echo "DNF_PATH=${DNF_PATH}"
+`
 
-		// If no longer locked, continue
-		if attempt > 1 && strings.TrimSpace(output) == "unlocked" {
-			log.Warningf("Apt lock released on node %s, continuing installation", i.nodeName)
-			return nil
-		}
+	output, err := i.sshRunner.RunSSHCommand(i.nodeName, script)
+	if err != nil {
+		return fmt.Errorf("failed to detect OS type on node %s: %w", i.nodeName, err)
+	}
 
-		// If still locked, wait a while and try again
-		if attempt < maxRetries {
-			log.Warningf("Apt still locked on node %s, waiting for release (attempt %d/%d)...", i.nodeName, attempt, maxRetries)
-			time.Sleep(retryDelay)
-		} else {
-			// If max retries reached, attempt to forcefully release the lock
-			log.Warningf("Timed out waiting for apt lock release on node %s, attempting to force release...", i.nodeName)
-
-			killCmd := "sudo killall apt apt-get dpkg 2>/dev/null || true"
-			_, err = i.sshRunner.RunSSHCommand(i.nodeName, killCmd)
-			if err != nil {
-				// Ignore potential errors from killall as processes may not exist
-			}
-
-			unlockCmd := `sudo rm -f /var/lib/apt/lists/lock
-						  sudo rm -f /var/cache/apt/archives/lock
-						  sudo rm -f /var/lib/dpkg/lock
-						  sudo rm -f /var/lib/dpkg/lock-frontend
-						  sudo dpkg --configure -a`
-
-			_, err = i.sshRunner.RunSSHCommand(i.nodeName, unlockCmd)
-			if err != nil {
-				return fmt.Errorf("failed to force release apt lock: %w", err)
-			}
-
-			log.Warningf("Apt lock forcefully released on node %s", i.nodeName)
-
-			// Fix: wait an extra period after force releasing the lock to ensure it's truly released
-			extraWaitTime := 10 * time.Second
-			log.Infof("Waiting an extra %s on node %s to ensure lock is fully released...", extraWaitTime, i.nodeName)
-			time.Sleep(extraWaitTime)
-
-			// Check lock status again
-			output, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-			if err != nil {
-				return fmt.Errorf("failed to check apt lock status after force release: %w", err)
-			}
-
-			if strings.TrimSpace(output) != "unlocked" {
-				return fmt.Errorf("apt lock still locked on node %s after force release", i.nodeName)
-			}
-
-			log.Infof("Confirmed apt lock fully released on node %s", i.nodeName)
-			return nil
+	// Parse the output
+	results := make(map[string]string)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			results[parts[0]] = parts[1]
 		}
 	}
 
-	return fmt.Errorf("timed out waiting for apt lock release")
+	// Log the results
+	log.Infof("OS detection results for node %s: %v", i.nodeName, results)
+
+	// Check for DNF availability for RedHat systems
+	if results["DNF_PATH"] != "" {
+		log.Infof("Detected dnf package manager on node %s", i.nodeName)
+		i.useDnf = true
+	}
+
+	// Determine OS type based on the results
+	if results["DEBIAN_VERSION"] == "true" {
+		log.Infof("Detected Debian-based system on node %s", i.nodeName)
+		i.osType = osTypeDebian
+		return nil
+	}
+
+	if results["REDHAT_RELEASE"] == "true" {
+		log.Infof("Detected RedHat-based system on node %s", i.nodeName)
+		i.osType = osTypeRedhat
+		return nil
+	}
+
+	// If we can't determine the OS type by files, check for package managers
+	if results["APT_GET_PATH"] != "" {
+		log.Infof("Detected apt-get on node %s, assuming Debian-based system", i.nodeName)
+		i.osType = osTypeDebian
+		return nil
+	}
+
+	if results["YUM_PATH"] != "" || results["DNF_PATH"] != "" {
+		log.Infof("Detected yum/dnf on node %s, assuming RedHat-based system", i.nodeName)
+		i.osType = osTypeRedhat
+		return nil
+	}
+
+	return fmt.Errorf("failed to determine OS type on node %s", i.nodeName)
 }
 
-func (i *Initializer) AptUpdate() error {
+func (i *Initializer) doSystemUpdateOnDebian() error {
 	// Update apt
 	cmd := "sudo apt-get update"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
@@ -120,12 +160,66 @@ func (i *Initializer) AptUpdate() error {
 	return nil
 }
 
+func (i *Initializer) doSystemUpdateOnRedhat() error {
+	var cmd string
+	if i.useDnf {
+		// Use dnf if available
+		log.Infof("Using dnf for system update on node %s", i.nodeName)
+		cmd = "sudo dnf update -y"
+	} else {
+		// Fall back to yum
+		log.Infof("dnf not found, using yum for system update on node %s", i.nodeName)
+		cmd = "sudo yum update -y"
+	}
+
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to update system on node %s: %w", i.nodeName, err)
+	}
+	return nil
+}
+
+// AptUpdateForFixMissing runs apt-get update with fix-missing flag for Debian-based systems
 func (i *Initializer) AptUpdateForFixMissing() error {
-	// Update apt
+	// Call appropriate update function based on OS type
+	switch i.osType {
+	case osTypeDebian:
+		return i.doAptUpdateForFixMissing()
+	case osTypeRedhat:
+		return i.doYumUpdateForFixMissing()
+	default:
+		log.Infof("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		return fmt.Errorf("unsupported OS type: %s", i.osType)
+	}
+}
+
+// doAptUpdateForFixMissing runs apt-get update with fix-missing flag
+func (i *Initializer) doAptUpdateForFixMissing() error {
+	// Update apt with fix-missing flag
 	cmd := "sudo apt-get update --fix-missing -y"
 	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
+		return fmt.Errorf("failed to update apt with fix-missing on node %s: %w", i.nodeName, err)
+	}
+	return nil
+}
+
+// doYumUpdateForFixMissing runs package manager clean all and update for RedHat-based systems
+func (i *Initializer) doYumUpdateForFixMissing() error {
+	var cmd string
+	if i.useDnf {
+		// Use dnf if available
+		log.Infof("Using dnf for fix-missing update on node %s", i.nodeName)
+		cmd = "sudo dnf clean all && sudo dnf update -y"
+	} else {
+		// Fall back to yum
+		log.Infof("dnf not found, using yum for fix-missing update on node %s", i.nodeName)
+		cmd = "sudo yum clean all && sudo yum update -y"
+	}
+
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to clean and update package repositories on node %s: %w", i.nodeName, err)
 	}
 	return nil
 }
@@ -151,249 +245,832 @@ func (i *Initializer) DisableSwap() error {
 
 // EnableIPVS enables IPVS module
 func (i *Initializer) EnableIPVS() error {
-	// Create /etc/modules-load.d/k8s.conf file
-	modulesFile := "/etc/modules-load.d/k8s.conf"
-	cmd := fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", modulesFile, ipvs.K8S_MODULES_CONFIG)
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	// Create a single script that performs all IPVS setup operations
+	// Determine OS-specific package manager command
+	var pkgInstallCmd string
+	switch i.osType {
+	case osTypeDebian:
+		pkgInstallCmd = "sudo apt-get install -y ipvsadm ipset"
+	case osTypeRedhat:
+		if i.useDnf {
+			pkgInstallCmd = "sudo dnf install -y ipvsadm ipset"
+		} else {
+			pkgInstallCmd = "sudo yum install -y ipvsadm ipset"
+		}
+	default:
+		return fmt.Errorf("unsupported OS type: %s", i.nodeName)
+	}
+
+	// Create the script with OS-specific commands
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
+
+# Detect OS type for logging
+if [ -f /etc/debian_version ]; then
+    OS_TYPE="debian"
+elif [ -f /etc/redhat-release ]; then
+    OS_TYPE="redhat"
+    # Check for dnf
+    if command -v dnf &> /dev/null; then
+        PKG_MANAGER="dnf"
+    else
+        PKG_MANAGER="yum"
+    fi
+else
+    OS_TYPE="unknown"
+fi
+
+echo "Detected OS: $OS_TYPE"
+[ "$OS_TYPE" = "redhat" ] && echo "Package manager: $PKG_MANAGER"
+
+# Step 1: Create modules file
+echo "Creating modules file..."
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf > /dev/null
+%s
+EOF
+if [ $? -eq 0 ]; then
+    log_step "CREATE_MODULES_FILE" "success"
+else
+    log_step "CREATE_MODULES_FILE" "failure"
+    exit 1
+fi
+
+# Step 2: Load kernel modules
+echo "Loading kernel modules..."
+for module in overlay br_netfilter ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh nf_conntrack; do
+    echo "Loading module: $module"
+    sudo modprobe $module
+    if [ $? -ne 0 ]; then
+        log_step "LOAD_MODULE_${module}" "failure"
+        exit 1
+    else
+        log_step "LOAD_MODULE_${module}" "success"
+    fi
+done
+
+# Step 3: Install IPVS tools
+echo "Installing IPVS tools using: %s"
+%s
+if [ $? -eq 0 ]; then
+    log_step "INSTALL_IPVS_TOOLS" "success"
+else
+    log_step "INSTALL_IPVS_TOOLS" "failure"
+    exit 1
+fi
+
+# Step 4: Create sysctl file
+echo "Creating sysctl file..."
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf > /dev/null
+%s
+EOF
+if [ $? -eq 0 ]; then
+    log_step "CREATE_SYSCTL_FILE" "success"
+else
+    log_step "CREATE_SYSCTL_FILE" "failure"
+    exit 1
+fi
+
+# Step 5: Apply sysctl settings
+echo "Applying sysctl settings..."
+sudo sysctl --system > /dev/null
+if [ $? -eq 0 ]; then
+    log_step "APPLY_SYSCTL" "success"
+else
+    log_step "APPLY_SYSCTL" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
+`, ipvs.K8S_MODULES_CONFIG, pkgInstallCmd, pkgInstallCmd, ipvs.K8S_SYSCTL_CONFIG)
+
+	// Execute the script in a single SSH connection
+	log.Infof("Enabling IPVS on node %s with OS type %s", i.nodeName, i.osType)
+	output, err := i.sshRunner.RunSSHCommand(i.nodeName, script)
 	if err != nil {
-		return fmt.Errorf("failed to create %s file on node %s: %w", modulesFile, i.nodeName, err)
+		log.Errorf("Failed to enable IPVS on node %s: %v", i.nodeName, err)
+		return fmt.Errorf("failed to enable IPVS on node %s: %w", i.nodeName, err)
 	}
 
-	// Load kernel modules
-	modules := []string{
-		"overlay",
-		"br_netfilter",
-		"ip_vs",
-		"ip_vs_rr",
-		"ip_vs_wrr",
-		"ip_vs_sh",
-		"nf_conntrack",
-	}
+	// Parse the output to check for any failures
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "STEP_STATUS:") {
+			parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+			if len(parts) == 2 {
+				step := parts[0]
+				status := parts[1]
+				log.Infof("IPVS setup step %s: %s on node %s", step, status, i.nodeName)
 
-	for _, module := range modules {
-		cmd := fmt.Sprintf("sudo modprobe %s", module)
-		_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-		if err != nil {
-			return fmt.Errorf("failed to load %s module on node %s: %w", module, i.nodeName, err)
+				if status == "failure" {
+					return fmt.Errorf("failed to complete IPVS setup step %s on node %s", step, i.nodeName)
+				}
+			}
+		} else if strings.HasPrefix(line, "Detected OS:") || strings.HasPrefix(line, "Package manager:") {
+			// Log OS detection information
+			log.Infof("%s on node %s", line, i.nodeName)
 		}
 	}
 
-	// Wait for apt lock release
-	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("failed to install IPVS tools on node %s: %w", i.nodeName, err)
-	}
-
-	// Install IPVS tools
-	cmd = "sudo apt-get install -y ipvsadm ipset"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to install IPVS tools on node %s: %w", i.nodeName, err)
-	}
-
-	// Set system parameters
-	sysctlFile := "/etc/sysctl.d/k8s.conf"
-	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", sysctlFile, ipvs.K8S_SYSCTL_CONFIG)
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create %s file on node %s: %w", sysctlFile, i.nodeName, err)
-	}
-
-	// Apply system parameters
-	cmd = "sudo sysctl --system"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to apply system parameters on node %s: %w", i.nodeName, err)
-	}
-
+	log.Infof("Successfully enabled IPVS on node %s", i.nodeName)
 	return nil
 }
 
 // EnableNetworkBridge enables network bridging
 func (i *Initializer) EnableNetworkBridge() error {
-	// Create /etc/modules-load.d/k8s.conf file
-	modulesFile := "/etc/modules-load.d/k8s.conf"
-	modulesContent := "overlay\nbr_netfilter\n"
-	cmd := fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", modulesFile, modulesContent)
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create %s file on node %s: %w", modulesFile, i.nodeName, err)
-	}
+	// Create a single script that performs all network bridge setup operations
 
-	// Load basic modules
-	modules := []string{
-		"overlay",
-		"br_netfilter",
-	}
+	script := `#!/bin/bash
+set -e
 
-	for _, module := range modules {
-		cmd := fmt.Sprintf("sudo modprobe %s", module)
-		_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-		if err != nil {
-			return fmt.Errorf("failed to load %s module on node %s: %w", module, i.nodeName, err)
-		}
-	}
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
 
-	// Set basic system parameters
-	sysctlFile := "/etc/sysctl.d/k8s.conf"
-	sysctlContent := `net.bridge.bridge-nf-call-iptables  = 1
+# Step 1: Create modules file
+echo "Creating modules file..."
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf > /dev/null
+overlay
+br_netfilter
+EOF
+if [ $? -eq 0 ]; then
+    log_step "CREATE_MODULES_FILE" "success"
+else
+    log_step "CREATE_MODULES_FILE" "failure"
+    exit 1
+fi
+
+# Step 2: Load modules
+echo "Loading modules..."
+for module in overlay br_netfilter; do
+    sudo modprobe $module
+    if [ $? -ne 0 ]; then
+        log_step "LOAD_MODULE_${module}" "failure"
+        exit 1
+    else
+        log_step "LOAD_MODULE_${module}" "success"
+    fi
+done
+
+# Step 3: Create sysctl file
+echo "Creating sysctl file..."
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf > /dev/null
+net.bridge.bridge-nf-call-iptables  = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 net.ipv4.ip_forward                 = 1
+EOF
+if [ $? -eq 0 ]; then
+    log_step "CREATE_SYSCTL_FILE" "success"
+else
+    log_step "CREATE_SYSCTL_FILE" "failure"
+    exit 1
+fi
+
+# Step 4: Apply sysctl settings
+echo "Applying sysctl settings..."
+sudo sysctl --system > /dev/null
+if [ $? -eq 0 ]; then
+    log_step "APPLY_SYSCTL" "success"
+else
+    log_step "APPLY_SYSCTL" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
 `
-	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", sysctlFile, sysctlContent)
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+
+	// Execute the script in a single SSH connection
+	output, err := i.sshRunner.RunSSHCommand(i.nodeName, script)
 	if err != nil {
-		return fmt.Errorf("failed to create %s file on node %s: %w", sysctlFile, i.nodeName, err)
+		log.Errorf("Failed to enable network bridge on node %s: %v", i.nodeName, err)
+		return fmt.Errorf("failed to enable network bridge on node %s: %w", i.nodeName, err)
 	}
 
-	// Apply system parameters
-	cmd = "sudo sysctl --system"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to apply system parameters on node %s: %w", i.nodeName, err)
-	}
+	// Parse the output to check for any failures
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "STEP_STATUS:") {
+			parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+			if len(parts) == 2 {
+				step := parts[0]
+				status := parts[1]
+				log.Infof("Network bridge setup step %s: %s on node %s", step, status, i.nodeName)
 
-	return nil
-}
-
-// InstallContainerd installs and configures containerd
-func (i *Initializer) InstallContainerd() error {
-	// Wait for apt lock release
-	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("failed to install containerd on node %s: %w", i.nodeName, err)
-	}
-
-	// Install containerd
-	cmd := "sudo apt-get install -y containerd"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to install containerd on node %s: %w", i.nodeName, err)
-	}
-
-	// Create containerd configuration directory
-	cmd = "sudo mkdir -p /etc/containerd"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create containerd configuration directory on node %s: %w", i.nodeName, err)
-	}
-
-	cmd = "sudo mkdir -p /etc/containerd/certs.d"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
-	}
-
-	// Set mirrors
-	if envar.IsEnableDefaultMiror() {
-		for _, mirror := range containerd.Mirrors() {
-			cmd = fmt.Sprintf("sudo mkdir -p /etc/containerd/certs.d/%s", mirror.Name)
-			_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-			if err != nil {
-				return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
-			}
-			cmd = fmt.Sprintf("sudo tee /etc/containerd/certs.d/%s/hosts.toml <<EOF\n%sEOF", mirror.Name, mirror.Config)
-			_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-			if err != nil {
-				return fmt.Errorf("failed to create containerd certificate directory on node %s: %w", i.nodeName, err)
+				if status == "failure" {
+					return fmt.Errorf("failed to complete network bridge setup step %s on node %s", step, i.nodeName)
+				}
 			}
 		}
 	}
 
-	// Write default configuration
-	configFile := "/etc/containerd/config.toml"
-	cmd = fmt.Sprintf("cat <<EOF | sudo tee %s\n%sEOF", configFile, containerd.CONFIG)
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create containerd configuration file on node %s: %w", i.nodeName, err)
-	}
-
-	// Restart containerd
-	cmd = "sudo systemctl restart containerd"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to restart containerd on node %s: %w", i.nodeName, err)
-	}
-
-	// Enable containerd auto-start on boot
-	cmd = "sudo systemctl enable containerd"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to enable containerd auto-start on node %s: %w", i.nodeName, err)
-	}
-
+	log.Infof("Successfully enabled network bridge on node %s", i.nodeName)
 	return nil
 }
 
-// InstallK8sComponents installs kubeadm, kubectl, kubelet
-func (i *Initializer) InstallK8sComponents() error {
-	// Wait for apt lock release
-	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
-	}
+// InstallContainerd installs and configures containerd using binary files
+func (i *Initializer) InstallContainerd() error {
+	// Define versions for containerd, runc, and CNI plugins
+	containerdVersion := i.options.ContainerdVersion // Latest stable version as of writing
+	runcVersion := i.options.RuncVersion             // Latest stable version as of writing
+	cniPluginsVersion := i.options.CNIPluginsVersion // Latest stable version as of writing
 
-	// Install dependencies
-	cmd := "sudo apt-get install -y apt-transport-https ca-certificates curl gpg"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to install dependencies on node %s: %w", i.nodeName, err)
-	}
+	// Create a script that handles the entire containerd installation process
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
 
-	// Create certificate directory
-	cmd = "sudo mkdir -p -m 755 /etc/apt/keyrings"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create certificate directory on node %s: %w", i.nodeName, err)
-	}
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
 
-	// Download k8s public key and import (add retry mechanism)
-	// Use configured K8sMirrorURL or default value
-	mirrorURL := i.options.K8sMirrorURL
-	keyURL := fmt.Sprintf("%s/Release.key", mirrorURL)
+# Step 1: Check if containerd is already installed
+if command -v containerd &> /dev/null; then
+    CONTAINERD_VERSION=$(containerd --version 2>/dev/null | cut -d " " -f 3 | tr -d ",")
+    echo "containerd already installed: $CONTAINERD_VERSION"
+    log_step "CONTAINERD_CHECK" "already_installed"
 
-	// Add retry mechanism
+    # Even if containerd is installed, we still need to configure it
+    log_step "CONTINUE_CONFIG" "true"
+else
+    log_step "CONTAINERD_CHECK" "not_installed"
+    log_step "CONTINUE_CONFIG" "true"
+fi
+
+# Step 2: Detect architecture
+ARCH=%s
+
+echo "Detected architecture: $ARCH"
+log_step "ARCH_DETECTION" "success"
+
+# Step 3: Set file paths and versions
+CONTAINERD_VERSION="%s"
+RUNC_VERSION="%s"
+CNI_PLUGINS_VERSION="%s"
+
+CONTAINERD_PACKAGE="containerd-${CONTAINERD_VERSION}-linux-${ARCH}.tar.gz"
+CONTAINERD_PACKAGE_PATH="/usr/local/src/${CONTAINERD_PACKAGE}"
+CONTAINERD_DOWNLOAD_URL="https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/${CONTAINERD_PACKAGE}"
+
+RUNC_PACKAGE="runc.${ARCH}"
+RUNC_PACKAGE_PATH="/usr/local/src/runc-${RUNC_VERSION}-${ARCH}"
+RUNC_DOWNLOAD_URL="https://github.com/opencontainers/runc/releases/download/${RUNC_VERSION}/${RUNC_PACKAGE}"
+
+CNI_PLUGINS_PACKAGE="cni-plugins-linux-${ARCH}-${CNI_PLUGINS_VERSION}.tgz"
+CNI_PLUGINS_PACKAGE_PATH="/usr/local/src/${CNI_PLUGINS_PACKAGE}"
+CNI_PLUGINS_DOWNLOAD_URL="https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/${CNI_PLUGINS_PACKAGE}"
+
+# Step 4: Install dependencies
+echo "Installing dependencies..."
+sudo mkdir -p /usr/local/src
+sudo mkdir -p /opt/cni/bin
+sudo mkdir -p /etc/containerd/certs.d
+
+# Step 5: Download and install containerd if needed
+if [ -f "$CONTAINERD_PACKAGE_PATH" ]; then
+    echo "containerd package already exists at $CONTAINERD_PACKAGE_PATH"
+    log_step "CONTAINERD_PACKAGE_CHECK" "exists"
+else
+    echo "Downloading containerd from $CONTAINERD_DOWNLOAD_URL"
+    sudo curl -L "$CONTAINERD_DOWNLOAD_URL" -o "$CONTAINERD_PACKAGE_PATH"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded containerd to $CONTAINERD_PACKAGE_PATH"
+        log_step "DOWNLOAD_CONTAINERD" "success"
+    else
+        echo "Failed to download containerd"
+        log_step "DOWNLOAD_CONTAINERD" "failure"
+        exit 1
+    fi
+fi
+
+# Extract and install containerd if not already installed
+if ! command -v containerd &> /dev/null; then
+    echo "Extracting and installing containerd"
+    sudo tar -xzf "$CONTAINERD_PACKAGE_PATH" -C /usr/local
+    if [ $? -ne 0 ]; then
+        echo "Failed to extract containerd"
+        log_step "EXTRACT_CONTAINERD" "failure"
+        exit 1
+    fi
+    log_step "EXTRACT_CONTAINERD" "success"
+else
+    log_step "EXTRACT_CONTAINERD" "skipped"
+fi
+
+# Step 6: Download and install runc if needed
+if [ -f "$RUNC_PACKAGE_PATH" ]; then
+    echo "runc package already exists at $RUNC_PACKAGE_PATH"
+    log_step "RUNC_PACKAGE_CHECK" "exists"
+else
+    echo "Downloading runc from $RUNC_DOWNLOAD_URL"
+    sudo curl -L "$RUNC_DOWNLOAD_URL" -o "$RUNC_PACKAGE_PATH"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded runc to $RUNC_PACKAGE_PATH"
+        log_step "DOWNLOAD_RUNC" "success"
+    else
+        echo "Failed to download runc"
+        log_step "DOWNLOAD_RUNC" "failure"
+        exit 1
+    fi
+fi
+
+# Install runc
+echo "Installing runc"
+sudo install -m 755 "$RUNC_PACKAGE_PATH" /usr/local/bin/runc
+if [ $? -ne 0 ]; then
+    echo "Failed to install runc"
+    log_step "INSTALL_RUNC" "failure"
+    exit 1
+fi
+log_step "INSTALL_RUNC" "success"
+
+# Step 7: Download and install CNI plugins if needed
+if [ -f "$CNI_PLUGINS_PACKAGE_PATH" ]; then
+    echo "CNI plugins package already exists at $CNI_PLUGINS_PACKAGE_PATH"
+    log_step "CNI_PLUGINS_PACKAGE_CHECK" "exists"
+else
+    echo "Downloading CNI plugins from $CNI_PLUGINS_DOWNLOAD_URL"
+    sudo curl -L "$CNI_PLUGINS_DOWNLOAD_URL" -o "$CNI_PLUGINS_PACKAGE_PATH"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded CNI plugins to $CNI_PLUGINS_PACKAGE_PATH"
+        log_step "DOWNLOAD_CNI_PLUGINS" "success"
+    else
+        echo "Failed to download CNI plugins"
+        log_step "DOWNLOAD_CNI_PLUGINS" "failure"
+        exit 1
+    fi
+fi
+
+# Extract and install CNI plugins
+echo "Extracting and installing CNI plugins"
+sudo mkdir -p /opt/cni/bin
+sudo tar -xzf "$CNI_PLUGINS_PACKAGE_PATH" -C /opt/cni/bin
+if [ $? -ne 0 ]; then
+    echo "Failed to extract CNI plugins"
+    log_step "EXTRACT_CNI_PLUGINS" "failure"
+    exit 1
+fi
+log_step "EXTRACT_CNI_PLUGINS" "success"
+
+# Step 8: Create containerd systemd service
+echo "Creating containerd systemd service"
+cat <<EOF | sudo tee /etc/systemd/system/containerd.service >/dev/null
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target local-fs.target dbus.service
+
+[Service]
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/containerd
+
+Type=notify
+Delegate=yes
+KillMode=process
+Restart=always
+RestartSec=5
+
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNPROC=infinity
+LimitCORE=infinity
+
+# Comment TasksMax if your systemd version does not supports it.
+# Only systemd 226 and above support this version.
+TasksMax=infinity
+OOMScoreAdjust=-999
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if [ $? -ne 0 ]; then
+    echo "Failed to create containerd systemd service"
+    log_step "CREATE_CONTAINERD_SERVICE" "failure"
+    exit 1
+fi
+log_step "CREATE_CONTAINERD_SERVICE" "success"
+
+# Step 9: Create containerd configuration directory
+echo "Creating containerd configuration"
+sudo mkdir -p /etc/containerd
+
+# Step 10: Generate default containerd config
+if command -v containerd &> /dev/null; then
+    echo "Generating default containerd config"
+    containerd config default | sudo tee /etc/containerd/config.toml.default > /dev/null
+    if [ $? -ne 0 ]; then
+        echo "Failed to generate default containerd config"
+        log_step "GENERATE_DEFAULT_CONFIG" "failure"
+    else
+        log_step "GENERATE_DEFAULT_CONFIG" "success"
+    fi
+fi
+
+# Step 11: Write custom configuration
+echo "Writing containerd configuration"
+cat <<EOF | sudo tee /etc/containerd/config.toml >/dev/null
+%s
+EOF
+
+if [ $? -ne 0 ]; then
+    echo "Failed to create containerd configuration file"
+    log_step "CREATE_CONFIG" "failure"
+    exit 1
+fi
+log_step "CREATE_CONFIG" "success"
+
+# Step 12: Set up mirrors if needed
+echo "Setting up containerd mirrors"
+%s
+
+# Step 13: Reload systemd and restart containerd
+echo "Reloading systemd and starting containerd"
+sudo systemctl daemon-reload
+sudo systemctl enable containerd
+sudo systemctl restart containerd
+if [ $? -ne 0 ]; then
+    echo "Failed to start containerd service"
+    log_step "START_CONTAINERD" "failure"
+    exit 1
+fi
+log_step "START_CONTAINERD" "success"
+
+# Step 14: Verify installation
+echo "Verifying installation"
+if command -v containerd &> /dev/null && command -v runc &> /dev/null; then
+    CONTAINERD_VERSION_INSTALLED=$(containerd --version 2>/dev/null | cut -d " " -f 3 | tr -d ",")
+    RUNC_VERSION_INSTALLED=$(runc --version 2>/dev/null | head -1 | cut -d " " -f 3)
+
+    echo "Successfully installed container runtime components:"
+    echo "containerd: $CONTAINERD_VERSION_INSTALLED"
+    echo "runc: $RUNC_VERSION_INSTALLED"
+    echo "CNI plugins: v$CNI_PLUGINS_VERSION"
+
+    log_step "VERIFY_INSTALLATION" "success"
+else
+    echo "Failed to verify installation of container runtime components"
+    log_step "VERIFY_INSTALLATION" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
+`, i.arch, containerdVersion, runcVersion, cniPluginsVersion, containerd.CONFIG, getMirrorSetupScript())
+
+	// Execute the script in a single SSH connection
+	log.Infof("Installing containerd on node %s", i.nodeName)
+
+	// Set up retry logic
 	maxRetries := 3
 	retryDelay := 5 * time.Second
-	var downloadErr error
+	var output string
+	var err error
 
 	for retry := 0; retry < maxRetries; retry++ {
-		downloadKeyCmd := fmt.Sprintf("curl -fsSL %s | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg", keyURL)
-		_, downloadErr = i.sshRunner.RunSSHCommand(i.nodeName, downloadKeyCmd)
+		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
 
-		if downloadErr == nil {
-			// Successfully downloaded and imported key
-			break
+		// Parse the output to check for any failures or if already installed
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		var alreadyInstalled bool
+
+		for _, line := range lines {
+			if strings.HasPrefix(line, "STEP_STATUS:") {
+				parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+				if len(parts) == 2 {
+					step := parts[0]
+					status := parts[1]
+					log.Infof("containerd installation step %s: %s on node %s", step, status, i.nodeName)
+
+					// Check if containerd is already installed
+					if step == "CONTAINERD_CHECK" && status == "already_installed" {
+						alreadyInstalled = true
+						log.Infof("containerd already installed on node %s, continuing with configuration", i.nodeName)
+					}
+
+					// Check if we should continue with configuration
+					if step == "CONTINUE_CONFIG" && status == "true" {
+						// Configuration will continue regardless
+						log.Infof("Continuing with containerd configuration on node %s", i.nodeName)
+					}
+
+					// If any step failed, log it but continue with retry logic
+					if status == "failure" && retry < maxRetries-1 {
+						log.Infof("containerd installation step %s failed on node %s, will retry", step, i.nodeName)
+					}
+				}
+			} else if strings.Contains(line, "already installed") {
+				log.Infof("%s on node %s", line, i.nodeName)
+			}
+		}
+
+		if err == nil {
+			// Check if overall process was successful
+			for _, line := range lines {
+				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
+					if alreadyInstalled {
+						log.Infof("Successfully configured containerd on node %s", i.nodeName)
+					} else {
+						log.Infof("Successfully installed and configured containerd on node %s", i.nodeName)
+					}
+					return nil
+				}
+			}
 		}
 
 		if retry < maxRetries-1 {
-			log.Infof("Failed to download and import K8s key on node %s, retrying in %v (%d/%d)...",
+			log.Infof("Failed to install containerd on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
 	}
 
-	if downloadErr != nil {
-		return fmt.Errorf("failed to download and import K8s key on node %s: %w", i.nodeName, downloadErr)
-	}
-
-	// Add k8s source
-	repoURL := fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] %s/ /", mirrorURL)
-	cmd = fmt.Sprintf("echo '%s' | sudo tee /etc/apt/sources.list.d/kubernetes.list", repoURL)
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("failed to add Kubernetes source on node %s: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install containerd on node %s after %d attempts: %w", i.nodeName, maxRetries, err)
 	}
 
-	// Wait for apt lock release
-	if err := i.waitForAptLock(); err != nil {
-		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
+	return fmt.Errorf("failed to install containerd on node %s after %d attempts", i.nodeName, maxRetries)
+}
+
+// getMirrorSetupScript generates the script for setting up containerd mirrors
+func getMirrorSetupScript() string {
+	if !envar.IsEnableDefaultMiror() {
+		return "# No mirrors configured"
 	}
-	// Install k8s components (add retry mechanism)
-	maxRetries = 3
+
+	var mirrorScript strings.Builder
+	for _, mirror := range containerd.Mirrors() {
+		mirrorScript.WriteString(fmt.Sprintf(`
+sudo mkdir -p /etc/containerd/certs.d/%s
+cat <<EOF | sudo tee /etc/containerd/certs.d/%s/hosts.toml >/dev/null
+%s
+EOF
+`, mirror.Name, mirror.Name, mirror.Config))
+	}
+
+	return mirrorScript.String()
+}
+
+// InstallK8sComponents installs kubeadm, kubectl, kubelet using binary files
+func (i *Initializer) InstallK8sComponents() error {
+	// Define the Kubernetes version to install
+	// Create a script that handles the entire Kubernetes components installation process
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
+
+# Step 1: Check if components are already installed
+if command -v kubelet &> /dev/null && command -v kubeadm &> /dev/null && command -v kubectl &> /dev/null; then
+    KUBELET_VERSION=$(kubelet --version 2>/dev/null | cut -d " " -f 2)
+    KUBEADM_VERSION=$(kubeadm version -o short 2>/dev/null)
+    KUBECTL_VERSION=$(kubectl version --client -o yaml 2>/dev/null | grep -i gitVersion | head -1 | cut -d ":" -f 2 | tr -d " ")
+    echo "Kubernetes components already installed:"
+    echo "kubelet: $KUBELET_VERSION"
+    echo "kubeadm: $KUBEADM_VERSION"
+    echo "kubectl: $KUBECTL_VERSION"
+    log_step "K8S_CHECK" "already_installed"
+    exit 0
+fi
+
+# Step 2: Detect architecture
+ARCH=%s
+echo "Detected architecture: $ARCH"
+log_step "ARCH_DETECTION" "success"
+
+# Step 3: Set file paths and versions
+K8S_VERSION="%s"
+DOWNLOAD_BASE_URL="https://dl.k8s.io/release/$K8S_VERSION/bin/linux/$ARCH"
+KUBECTL_PACKAGE="/usr/local/src/kubectl-$K8S_VERSION-$ARCH"
+KUBEADM_PACKAGE="/usr/local/src/kubeadm-$K8S_VERSION-$ARCH"
+KUBELET_PACKAGE="/usr/local/src/kubelet-$K8S_VERSION-$ARCH"
+
+# Step 4: Download kubectl if needed
+if [ -f "$KUBECTL_PACKAGE" ]; then
+    echo "kubectl package already exists at $KUBECTL_PACKAGE"
+    log_step "KUBECTL_PACKAGE_CHECK" "exists"
+else
+    echo "Downloading kubectl from $DOWNLOAD_BASE_URL/kubectl"
+    sudo mkdir -p /usr/local/src
+    sudo curl -L "$DOWNLOAD_BASE_URL/kubectl" -o "$KUBECTL_PACKAGE"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded kubectl to $KUBECTL_PACKAGE"
+        log_step "DOWNLOAD_KUBECTL" "success"
+    else
+        echo "Failed to download kubectl"
+        log_step "DOWNLOAD_KUBECTL" "failure"
+        exit 1
+    fi
+fi
+
+# Step 5: Download kubeadm if needed
+if [ -f "$KUBEADM_PACKAGE" ]; then
+    echo "kubeadm package already exists at $KUBEADM_PACKAGE"
+    log_step "KUBEADM_PACKAGE_CHECK" "exists"
+else
+    echo "Downloading kubeadm from $DOWNLOAD_BASE_URL/kubeadm"
+    sudo curl -L "$DOWNLOAD_BASE_URL/kubeadm" -o "$KUBEADM_PACKAGE"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded kubeadm to $KUBEADM_PACKAGE"
+        log_step "DOWNLOAD_KUBEADM" "success"
+    else
+        echo "Failed to download kubeadm"
+        log_step "DOWNLOAD_KUBEADM" "failure"
+        exit 1
+    fi
+fi
+
+# Step 6: Download kubelet if needed
+if [ -f "$KUBELET_PACKAGE" ]; then
+    echo "kubelet package already exists at $KUBELET_PACKAGE"
+    log_step "KUBELET_PACKAGE_CHECK" "exists"
+else
+    echo "Downloading kubelet from $DOWNLOAD_BASE_URL/kubelet"
+    sudo curl -L "$DOWNLOAD_BASE_URL/kubelet" -o "$KUBELET_PACKAGE"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded kubelet to $KUBELET_PACKAGE"
+        log_step "DOWNLOAD_KUBELET" "success"
+    else
+        echo "Failed to download kubelet"
+        log_step "DOWNLOAD_KUBELET" "failure"
+        exit 1
+    fi
+fi
+
+# Step 7: Install kubectl
+echo "Installing kubectl"
+sudo install -o root -g root -m 0755 "$KUBECTL_PACKAGE" /usr/bin/kubectl
+if [ $? -ne 0 ]; then
+    echo "Failed to install kubectl"
+    log_step "INSTALL_KUBECTL" "failure"
+    exit 1
+fi
+
+log_step "INSTALL_KUBECTL" "success"
+
+# Step 8: Install kubeadm
+echo "Installing kubeadm"
+sudo install -o root -g root -m 0755 "$KUBEADM_PACKAGE" /usr/bin/kubeadm
+if [ $? -ne 0 ]; then
+    echo "Failed to install kubeadm"
+    log_step "INSTALL_KUBEADM" "failure"
+    exit 1
+fi
+
+log_step "INSTALL_KUBEADM" "success"
+
+# Step 9: Install kubelet
+echo "Installing kubelet"
+sudo install -o root -g root -m 0755 "$KUBELET_PACKAGE" /usr/bin/kubelet
+if [ $? -ne 0 ]; then
+    echo "Failed to install kubelet"
+    log_step "INSTALL_KUBELET" "failure"
+    exit 1
+fi
+
+log_step "INSTALL_KUBELET" "success"
+
+# Step 10: Create kubelet systemd service
+echo "Creating kubelet systemd service"
+sudo mkdir -p /etc/systemd/system/kubelet.service.d
+cat <<EOF | sudo tee /etc/systemd/system/kubelet.service >/dev/null
+[Unit]
+Description=kubelet: The Kubernetes Node Agent
+Documentation=https://kubernetes.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/kubelet
+Restart=always
+StartLimitInterval=0
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/kubelet.service.d/10-kubeadm.conf >/dev/null
+# Note: This dropin only works with kubeadm and kubelet v1.11+
+[Service]
+Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
+Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"
+# This is a file that "kubeadm init" and "kubeadm join" generates at runtime, populating the KUBELET_KUBEADM_ARGS variable dynamically
+EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+# This is a file that the user can use for overrides of the kubelet args as a last resort. Preferably, the user should use
+# the .NodeRegistration.KubeletExtraArgs object in the configuration files instead. KUBELET_EXTRA_ARGS should be sourced from this file.
+EnvironmentFile=-/etc/default/kubelet
+ExecStart=
+ExecStart=/usr/bin/kubelet \$KUBELET_KUBECONFIG_ARGS \$KUBELET_CONFIG_ARGS \$KUBELET_KUBEADM_ARGS \$KUBELET_EXTRA_ARGS
+EOF
+
+if [ $? -ne 0 ]; then
+    echo "Failed to create kubelet systemd service"
+    log_step "CREATE_KUBELET_SERVICE" "failure"
+    exit 1
+fi
+log_step "CREATE_KUBELET_SERVICE" "success"
+
+# Step 11: Create directories needed by kubelet
+echo "Creating kubelet directories"
+sudo mkdir -p /etc/kubernetes/manifests
+sudo mkdir -p /var/lib/kubelet
+sudo mkdir -p /var/log/kubernetes
+if [ $? -ne 0 ]; then
+    echo "Failed to create kubelet directories"
+    log_step "CREATE_KUBELET_DIRS" "failure"
+    exit 1
+fi
+log_step "CREATE_KUBELET_DIRS" "success"
+
+# Step 12: Enable and start kubelet service
+echo "Enabling kubelet service"
+sudo systemctl daemon-reload
+sudo systemctl enable kubelet
+if [ $? -ne 0 ]; then
+    echo "Failed to enable kubelet service"
+    log_step "ENABLE_KUBELET" "failure"
+    exit 1
+fi
+log_step "ENABLE_KUBELET" "success"
+
+# Step 13: Verify installation
+echo "Verifying installation"
+KUBECTL_INSTALLED=$(command -v kubectl >/dev/null 2>&1 && echo "yes" || echo "no")
+KUBEADM_INSTALLED=$(command -v kubeadm >/dev/null 2>&1 && echo "yes" || echo "no")
+KUBELET_INSTALLED=$(command -v kubelet >/dev/null 2>&1 && echo "yes" || echo "no")
+
+if [ "$KUBECTL_INSTALLED" = "yes" ] && [ "$KUBEADM_INSTALLED" = "yes" ] && [ "$KUBELET_INSTALLED" = "yes" ]; then
+    echo "Successfully installed Kubernetes components:"
+    echo "kubectl: $(kubectl version --client -o yaml 2>/dev/null | grep -i gitVersion | head -1 | cut -d ":" -f 2 | tr -d " ")"
+    echo "kubeadm: $(kubeadm version -o short 2>/dev/null)"
+    echo "kubelet: $(kubelet --version 2>/dev/null | cut -d " " -f 2)"
+    log_step "VERIFY_INSTALLATION" "success"
+else
+    echo "Failed to verify installation of Kubernetes components"
+    log_step "VERIFY_INSTALLATION" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
+`, i.arch, i.options.K8SVersion)
+
+	// Execute the script in a single SSH connection
+	log.Infof("Installing Kubernetes components on node %s", i.nodeName)
+
+	// Set up retry logic
+	maxRetries := 3
+	retryDelay := 5 * time.Second
+	var output string
+	var err error
+
 	for retry := 0; retry < maxRetries; retry++ {
-		cmd = "sudo apt-get install -y kubelet kubeadm kubectl"
-		_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
+
+		// Parse the output to check for any failures or if already installed
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "STEP_STATUS:") {
+				parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+				if len(parts) == 2 {
+					step := parts[0]
+					status := parts[1]
+					log.Infof("K8s installation step %s: %s on node %s", step, status, i.nodeName)
+
+					// If components are already installed, return success
+					if step == "K8S_CHECK" && status == "already_installed" {
+						log.Infof("Kubernetes components already installed on node %s, skipping", i.nodeName)
+						return nil
+					}
+
+					// If any step failed, log it but continue with retry logic
+					if status == "failure" && retry < maxRetries-1 {
+						log.Infof("K8s installation step %s failed on node %s, will retry", step, i.nodeName)
+					}
+				}
+			} else if strings.Contains(line, "already installed") {
+				log.Infof("%s on node %s", line, i.nodeName)
+			}
+		}
 
 		if err == nil {
-			break
+			// Check if overall process was successful
+			for _, line := range lines {
+				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
+					log.Infof("Successfully installed Kubernetes components on node %s", i.nodeName)
+					return nil
+				}
+			}
 		}
 
 		if retry < maxRetries-1 {
@@ -404,46 +1081,149 @@ func (i *Initializer) InstallK8sComponents() error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to install Kubernetes components on node %s: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install Kubernetes components on node %s after %d attempts: %w", i.nodeName, maxRetries, err)
 	}
 
-	// Lock version
-	cmd = "sudo apt-mark hold kubelet kubeadm kubectl"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to lock Kubernetes components version on node %s: %w", i.nodeName, err)
-	}
-
-	// Enable kubelet
-	cmd = "sudo systemctl enable --now kubelet"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to enable kubelet on node %s: %w", i.nodeName, err)
-	}
-
-	return nil
+	return fmt.Errorf("failed to install Kubernetes components on node %s after %d attempts", i.nodeName, maxRetries)
 }
 
-// InstallHelm installs Helm
+// InstallHelm installs Helm using binary files
 func (i *Initializer) InstallHelm() error {
-	// Check if Helm is already installed
-	cmd := "command -v helm && echo 'Helm installed' || echo 'Helm not installed'"
-	output, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
-	if err == nil && output == "Helm installed" {
-		log.Infof("Helm already installed on node %s, skipping", i.nodeName)
-		return nil
-	}
+	// Create a script that handles the entire Helm installation process
+	// This includes checking if Helm is installed, detecting architecture,
+	// downloading the binary if needed, and installing it
 
-	// Install Helm (add retry mechanism)
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
+
+# Step 1: Check if Helm is already installed
+if command -v helm &> /dev/null; then
+    HELM_VERSION=$(helm version --short 2>/dev/null | cut -d "+" -f 1)
+    echo "Helm already installed: $HELM_VERSION"
+    log_step "HELM_CHECK" "already_installed"
+    exit 0
+fi
+
+# Step 2: Detect architecture
+ARCH=%s
+echo "Detected architecture: $ARCH"
+log_step "ARCH_DETECTION" "success"
+
+# Step 3: Set file paths
+HELM_VERSION="%s"
+HELM_PACKAGE="helm-$HELM_VERSION-linux-$ARCH.tar.gz"
+HELM_PACKAGE_PATH="/usr/local/src/$HELM_PACKAGE"
+DOWNLOAD_URL="https://get.helm.sh/$HELM_PACKAGE"
+
+# Step 4: Check if the package already exists
+if [ -f "$HELM_PACKAGE_PATH" ]; then
+    echo "Helm package already exists at $HELM_PACKAGE_PATH"
+    log_step "PACKAGE_CHECK" "exists"
+else
+    echo "Downloading Helm package from $DOWNLOAD_URL"
+    sudo mkdir -p /usr/local/src
+    sudo curl -sSL "$DOWNLOAD_URL" -o "$HELM_PACKAGE_PATH"
+    if [ $? -eq 0 ]; then
+        echo "Successfully downloaded Helm package to $HELM_PACKAGE_PATH"
+        log_step "DOWNLOAD_HELM" "success"
+    else
+        echo "Failed to download Helm package"
+        log_step "DOWNLOAD_HELM" "failure"
+        exit 1
+    fi
+fi
+
+# Step 5: Extract and install Helm
+echo "Extracting and installing Helm"
+sudo mkdir -p /tmp/helm-install
+sudo tar -zxf "$HELM_PACKAGE_PATH" -C /tmp/helm-install
+if [ $? -ne 0 ]; then
+    echo "Failed to extract Helm package"
+    log_step "EXTRACT_HELM" "failure"
+    exit 1
+fi
+log_step "EXTRACT_HELM" "success"
+
+# Step 6: Move binary to /usr/local/bin
+sudo mv /tmp/helm-install/linux-$ARCH/helm /usr/local/bin/helm
+if [ $? -ne 0 ]; then
+    echo "Failed to move Helm binary to /usr/local/bin"
+    log_step "INSTALL_HELM" "failure"
+    exit 1
+fi
+sudo chmod +x /usr/local/bin/helm
+log_step "INSTALL_HELM" "success"
+
+# Step 7: Clean up
+sudo rm -rf /tmp/helm-install
+log_step "CLEANUP" "success"
+
+# Step 8: Verify installation
+INSTALLED_VERSION=$(helm version --short 2>/dev/null | cut -d "+" -f 1)
+if [ -n "$INSTALLED_VERSION" ]; then
+    echo "Successfully installed Helm $INSTALLED_VERSION"
+    log_step "VERIFY_HELM" "success"
+else
+    echo "Failed to verify Helm installation"
+    log_step "VERIFY_HELM" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
+`, i.arch, i.options.HelmVersion)
+
+	// Execute the script in a single SSH connection
+	log.Infof("Installing Helm on node %s", i.nodeName)
+
+	// Set up retry logic
 	maxRetries := 3
 	retryDelay := 5 * time.Second
+	var output string
+	var err error
 
 	for retry := 0; retry < maxRetries; retry++ {
-		cmd = `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash`
-		_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
+
+		// Parse the output to check for any failures or if already installed
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "STEP_STATUS:") {
+				parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+				if len(parts) == 2 {
+					step := parts[0]
+					status := parts[1]
+					log.Infof("Helm installation step %s: %s on node %s", step, status, i.nodeName)
+
+					// If Helm is already installed, return success
+					if step == "HELM_CHECK" && status == "already_installed" {
+						log.Infof("Helm already installed on node %s, skipping", i.nodeName)
+						return nil
+					}
+
+					// If any step failed, log it but continue with retry logic
+					if status == "failure" && retry < maxRetries-1 {
+						log.Infof("Helm installation step %s failed on node %s, will retry", step, i.nodeName)
+					}
+				}
+			} else if strings.Contains(line, "already installed") {
+				log.Infof("%s on node %s", line, i.nodeName)
+			}
+		}
 
 		if err == nil {
-			break
+			// Check if overall process was successful
+			for _, line := range lines {
+				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
+					log.Infof("Successfully installed Helm on node %s", i.nodeName)
+					return nil
+				}
+			}
 		}
 
 		if retry < maxRetries-1 {
@@ -454,16 +1234,15 @@ func (i *Initializer) InstallHelm() error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to install Helm on node %s: %w", i.nodeName, err)
+		return fmt.Errorf("failed to install Helm on node %s after %d attempts: %w", i.nodeName, maxRetries, err)
 	}
 
-	log.Infof("Successfully installed Helm on node %s", i.nodeName)
-	return nil
+	return fmt.Errorf("failed to install Helm on node %s after %d attempts", i.nodeName, maxRetries)
 }
 
 // Initialize executes all initialization steps
 func (i *Initializer) Initialize() error {
-	if err := i.AptUpdate(); err != nil {
+	if err := i.DoSystemUpdate(); err != nil {
 		return err
 	}
 	// Based on options, disable swap if specified
@@ -476,6 +1255,7 @@ func (i *Initializer) Initialize() error {
 	// Based on options, enable IPVS if specified
 	if i.options.EnableIPVS {
 		if err := i.EnableIPVS(); err != nil {
+			// Try to update package repositories and retry
 			if err := i.AptUpdateForFixMissing(); err != nil {
 				return err
 			}
@@ -486,13 +1266,20 @@ func (i *Initializer) Initialize() error {
 	} else {
 		// If not enabling IPVS, still need to set network bridging
 		if err := i.EnableNetworkBridge(); err != nil {
-			return err
+			// Try to update package repositories and retry
+			if err := i.AptUpdateForFixMissing(); err != nil {
+				return err
+			}
+			if err := i.EnableNetworkBridge(); err != nil {
+				return err
+			}
 		}
 	}
 
 	// Install container runtime
 	if i.options.ContainerRuntime == "containerd" {
 		if err := i.InstallContainerd(); err != nil {
+			// Try to update package repositories and retry
 			if err := i.AptUpdateForFixMissing(); err != nil {
 				return err
 			}
@@ -502,7 +1289,9 @@ func (i *Initializer) Initialize() error {
 		}
 	}
 
+	// Install Kubernetes components
 	if err := i.InstallK8sComponents(); err != nil {
+		// Try to update package repositories and retry
 		if err := i.AptUpdateForFixMissing(); err != nil {
 			return err
 		}

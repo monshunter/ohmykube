@@ -43,7 +43,7 @@ var addCmd = &cobra.Command{
 		}
 		config.SetKubernetesVersion(clusterInfo.Spec.K8sVersion)
 		config.SetLauncherType(clusterInfo.Spec.Launcher)
-		config.SetTemplate(limaFile)
+		config.SetTemplate(limaTemplate)
 		config.SetParallel(parallel)
 
 		// Create cluster manager

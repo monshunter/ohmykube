@@ -24,6 +24,11 @@ func NewLimactlLauncher(fileOrTemplate, password, sshKey, sshPubKey string, para
 	if err := checkLimactlInstalled(); err != nil {
 		return nil, err
 	}
+
+	if !(strings.HasSuffix(fileOrTemplate, ".yaml") || strings.HasPrefix(fileOrTemplate, ".yml")) {
+		fileOrTemplate = "template://" + fileOrTemplate
+	}
+
 	return &LimactlLauncher{
 		FileOrTemplate: fileOrTemplate,
 		Password:       password,

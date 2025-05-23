@@ -75,7 +75,7 @@ var upCmd = &cobra.Command{
 			})
 		config.SetKubernetesVersion(k8sVersion)
 		config.SetLauncherType(launcherType.String())
-		config.SetTemplate(limaFile)
+		config.SetTemplate(limaTemplate)
 
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
