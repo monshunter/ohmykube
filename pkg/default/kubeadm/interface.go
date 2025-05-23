@@ -14,9 +14,9 @@ import (
 // Returns:
 // - generated config file path
 // - error message
-func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode string) (string, error) {
+func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode string, advertiseAddress string) (string, error) {
 	// Create base config
-	config := NewConfig(k8sVersion, proxyMode)
+	config := NewConfig(k8sVersion, proxyMode, advertiseAddress)
 
 	// If custom config exists, load and merge it
 	if customConfigPath != "" {
@@ -74,7 +74,7 @@ func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode
 // - error message
 func LoadAndMergeConfigs(configPaths []string) (*Config, error) {
 	if len(configPaths) == 0 {
-		return NewConfig("", ""), nil
+		return NewConfig("", "", ""), nil
 	}
 
 	// Load first config as base
@@ -98,5 +98,5 @@ func LoadAndMergeConfigs(configPaths []string) (*Config, error) {
 
 // GetDefaultConfig gets the default kubeadm config
 func GetDefaultConfig() *Config {
-	return NewConfig("", "")
+	return NewConfig("", "", "")
 }

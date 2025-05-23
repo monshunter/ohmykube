@@ -7,8 +7,8 @@ import (
 )
 
 // loadInitConfig loads the default InitConfiguration configuration
-func loadInitConfig() YAMLDocument {
-	yamlStr := `
+func loadInitConfig(advertiseAddress string) YAMLDocument {
+	yamlTemplate := `
 apiVersion: kubeadm.k8s.io/v1beta4
 # Bootstrap tokens are used for node joining
 # This is a fixed token with a very long TTL for local testing purposes
@@ -28,7 +28,11 @@ bootstrapTokens:
 kind: InitConfiguration
 nodeRegistration:
   criSocket: unix:///var/run/containerd/containerd.sock
+localAPIEndpoint:
+  advertiseAddress: "%s"
+  bindPort: 6443
 `
+	yamlStr := fmt.Sprintf(yamlTemplate, advertiseAddress)
 	var doc YAMLDocument
 	yaml.Unmarshal([]byte(yamlStr), &doc)
 	return doc
@@ -110,7 +114,8 @@ logging:
 memorySwap: {}
 nodeStatusReportFrequency: 0s
 nodeStatusUpdateFrequency: 0s
-resolvConf: /run/systemd/resolve/resolv.conf
+# resolvConf: /run/systemd/resolve/resolv.conf
+resolvConf: /etc/resolv.conf
 rotateCertificates: true
 runtimeRequestTimeout: 0s
 shutdownGracePeriod: 0s

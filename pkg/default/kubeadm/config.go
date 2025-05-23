@@ -39,9 +39,9 @@ type Config struct {
 }
 
 // NewConfig creates a new configuration instance with default values
-func NewConfig(version string, proxyMode string) *Config {
+func NewConfig(version string, proxyMode string, advertiseAddress string) *Config {
 	return &Config{
-		InitConfig:      loadInitConfig(),
+		InitConfig:      loadInitConfig(advertiseAddress),
 		ClusterConfig:   loadClusterConfig(version),
 		KubeletConfig:   loadKubeletConfig(),
 		KubeProxyConfig: loadKubeProxyConfig(proxyMode),
@@ -60,7 +60,7 @@ func LoadFromFile(filePath string) (*Config, error) {
 
 // LoadFromBytes loads configuration from byte data
 func LoadFromBytes(data []byte) (*Config, error) {
-	config := NewConfig("", "")
+	config := NewConfig("", "", "")
 
 	// Split data into multiple YAML documents
 	docs, err := splitYAMLDocuments(data)
@@ -97,7 +97,7 @@ func LoadFromBytes(data []byte) (*Config, error) {
 
 // MergeWith merges another configuration with the current one
 func (c *Config) MergeWith(other *Config) *Config {
-	result := NewConfig("", "")
+	result := NewConfig("", "", "")
 
 	// Merge each configuration section
 	if other.InitConfig != nil {

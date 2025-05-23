@@ -266,7 +266,6 @@ func (m *Manager) CreateCluster() error {
 	} else {
 		log.Info("Skipping VM creation as it was already completed")
 	}
-
 	// 2. Initialize environment if not already done
 	if !m.Cluster.HasCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue) ||
 		!m.Cluster.HasAllNodeCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue) {
@@ -857,7 +856,7 @@ func (m *Manager) InstallLoadBalancer() error {
 	}
 
 	// Use MetalLB installer
-	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Cluster.GetMasterName())
+	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Cluster.GetMasterIP())
 	if err := metallbInstaller.Install(); err != nil {
 		m.Cluster.SetCondition(cluster.ConditionTypeLBInstalled, cluster.ConditionStatusFalse,
 			"InstallationFailed", fmt.Sprintf("Failed to install MetalLB: %v", err))

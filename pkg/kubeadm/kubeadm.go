@@ -38,11 +38,13 @@ func NewKubeadmConfig(sshManager *ssh.SSHManager, k8sVersion string, masterNode 
 
 // InitMaster initializes Kubernetes control plane
 func (k *KubeadmConfig) InitMaster() error {
+	masterIP := k.SSHManager.GetIP(k.MasterNode)
 	// Use new configuration generation system
 	configPath, err := kubeadm.GenerateKubeadmConfig(
 		k.KubernetesVersion,
 		k.CustomConfigPath,
 		k.ProxyMode,
+		masterIP,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate kubeadm configuration: %w", err)

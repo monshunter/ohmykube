@@ -11,14 +11,14 @@ import (
 // MetalLBInstaller used for installing and configuring MetalLB load balancer
 type MetalLBInstaller struct {
 	sshClient *ssh.Client
-	nodeName  string
+	masterIP  string
 }
 
 // NewMetalLBInstaller creates a new MetalLB installer
-func NewMetalLBInstaller(sshClient *ssh.Client, nodeName string) *MetalLBInstaller {
+func NewMetalLBInstaller(sshClient *ssh.Client, masterIP string) *MetalLBInstaller {
 	return &MetalLBInstaller{
 		sshClient: sshClient,
-		nodeName:  nodeName,
+		masterIP:  masterIP,
 	}
 }
 
@@ -71,18 +71,10 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 
 // getMetalLBAddressRange gets suitable IP address range for MetalLB
 func (m *MetalLBInstaller) getMetalLBAddressRange() (string, error) {
-	// Get master node IP address
-	ipCmd := "ip -4 addr show | grep inet | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1"
-	output, err := m.sshClient.RunCommand(ipCmd)
-	if err != nil {
-		return "", fmt.Errorf("failed to get node IP address: %w", err)
-	}
-
 	// Parse IP address
-	ip := strings.TrimSpace(output)
-	ipParts := strings.Split(ip, ".")
+	ipParts := strings.Split(m.masterIP, ".")
 	if len(ipParts) != 4 {
-		return "", fmt.Errorf("invalid IP address format: %s", ip)
+		return "", fmt.Errorf("invalid IP address format: %s", m.masterIP)
 	}
 
 	// Use a range of IP addresses in the same subnet as LoadBalancer IP pool

@@ -1,9 +1,5 @@
 package initializer
 
-import (
-	"os"
-)
-
 // SSHCommandRunner defines the interface for executing SSH commands
 type SSHCommandRunner interface {
 	RunSSHCommand(nodeName string, command string) (string, error)
@@ -14,7 +10,6 @@ type InitOptions struct {
 	DisableSwap       bool   // Whether to disable swap
 	EnableIPVS        bool   // Whether to enable IPVS mode
 	ContainerRuntime  string // Container runtime, default is containerd
-	K8sMirrorURL      string // Kubernetes source URL, default is official source
 	HelmVersion       string
 	ContainerdVersion string
 	RuncVersion       string
@@ -26,17 +21,10 @@ type InitOptions struct {
 
 // DefaultInitOptions returns default initialization options
 func DefaultInitOptions() InitOptions {
-	// Read K8s source URL from environment variable, if not set use the official source
-	k8sMirrorURL := os.Getenv("OHMYKUBE_K8S_MIRROR_URL")
-	if k8sMirrorURL == "" {
-		k8sMirrorURL = "https://pkgs.k8s.io/core:/stable:/v1.33/deb"
-	}
-
 	return InitOptions{
 		DisableSwap:       true,         // Default to disable swap
 		EnableIPVS:        false,        // Default to not enable IPVS
 		ContainerRuntime:  "containerd", // Default to use containerd
-		K8sMirrorURL:      k8sMirrorURL, // Use source configured by environment variable or default source
 		HelmVersion:       "v3.18.0",
 		ContainerdVersion: "2.1.0",
 		RuncVersion:       "v1.3.0",

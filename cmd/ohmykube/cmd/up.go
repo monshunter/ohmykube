@@ -47,6 +47,7 @@ var upCmd = &cobra.Command{
 			}
 			launcher = cls.Spec.Launcher
 			proxyMode = cls.Spec.ProxyMode
+			k8sVersion = cls.Spec.K8sVersion
 		}
 
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
@@ -81,6 +82,7 @@ var upCmd = &cobra.Command{
 		initOptions := initializer.DefaultInitOptions()
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
 		initOptions.EnableIPVS = proxyMode == "ipvs"
+		initOptions.K8SVersion = k8sVersion
 
 		// Create cluster manager and pass options
 		manager, err := manager.NewManager(config, sshConfig, cls)
