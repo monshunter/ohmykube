@@ -1468,9 +1468,60 @@ exit 0
 	return fmt.Errorf("failed to install Helm on node %s after %d attempts", i.nodeName, maxRetries)
 }
 
+// InstallZstd installs zstd package based on OS type
+func (i *Initializer) InstallZstd() error {
+	// Call appropriate install function based on OS type
+	switch i.osType {
+	case osTypeDebian:
+		return i.installZstdOnDebian()
+	case osTypeRedhat:
+		return i.installZstdOnRedhat()
+	default:
+		log.Infof("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		return fmt.Errorf("unsupported OS type: %s", i.osType)
+	}
+}
+
+// installZstdOnDebian installs zstd on Debian-based systems
+func (i *Initializer) installZstdOnDebian() error {
+	cmd := "sudo apt-get install -y zstd"
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to install zstd on node %s: %w", i.nodeName, err)
+	}
+	log.Infof("Successfully installed zstd on node %s", i.nodeName)
+	return nil
+}
+
+// installZstdOnRedhat installs zstd on RedHat-based systems
+func (i *Initializer) installZstdOnRedhat() error {
+	var cmd string
+	if i.useDnf {
+		// Use dnf if available
+		log.Infof("Using dnf to install zstd on node %s", i.nodeName)
+		cmd = "sudo dnf install -y zstd"
+	} else {
+		// Fall back to yum
+		log.Infof("dnf not found, using yum to install zstd on node %s", i.nodeName)
+		cmd = "sudo yum install -y zstd"
+	}
+
+	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to install zstd on node %s: %w", i.nodeName, err)
+	}
+	log.Infof("Successfully installed zstd on node %s", i.nodeName)
+	return nil
+}
+
 // Initialize executes all initialization steps
 func (i *Initializer) Initialize() error {
 	if err := i.DoSystemUpdate(); err != nil {
+		return err
+	}
+
+	// Install zstd immediately after system update
+	if err := i.InstallZstd(); err != nil {
 		return err
 	}
 	// Based on options, disable swap if specified
