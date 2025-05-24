@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -215,6 +216,45 @@ func (sm *SSHManager) RunCommand(nodeName, command string) (string, error) {
 	}
 
 	return client.RunCommand(command)
+}
+
+// RunSSHCommand implements the SSHCommandRunner interface (for backward compatibility)
+func (sm *SSHManager) RunSSHCommand(nodeName, command string) (string, error) {
+	return sm.RunCommand(nodeName, command)
+}
+
+// UploadFile uploads a local file to a remote node using proper SCP protocol
+func (sm *SSHManager) UploadFile(nodeName, localPath, remotePath string) error {
+	client, exists := sm.GetClient(nodeName)
+	if !exists {
+		return fmt.Errorf("SSH client for node %s does not exist", nodeName)
+	}
+
+	// Ensure remote directory exists
+	remoteDir := filepath.Dir(remotePath)
+	if remoteDir != "." && remoteDir != "/" {
+		createDirCmd := fmt.Sprintf("sudo mkdir -p %s", remoteDir)
+		if _, err := client.RunCommand(createDirCmd); err != nil {
+			return fmt.Errorf("failed to create remote directory %s: %w", remoteDir, err)
+		}
+	}
+
+	return client.TransferFile(localPath, remotePath)
+}
+
+// DownloadFile downloads a file from a remote node to local path using proper SCP protocol
+func (sm *SSHManager) DownloadFile(nodeName, remotePath, localPath string) error {
+	client, exists := sm.GetClient(nodeName)
+	if !exists {
+		return fmt.Errorf("SSH client for node %s does not exist", nodeName)
+	}
+
+	return client.DownloadFile(remotePath, localPath)
+}
+
+// TransferFile implements the SSHFileTransfer interface (for backward compatibility)
+func (sm *SSHManager) TransferFile(nodeName, localPath, remotePath string) error {
+	return sm.UploadFile(nodeName, localPath, remotePath)
 }
 
 // CloseClient closes the SSH client for the specified node

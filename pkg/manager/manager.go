@@ -204,9 +204,24 @@ func (m *Manager) GetStatusFromRemote(nodeName string) (status cluster.NodeInter
 	return status, nil
 }
 
-// RunSSHCommand executes a command on a node via SSH
+// RunSSHCommand executes a command on a node via SSH (for backward compatibility)
 func (m *Manager) RunSSHCommand(nodeName, command string) (string, error) {
 	return m.SSHManager.RunCommand(nodeName, command)
+}
+
+// RunCommand executes a command on a node via SSH (implements SSHRunner interface)
+func (m *Manager) RunCommand(nodeName, command string) (string, error) {
+	return m.SSHManager.RunCommand(nodeName, command)
+}
+
+// UploadFile uploads a local file to a remote node (implements SSHRunner interface)
+func (m *Manager) UploadFile(nodeName, localPath, remotePath string) error {
+	return m.SSHManager.UploadFile(nodeName, localPath, remotePath)
+}
+
+// DownloadFile downloads a file from a remote node to local path (implements SSHRunner interface)
+func (m *Manager) DownloadFile(nodeName, remotePath, localPath string) error {
+	return m.SSHManager.DownloadFile(nodeName, remotePath, localPath)
 }
 
 // SetCNIType sets the CNI type
@@ -283,7 +298,6 @@ func (m *Manager) CreateCluster() error {
 	} else {
 		log.Info("Skipping environment initialization as it was already completed")
 	}
-
 	// 3. Configure master node if not already done
 	if !m.Cluster.HasCondition(cluster.ConditionTypeMasterInitialized, cluster.ConditionStatusTrue) {
 		log.Info("Configuring Kubernetes Master node...")
@@ -923,7 +937,6 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	node.SetCondition(cluster.ConditionTypeEnvironmentInit, cluster.ConditionStatusTrue,
 		"Initialized", "Node environment initialized successfully")
 	m.Cluster.Save()
-
 	// Get join command
 	log.Infof("Getting join command for %s", nodeName)
 	joinCmd, err := m.getJoinCommand()

@@ -1,6 +1,7 @@
 package initializer
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/default/containerd"
 	"github.com/monshunter/ohmykube/pkg/default/ipvs"
 	"github.com/monshunter/ohmykube/pkg/envar"
+	"github.com/monshunter/ohmykube/pkg/initializer/cache"
 	"github.com/monshunter/ohmykube/pkg/log"
 )
 
@@ -27,23 +29,32 @@ const (
 
 // Initializer used to initialize a single Kubernetes node environment
 type Initializer struct {
-	sshRunner SSHCommandRunner
-	nodeName  string
-	options   InitOptions
-	osType    osType
-	arch      string
-	useDnf    bool
+	sshRunner    SSHRunner
+	nodeName     string
+	options      InitOptions
+	osType       osType
+	arch         string
+	useDnf       bool
+	cacheManager PackageCacheManager
 }
 
 // NewInitializer creates a new node initializer
-func NewInitializer(sshRunner SSHCommandRunner, nodeName string) (*Initializer, error) {
-	initializer := &Initializer{
-		sshRunner: sshRunner,
-		nodeName:  nodeName,
-		options:   DefaultInitOptions(),
-		arch:      "arm64",
+func NewInitializer(sshRunner SSHRunner, nodeName string) (*Initializer, error) {
+	// Create cache manager
+	cacheManager, err := cache.NewManager()
+	if err != nil {
+		log.Errorf("Failed to create cache manager: %v", err)
+		return nil, fmt.Errorf("failed to create cache manager: %w", err)
 	}
-	err := initializer.detectOSType()
+
+	initializer := &Initializer{
+		sshRunner:    sshRunner,
+		nodeName:     nodeName,
+		options:      DefaultInitOptions(),
+		arch:         "arm64",
+		cacheManager: cacheManager,
+	}
+	err = initializer.detectOSType()
 	if err != nil {
 		log.Errorf("Failed to detect OS type on node %s: %v", nodeName, err)
 		return nil, err
@@ -53,7 +64,7 @@ func NewInitializer(sshRunner SSHCommandRunner, nodeName string) (*Initializer, 
 }
 
 // NewInitializerWithOptions creates a new node initializer with specified options
-func NewInitializerWithOptions(sshRunner SSHCommandRunner, nodeName string, options InitOptions) (*Initializer, error) {
+func NewInitializerWithOptions(sshRunner SSHRunner, nodeName string, options InitOptions) (*Initializer, error) {
 	initializer, err := NewInitializer(sshRunner, nodeName)
 	if err != nil {
 		return nil, err
@@ -97,7 +108,7 @@ echo "YUM_PATH=${YUM_PATH}"
 echo "DNF_PATH=${DNF_PATH}"
 `
 
-	output, err := i.sshRunner.RunSSHCommand(i.nodeName, script)
+	output, err := i.sshRunner.RunCommand(i.nodeName, script)
 	if err != nil {
 		return fmt.Errorf("failed to detect OS type on node %s: %w", i.nodeName, err)
 	}
@@ -153,10 +164,11 @@ echo "DNF_PATH=${DNF_PATH}"
 func (i *Initializer) doSystemUpdateOnDebian() error {
 	// Update apt
 	cmd := "sudo apt-get update"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("failed to update apt on node %s: %w", i.nodeName, err)
+		return fmt.Errorf("failed to via apt-get to update system on node %s: %w", i.nodeName, err)
 	}
+	log.Infof("Successfully via apt-get updated system on node %s", i.nodeName)
 	return nil
 }
 
@@ -172,10 +184,11 @@ func (i *Initializer) doSystemUpdateOnRedhat() error {
 		cmd = "sudo yum update -y"
 	}
 
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
-		return fmt.Errorf("failed to update system on node %s: %w", i.nodeName, err)
+		return fmt.Errorf("failed to via yum/dnf to update system on node %s: %w", i.nodeName, err)
 	}
+	log.Infof("Successfully via yum/dnf updated system on node %s", i.nodeName)
 	return nil
 }
 
@@ -197,7 +210,7 @@ func (i *Initializer) AptUpdateForFixMissing() error {
 func (i *Initializer) doAptUpdateForFixMissing() error {
 	// Update apt with fix-missing flag
 	cmd := "sudo apt-get update --fix-missing -y"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to update apt with fix-missing on node %s: %w", i.nodeName, err)
 	}
@@ -217,7 +230,7 @@ func (i *Initializer) doYumUpdateForFixMissing() error {
 		cmd = "sudo yum clean all && sudo yum update -y"
 	}
 
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to clean and update package repositories on node %s: %w", i.nodeName, err)
 	}
@@ -228,14 +241,14 @@ func (i *Initializer) doYumUpdateForFixMissing() error {
 func (i *Initializer) DisableSwap() error {
 	// Execute swapoff -a command
 	cmd := "sudo swapoff -a"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to disable swap on node %s: %w", i.nodeName, err)
 	}
 
 	// Modify /etc/fstab file to comment out swap lines
 	cmd = "sudo sed -i '/swap/s/^/#/' /etc/fstab"
-	_, err = i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err = i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to modify /etc/fstab file on node %s: %w", i.nodeName, err)
 	}
@@ -351,7 +364,7 @@ exit 0
 
 	// Execute the script in a single SSH connection
 	log.Infof("Enabling IPVS on node %s with OS type %s", i.nodeName, i.osType)
-	output, err := i.sshRunner.RunSSHCommand(i.nodeName, script)
+	output, err := i.sshRunner.RunCommand(i.nodeName, script)
 	if err != nil {
 		log.Errorf("Failed to enable IPVS on node %s: %v", i.nodeName, err)
 		return fmt.Errorf("failed to enable IPVS on node %s: %w", i.nodeName, err)
@@ -447,7 +460,7 @@ exit 0
 `
 
 	// Execute the script in a single SSH connection
-	output, err := i.sshRunner.RunSSHCommand(i.nodeName, script)
+	output, err := i.sshRunner.RunCommand(i.nodeName, script)
 	if err != nil {
 		log.Errorf("Failed to enable network bridge on node %s: %v", i.nodeName, err)
 		return fmt.Errorf("failed to enable network bridge on node %s: %w", i.nodeName, err)
@@ -474,14 +487,28 @@ exit 0
 	return nil
 }
 
-// InstallContainerd installs and configures containerd using binary files
+// InstallContainerd installs and configures containerd using cached packages
 func (i *Initializer) InstallContainerd() error {
-	// Define versions for containerd, runc, and CNI plugins
-	containerdVersion := i.options.ContainerdVersion // Latest stable version as of writing
-	runcVersion := i.options.RuncVersion             // Latest stable version as of writing
-	cniPluginsVersion := i.options.CNIPluginsVersion // Latest stable version as of writing
+	log.Infof("Installing containerd using cache on node %s", i.nodeName)
 
-	// Create a script that handles the entire containerd installation process
+	ctx := context.Background()
+
+	// Ensure containerd package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "containerd", i.options.ContainerdVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure containerd package: %w", err)
+	}
+
+	// Ensure runc package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "runc", i.options.RuncVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure runc package: %w", err)
+	}
+
+	// Ensure CNI plugins package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "cni-plugins", i.options.CNIPluginsVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure cni-plugins package: %w", err)
+	}
+
+	// Now install from the cached packages on the remote node
 	script := fmt.Sprintf(`#!/bin/bash
 set -e
 
@@ -495,130 +522,67 @@ if command -v containerd &> /dev/null; then
     CONTAINERD_VERSION=$(containerd --version 2>/dev/null | cut -d " " -f 3 | tr -d ",")
     echo "containerd already installed: $CONTAINERD_VERSION"
     log_step "CONTAINERD_CHECK" "already_installed"
-
-    # Even if containerd is installed, we still need to configure it
     log_step "CONTINUE_CONFIG" "true"
 else
     log_step "CONTAINERD_CHECK" "not_installed"
     log_step "CONTINUE_CONFIG" "true"
 fi
 
-# Step 2: Detect architecture
-ARCH=%s
-
-echo "Detected architecture: $ARCH"
-log_step "ARCH_DETECTION" "success"
-
-# Step 3: Set file paths and versions
-CONTAINERD_VERSION="%s"
-RUNC_VERSION="%s"
-CNI_PLUGINS_VERSION="%s"
-
-CONTAINERD_PACKAGE="containerd-${CONTAINERD_VERSION}-linux-${ARCH}.tar.gz"
-CONTAINERD_PACKAGE_PATH="/usr/local/src/${CONTAINERD_PACKAGE}"
-CONTAINERD_DOWNLOAD_URL="https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/${CONTAINERD_PACKAGE}"
-
-RUNC_PACKAGE="runc.${ARCH}"
-RUNC_PACKAGE_PATH="/usr/local/src/runc-${RUNC_VERSION}-${ARCH}"
-RUNC_DOWNLOAD_URL="https://github.com/opencontainers/runc/releases/download/${RUNC_VERSION}/${RUNC_PACKAGE}"
-
-CNI_PLUGINS_PACKAGE="cni-plugins-linux-${ARCH}-${CNI_PLUGINS_VERSION}.tgz"
-CNI_PLUGINS_PACKAGE_PATH="/usr/local/src/${CNI_PLUGINS_PACKAGE}"
-CNI_PLUGINS_DOWNLOAD_URL="https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/${CNI_PLUGINS_PACKAGE}"
-
-# Step 4: Install dependencies
-echo "Installing dependencies..."
-sudo mkdir -p /usr/local/src
-sudo mkdir -p /opt/cni/bin
-sudo mkdir -p /etc/containerd/certs.d
-
-# Step 5: Download and install containerd if needed
+# Step 2: Extract and install containerd from cached package
+CONTAINERD_PACKAGE_PATH="/usr/local/src/containerd/containerd-%s-%s.tar.zst"
 if [ -f "$CONTAINERD_PACKAGE_PATH" ]; then
-    echo "containerd package already exists at $CONTAINERD_PACKAGE_PATH"
-    log_step "CONTAINERD_PACKAGE_CHECK" "exists"
-else
-    echo "Downloading containerd from $CONTAINERD_DOWNLOAD_URL"
-    sudo curl -L "$CONTAINERD_DOWNLOAD_URL" -o "$CONTAINERD_PACKAGE_PATH"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded containerd to $CONTAINERD_PACKAGE_PATH"
-        log_step "DOWNLOAD_CONTAINERD" "success"
+    echo "Found cached containerd package at $CONTAINERD_PACKAGE_PATH"
+
+    # Extract the cached package to temp and install binaries to /usr/bin
+    if ! command -v containerd &> /dev/null; then
+        sudo mkdir -p /tmp/containerd-install
+        sudo tar --use-compress-program=zstd -xf "$CONTAINERD_PACKAGE_PATH" -C /tmp/containerd-install
+        # Move containerd binaries from bin/ to /usr/bin
+        sudo cp /tmp/containerd-install/bin/* /usr/bin/
+        sudo rm -rf /tmp/containerd-install
+        log_step "INSTALL_CONTAINERD" "success"
     else
-        echo "Failed to download containerd"
-        log_step "DOWNLOAD_CONTAINERD" "failure"
-        exit 1
+        log_step "INSTALL_CONTAINERD" "skipped"
     fi
-fi
-
-# Extract and install containerd if not already installed
-if ! command -v containerd &> /dev/null; then
-    echo "Extracting and installing containerd"
-    sudo tar -xzf "$CONTAINERD_PACKAGE_PATH" -C /usr/local
-    if [ $? -ne 0 ]; then
-        echo "Failed to extract containerd"
-        log_step "EXTRACT_CONTAINERD" "failure"
-        exit 1
-    fi
-    log_step "EXTRACT_CONTAINERD" "success"
 else
-    log_step "EXTRACT_CONTAINERD" "skipped"
+    echo "Cached containerd package not found at $CONTAINERD_PACKAGE_PATH"
+    log_step "INSTALL_CONTAINERD" "failure"
+    exit 1
 fi
 
-# Step 6: Download and install runc if needed
+# Step 3: Install runc from cached package
+RUNC_PACKAGE_PATH="/usr/local/src/runc/runc-%s-%s.tar.zst"
 if [ -f "$RUNC_PACKAGE_PATH" ]; then
-    echo "runc package already exists at $RUNC_PACKAGE_PATH"
-    log_step "RUNC_PACKAGE_CHECK" "exists"
-else
-    echo "Downloading runc from $RUNC_DOWNLOAD_URL"
-    sudo curl -L "$RUNC_DOWNLOAD_URL" -o "$RUNC_PACKAGE_PATH"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded runc to $RUNC_PACKAGE_PATH"
-        log_step "DOWNLOAD_RUNC" "success"
-    else
-        echo "Failed to download runc"
-        log_step "DOWNLOAD_RUNC" "failure"
-        exit 1
-    fi
-fi
+    echo "Found cached runc package at $RUNC_PACKAGE_PATH"
 
-# Install runc
-echo "Installing runc"
-sudo install -m 755 "$RUNC_PACKAGE_PATH" /usr/local/bin/runc
-if [ $? -ne 0 ]; then
-    echo "Failed to install runc"
+    # Extract and install runc binary
+    sudo mkdir -p /tmp/runc-install
+    sudo tar --use-compress-program=zstd -xf "$RUNC_PACKAGE_PATH" -C /tmp/runc-install
+    sudo install -m 755 /tmp/runc-install/runc.* /usr/bin/runc
+    sudo rm -rf /tmp/runc-install
+    log_step "INSTALL_RUNC" "success"
+else
+    echo "Cached runc package not found at $RUNC_PACKAGE_PATH"
     log_step "INSTALL_RUNC" "failure"
     exit 1
 fi
-log_step "INSTALL_RUNC" "success"
 
-# Step 7: Download and install CNI plugins if needed
-if [ -f "$CNI_PLUGINS_PACKAGE_PATH" ]; then
-    echo "CNI plugins package already exists at $CNI_PLUGINS_PACKAGE_PATH"
-    log_step "CNI_PLUGINS_PACKAGE_CHECK" "exists"
+# Step 4: Install CNI plugins from cached package
+CNI_PACKAGE_PATH="/usr/local/src/cni-plugins/cni-plugins-%s-%s.tar.zst"
+if [ -f "$CNI_PACKAGE_PATH" ]; then
+    echo "Found cached CNI plugins package at $CNI_PACKAGE_PATH"
+
+    # Extract CNI plugins directly to /opt/cni/bin
+    sudo mkdir -p /opt/cni/bin
+    sudo tar --use-compress-program=zstd -xf "$CNI_PACKAGE_PATH" -C /opt/cni/bin
+    log_step "INSTALL_CNI_PLUGINS" "success"
 else
-    echo "Downloading CNI plugins from $CNI_PLUGINS_DOWNLOAD_URL"
-    sudo curl -L "$CNI_PLUGINS_DOWNLOAD_URL" -o "$CNI_PLUGINS_PACKAGE_PATH"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded CNI plugins to $CNI_PLUGINS_PACKAGE_PATH"
-        log_step "DOWNLOAD_CNI_PLUGINS" "success"
-    else
-        echo "Failed to download CNI plugins"
-        log_step "DOWNLOAD_CNI_PLUGINS" "failure"
-        exit 1
-    fi
-fi
-
-# Extract and install CNI plugins
-echo "Extracting and installing CNI plugins"
-sudo mkdir -p /opt/cni/bin
-sudo tar -xzf "$CNI_PLUGINS_PACKAGE_PATH" -C /opt/cni/bin
-if [ $? -ne 0 ]; then
-    echo "Failed to extract CNI plugins"
-    log_step "EXTRACT_CNI_PLUGINS" "failure"
+    echo "Cached CNI plugins package not found at $CNI_PACKAGE_PATH"
+    log_step "INSTALL_CNI_PLUGINS" "failure"
     exit 1
 fi
-log_step "EXTRACT_CNI_PLUGINS" "success"
 
-# Step 8: Create containerd systemd service
+# Step 5: Create containerd systemd service
 echo "Creating containerd systemd service"
 cat <<EOF | sudo tee /etc/systemd/system/containerd.service >/dev/null
 [Unit]
@@ -628,7 +592,7 @@ After=network.target local-fs.target dbus.service
 
 [Service]
 ExecStartPre=-/sbin/modprobe overlay
-ExecStart=/usr/local/bin/containerd
+ExecStart=/usr/bin/containerd
 
 Type=notify
 Delegate=yes
@@ -657,11 +621,11 @@ if [ $? -ne 0 ]; then
 fi
 log_step "CREATE_CONTAINERD_SERVICE" "success"
 
-# Step 9: Create containerd configuration directory
+# Step 6: Create containerd configuration directory
 echo "Creating containerd configuration"
 sudo mkdir -p /etc/containerd
 
-# Step 10: Generate default containerd config
+# Step 7: Generate default containerd config
 if command -v containerd &> /dev/null; then
     echo "Generating default containerd config"
     containerd config default | sudo tee /etc/containerd/config.toml.default > /dev/null
@@ -673,7 +637,7 @@ if command -v containerd &> /dev/null; then
     fi
 fi
 
-# Step 11: Write custom configuration
+# Step 8: Write custom configuration
 echo "Writing containerd configuration"
 cat <<EOF | sudo tee /etc/containerd/config.toml >/dev/null
 %s
@@ -686,11 +650,11 @@ if [ $? -ne 0 ]; then
 fi
 log_step "CREATE_CONFIG" "success"
 
-# Step 12: Set up mirrors if needed
+# Step 9: Set up mirrors if needed
 echo "Setting up containerd mirrors"
 %s
 
-# Step 13: Reload systemd and restart containerd
+# Step 10: Reload systemd and restart containerd
 echo "Reloading systemd and starting containerd"
 sudo systemctl daemon-reload
 sudo systemctl enable containerd
@@ -702,7 +666,7 @@ if [ $? -ne 0 ]; then
 fi
 log_step "START_CONTAINERD" "success"
 
-# Step 14: Verify installation
+# Step 11: Verify installation
 echo "Verifying installation"
 if command -v containerd &> /dev/null && command -v runc &> /dev/null; then
     CONTAINERD_VERSION_INSTALLED=$(containerd --version 2>/dev/null | cut -d " " -f 3 | tr -d ",")
@@ -711,7 +675,7 @@ if command -v containerd &> /dev/null && command -v runc &> /dev/null; then
     echo "Successfully installed container runtime components:"
     echo "containerd: $CONTAINERD_VERSION_INSTALLED"
     echo "runc: $RUNC_VERSION_INSTALLED"
-    echo "CNI plugins: v$CNI_PLUGINS_VERSION"
+    echo "CNI plugins: v%s"
 
     log_step "VERIFY_INSTALLATION" "success"
 else
@@ -722,96 +686,58 @@ fi
 
 log_step "OVERALL" "success"
 exit 0
-`, i.arch, containerdVersion, runcVersion, cniPluginsVersion, containerd.CONFIG, getMirrorSetupScript())
+`, i.options.ContainerdVersion, i.arch, i.options.RuncVersion, i.arch, i.options.CNIPluginsVersion, i.arch, containerd.CONFIG, getMirrorSetupScript(), i.options.CNIPluginsVersion)
 
-	// Execute the script in a single SSH connection
-	log.Infof("Installing containerd on node %s", i.nodeName)
-
-	// Set up retry logic
-	maxRetries := 3
-	retryDelay := 5 * time.Second
-	var output string
-	var err error
-
-	for retry := 0; retry < maxRetries; retry++ {
-		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
-
-		// Parse the output to check for any failures or if already installed
-		lines := strings.Split(strings.TrimSpace(output), "\n")
-		var alreadyInstalled bool
-
-		for _, line := range lines {
-			if strings.HasPrefix(line, "STEP_STATUS:") {
-				parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
-				if len(parts) == 2 {
-					step := parts[0]
-					status := parts[1]
-					log.Infof("containerd installation step %s: %s on node %s", step, status, i.nodeName)
-
-					// Check if containerd is already installed
-					if step == "CONTAINERD_CHECK" && status == "already_installed" {
-						alreadyInstalled = true
-						log.Infof("containerd already installed on node %s, continuing with configuration", i.nodeName)
-					}
-
-					// Check if we should continue with configuration
-					if step == "CONTINUE_CONFIG" && status == "true" {
-						// Configuration will continue regardless
-						log.Infof("Continuing with containerd configuration on node %s", i.nodeName)
-					}
-
-					// If any step failed, log it but continue with retry logic
-					if status == "failure" && retry < maxRetries-1 {
-						log.Infof("containerd installation step %s failed on node %s, will retry", step, i.nodeName)
-					}
-				}
-			} else if strings.Contains(line, "already installed") {
-				log.Infof("%s on node %s", line, i.nodeName)
-			}
-		}
-
-		if err == nil {
-			// Check if overall process was successful
-			for _, line := range lines {
-				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
-					if alreadyInstalled {
-						log.Infof("Successfully configured containerd on node %s", i.nodeName)
-					} else {
-						log.Infof("Successfully installed and configured containerd on node %s", i.nodeName)
-					}
-
-					// Install crictl and nerdctl after containerd is successfully installed
-					if err := i.InstallCrictlAndNerdctl(); err != nil {
-						log.Errorf("Failed to install crictl and nerdctl on node %s: %v", i.nodeName, err)
-						// Continue even if crictl and nerdctl installation fails
-					}
-
-					return nil
-				}
-			}
-		}
-
-		if retry < maxRetries-1 {
-			log.Infof("Failed to install containerd on node %s, retrying in %v (%d/%d)...",
-				i.nodeName, retryDelay, retry+1, maxRetries)
-			time.Sleep(retryDelay)
-		}
-	}
-
+	// Execute the installation script
+	output, err := i.sshRunner.RunCommand(i.nodeName, script)
 	if err != nil {
-		return fmt.Errorf("failed to install containerd on node %s after %d attempts: %w", i.nodeName, maxRetries, err)
+		return fmt.Errorf("failed to install containerd from cache: %w", err)
 	}
 
-	return fmt.Errorf("failed to install containerd on node %s after %d attempts", i.nodeName, maxRetries)
+	// Parse the output to check for any failures
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "STEP_STATUS:") {
+			parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+			if len(parts) == 2 {
+				step := parts[0]
+				status := parts[1]
+				log.Infof("Containerd cache installation step %s: %s on node %s", step, status, i.nodeName)
+
+				if status == "failure" {
+					return fmt.Errorf("failed to complete containerd cache installation step %s on node %s", step, i.nodeName)
+				}
+			}
+		}
+	}
+
+	// Install crictl and nerdctl after containerd is successfully installed
+	if err := i.InstallCrictlAndNerdctl(); err != nil {
+		log.Errorf("Failed to install crictl and nerdctl on node %s: %v", i.nodeName, err)
+		// Continue even if crictl and nerdctl installation fails
+	}
+
+	log.Infof("Successfully installed containerd from cache on node %s", i.nodeName)
+	return nil
 }
 
-// InstallCrictlAndNerdctl installs crictl and nerdctl tools for container management
+// InstallCrictlAndNerdctl installs crictl and nerdctl tools for container management using cached packages
 func (i *Initializer) InstallCrictlAndNerdctl() error {
-	// Define versions for crictl and nerdctl
-	crictlVersion := i.options.CriCtlVersion   // Latest stable version as of writing
-	nerdctlVersion := i.options.NerdctlVersion // Latest stable version as of writing
+	log.Infof("Installing crictl and nerdctl using cache on node %s", i.nodeName)
 
-	// Create a script that handles the installation of crictl and nerdctl
+	ctx := context.Background()
+
+	// Ensure crictl package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "crictl", i.options.CriCtlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure crictl package: %w", err)
+	}
+
+	// Ensure nerdctl package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "nerdctl", i.options.NerdctlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure nerdctl package: %w", err)
+	}
+
+	// Now install from the cached packages on the remote node
 	script := fmt.Sprintf(`#!/bin/bash
 set -e
 
@@ -820,29 +746,7 @@ log_step() {
     echo "STEP_STATUS: $1=$2"
 }
 
-# Step 1: Detect architecture
-ARCH=%s
-
-echo "Detected architecture: $ARCH"
-log_step "ARCH_DETECTION" "success"
-
-# Step 2: Set file paths and versions
-CRICTL_VERSION="%s"
-NERDCTL_VERSION="%s"
-
-CRICTL_PACKAGE="crictl-${CRICTL_VERSION}-linux-${ARCH}.tar.gz"
-CRICTL_PACKAGE_PATH="/usr/local/src/${CRICTL_PACKAGE}"
-CRICTL_DOWNLOAD_URL="https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/${CRICTL_PACKAGE}"
-
-NERDCTL_PACKAGE="nerdctl-${NERDCTL_VERSION}-linux-${ARCH}.tar.gz"
-NERDCTL_PACKAGE_PATH="/usr/local/src/${NERDCTL_PACKAGE}"
-NERDCTL_DOWNLOAD_URL="https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/${NERDCTL_PACKAGE}"
-
-# Step 3: Create directories
-sudo mkdir -p /usr/local/src
-sudo mkdir -p /usr/local/bin
-
-# Step 4: Check if crictl is already installed
+# Step 1: Check if crictl is already installed
 if command -v crictl &> /dev/null; then
     CRICTL_VERSION_INSTALLED=$(crictl --version 2>/dev/null | awk '{print $3}')
     echo "crictl already installed: $CRICTL_VERSION_INSTALLED"
@@ -850,32 +754,19 @@ if command -v crictl &> /dev/null; then
 else
     log_step "CRICTL_CHECK" "not_installed"
 
-    # Step 5: Download and install crictl if needed
+    # Step 2: Extract and install crictl from cached package
+    CRICTL_PACKAGE_PATH="/usr/local/src/crictl/crictl-%s-%s.tar.zst"
     if [ -f "$CRICTL_PACKAGE_PATH" ]; then
-        echo "crictl package already exists at $CRICTL_PACKAGE_PATH"
-        log_step "CRICTL_PACKAGE_CHECK" "exists"
-    else
-        echo "Downloading crictl from $CRICTL_DOWNLOAD_URL"
-        sudo curl -L "$CRICTL_DOWNLOAD_URL" -o "$CRICTL_PACKAGE_PATH"
-        if [ $? -eq 0 ]; then
-            echo "Successfully downloaded crictl to $CRICTL_PACKAGE_PATH"
-            log_step "DOWNLOAD_CRICTL" "success"
-        else
-            echo "Failed to download crictl"
-            log_step "DOWNLOAD_CRICTL" "failure"
-            exit 1
-        fi
-    fi
+        echo "Found cached crictl package at $CRICTL_PACKAGE_PATH"
 
-    # Extract and install crictl
-    echo "Extracting and installing crictl"
-    sudo tar -xzf "$CRICTL_PACKAGE_PATH" -C /usr/local/bin
-    if [ $? -ne 0 ]; then
-        echo "Failed to extract crictl"
-        log_step "EXTRACT_CRICTL" "failure"
+        # Extract crictl directly to /usr/bin
+        sudo tar --use-compress-program=zstd -xf "$CRICTL_PACKAGE_PATH" -C /usr/bin
+        log_step "INSTALL_CRICTL" "success"
+    else
+        echo "Cached crictl package not found at $CRICTL_PACKAGE_PATH"
+        log_step "INSTALL_CRICTL" "failure"
         exit 1
     fi
-    log_step "EXTRACT_CRICTL" "success"
 
     # Set up crictl configuration
     echo "Setting up crictl configuration"
@@ -894,7 +785,7 @@ EOF
     log_step "CREATE_CRICTL_CONFIG" "success"
 fi
 
-# Step 6: Check if nerdctl is already installed
+# Step 3: Check if nerdctl is already installed
 if command -v nerdctl &> /dev/null; then
     NERDCTL_VERSION_INSTALLED=$(nerdctl --version 2>/dev/null | awk '{print $3}')
     echo "nerdctl already installed: $NERDCTL_VERSION_INSTALLED"
@@ -902,35 +793,22 @@ if command -v nerdctl &> /dev/null; then
 else
     log_step "NERDCTL_CHECK" "not_installed"
 
-    # Step 7: Download and install nerdctl if needed
+    # Step 4: Extract and install nerdctl from cached package
+    NERDCTL_PACKAGE_PATH="/usr/local/src/nerdctl/nerdctl-%s-%s.tar.zst"
     if [ -f "$NERDCTL_PACKAGE_PATH" ]; then
-        echo "nerdctl package already exists at $NERDCTL_PACKAGE_PATH"
-        log_step "NERDCTL_PACKAGE_CHECK" "exists"
-    else
-        echo "Downloading nerdctl from $NERDCTL_DOWNLOAD_URL"
-        sudo curl -L "$NERDCTL_DOWNLOAD_URL" -o "$NERDCTL_PACKAGE_PATH"
-        if [ $? -eq 0 ]; then
-            echo "Successfully downloaded nerdctl to $NERDCTL_PACKAGE_PATH"
-            log_step "DOWNLOAD_NERDCTL" "success"
-        else
-            echo "Failed to download nerdctl"
-            log_step "DOWNLOAD_NERDCTL" "failure"
-            exit 1
-        fi
-    fi
+        echo "Found cached nerdctl package at $NERDCTL_PACKAGE_PATH"
 
-    # Extract and install nerdctl
-    echo "Extracting and installing nerdctl"
-    sudo tar -xzf "$NERDCTL_PACKAGE_PATH" -C /usr/local/bin
-    if [ $? -ne 0 ]; then
-        echo "Failed to extract nerdctl"
-        log_step "EXTRACT_NERDCTL" "failure"
+        # Extract nerdctl directly to /usr/bin
+        sudo tar --use-compress-program=zstd -xf "$NERDCTL_PACKAGE_PATH" -C /usr/bin
+        log_step "INSTALL_NERDCTL" "success"
+    else
+        echo "Cached nerdctl package not found at $NERDCTL_PACKAGE_PATH"
+        log_step "INSTALL_NERDCTL" "failure"
         exit 1
     fi
-    log_step "EXTRACT_NERDCTL" "success"
 fi
 
-# Step 8: Verify installation
+# Step 5: Verify installation
 echo "Verifying installation"
 CRICTL_INSTALLED=$(command -v crictl >/dev/null 2>&1 && echo "yes" || echo "no")
 NERDCTL_INSTALLED=$(command -v nerdctl >/dev/null 2>&1 && echo "yes" || echo "no")
@@ -948,7 +826,7 @@ fi
 
 log_step "OVERALL" "success"
 exit 0
-`, i.arch, crictlVersion, nerdctlVersion)
+`, i.options.CriCtlVersion, i.arch, i.options.NerdctlVersion, i.arch)
 
 	// Execute the script in a single SSH connection
 	log.Infof("Installing crictl and nerdctl on node %s", i.nodeName)
@@ -960,7 +838,7 @@ exit 0
 	var err error
 
 	for retry := 0; retry < maxRetries; retry++ {
-		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
+		output, err = i.sshRunner.RunCommand(i.nodeName, script)
 
 		// Parse the output to check for any failures or if already installed
 		lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -1045,10 +923,28 @@ EOF
 	return mirrorScript.String()
 }
 
-// InstallK8sComponents installs kubeadm, kubectl, kubelet using binary files
+// InstallK8sComponents installs kubeadm, kubectl, kubelet using cached packages
 func (i *Initializer) InstallK8sComponents() error {
-	// Define the Kubernetes version to install
-	// Create a script that handles the entire Kubernetes components installation process
+	log.Infof("Installing Kubernetes components using cache on node %s", i.nodeName)
+
+	ctx := context.Background()
+
+	// Ensure kubectl package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "kubectl", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure kubectl package: %w", err)
+	}
+
+	// Ensure kubeadm package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "kubeadm", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure kubeadm package: %w", err)
+	}
+
+	// Ensure kubelet package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "kubelet", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure kubelet package: %w", err)
+	}
+
+	// Now install from the cached packages on the remote node
 	script := fmt.Sprintf(`#!/bin/bash
 set -e
 
@@ -1070,104 +966,58 @@ if command -v kubelet &> /dev/null && command -v kubeadm &> /dev/null && command
     exit 0
 fi
 
-# Step 2: Detect architecture
-ARCH=%s
-echo "Detected architecture: $ARCH"
-log_step "ARCH_DETECTION" "success"
+# Step 2: Extract and install kubectl from cached package
+KUBECTL_PACKAGE_PATH="/usr/local/src/kubectl/kubectl-%s-%s.tar.zst"
+if [ -f "$KUBECTL_PACKAGE_PATH" ]; then
+    echo "Found cached kubectl package at $KUBECTL_PACKAGE_PATH"
 
-# Step 3: Set file paths and versions
-K8S_VERSION="%s"
-DOWNLOAD_BASE_URL="https://dl.k8s.io/release/$K8S_VERSION/bin/linux/$ARCH"
-KUBECTL_PACKAGE="/usr/local/src/kubectl-$K8S_VERSION-$ARCH"
-KUBEADM_PACKAGE="/usr/local/src/kubeadm-$K8S_VERSION-$ARCH"
-KUBELET_PACKAGE="/usr/local/src/kubelet-$K8S_VERSION-$ARCH"
-
-# Step 4: Download kubectl if needed
-if [ -f "$KUBECTL_PACKAGE" ]; then
-    echo "kubectl package already exists at $KUBECTL_PACKAGE"
-    log_step "KUBECTL_PACKAGE_CHECK" "exists"
+    # Extract and install kubectl binary
+    sudo mkdir -p /tmp/kubectl-install
+    sudo tar --use-compress-program=zstd -xf "$KUBECTL_PACKAGE_PATH" -C /tmp/kubectl-install
+    sudo install -o root -g root -m 0755 /tmp/kubectl-install/kubectl /usr/bin/kubectl
+    sudo rm -rf /tmp/kubectl-install
+    log_step "INSTALL_KUBECTL" "success"
 else
-    echo "Downloading kubectl from $DOWNLOAD_BASE_URL/kubectl"
-    sudo mkdir -p /usr/local/src
-    sudo curl -L "$DOWNLOAD_BASE_URL/kubectl" -o "$KUBECTL_PACKAGE"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded kubectl to $KUBECTL_PACKAGE"
-        log_step "DOWNLOAD_KUBECTL" "success"
-    else
-        echo "Failed to download kubectl"
-        log_step "DOWNLOAD_KUBECTL" "failure"
-        exit 1
-    fi
-fi
-
-# Step 5: Download kubeadm if needed
-if [ -f "$KUBEADM_PACKAGE" ]; then
-    echo "kubeadm package already exists at $KUBEADM_PACKAGE"
-    log_step "KUBEADM_PACKAGE_CHECK" "exists"
-else
-    echo "Downloading kubeadm from $DOWNLOAD_BASE_URL/kubeadm"
-    sudo curl -L "$DOWNLOAD_BASE_URL/kubeadm" -o "$KUBEADM_PACKAGE"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded kubeadm to $KUBEADM_PACKAGE"
-        log_step "DOWNLOAD_KUBEADM" "success"
-    else
-        echo "Failed to download kubeadm"
-        log_step "DOWNLOAD_KUBEADM" "failure"
-        exit 1
-    fi
-fi
-
-# Step 6: Download kubelet if needed
-if [ -f "$KUBELET_PACKAGE" ]; then
-    echo "kubelet package already exists at $KUBELET_PACKAGE"
-    log_step "KUBELET_PACKAGE_CHECK" "exists"
-else
-    echo "Downloading kubelet from $DOWNLOAD_BASE_URL/kubelet"
-    sudo curl -L "$DOWNLOAD_BASE_URL/kubelet" -o "$KUBELET_PACKAGE"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded kubelet to $KUBELET_PACKAGE"
-        log_step "DOWNLOAD_KUBELET" "success"
-    else
-        echo "Failed to download kubelet"
-        log_step "DOWNLOAD_KUBELET" "failure"
-        exit 1
-    fi
-fi
-
-# Step 7: Install kubectl
-echo "Installing kubectl"
-sudo install -o root -g root -m 0755 "$KUBECTL_PACKAGE" /usr/bin/kubectl
-if [ $? -ne 0 ]; then
-    echo "Failed to install kubectl"
+    echo "Cached kubectl package not found at $KUBECTL_PACKAGE_PATH"
     log_step "INSTALL_KUBECTL" "failure"
     exit 1
 fi
 
-log_step "INSTALL_KUBECTL" "success"
+# Step 3: Extract and install kubeadm from cached package
+KUBEADM_PACKAGE_PATH="/usr/local/src/kubeadm/kubeadm-%s-%s.tar.zst"
+if [ -f "$KUBEADM_PACKAGE_PATH" ]; then
+    echo "Found cached kubeadm package at $KUBEADM_PACKAGE_PATH"
 
-# Step 8: Install kubeadm
-echo "Installing kubeadm"
-sudo install -o root -g root -m 0755 "$KUBEADM_PACKAGE" /usr/bin/kubeadm
-if [ $? -ne 0 ]; then
-    echo "Failed to install kubeadm"
+    # Extract and install kubeadm binary
+    sudo mkdir -p /tmp/kubeadm-install
+    sudo tar --use-compress-program=zstd -xf "$KUBEADM_PACKAGE_PATH" -C /tmp/kubeadm-install
+    sudo install -o root -g root -m 0755 /tmp/kubeadm-install/kubeadm /usr/bin/kubeadm
+    sudo rm -rf /tmp/kubeadm-install
+    log_step "INSTALL_KUBEADM" "success"
+else
+    echo "Cached kubeadm package not found at $KUBEADM_PACKAGE_PATH"
     log_step "INSTALL_KUBEADM" "failure"
     exit 1
 fi
 
-log_step "INSTALL_KUBEADM" "success"
+# Step 4: Extract and install kubelet from cached package
+KUBELET_PACKAGE_PATH="/usr/local/src/kubelet/kubelet-%s-%s.tar.zst"
+if [ -f "$KUBELET_PACKAGE_PATH" ]; then
+    echo "Found cached kubelet package at $KUBELET_PACKAGE_PATH"
 
-# Step 9: Install kubelet
-echo "Installing kubelet"
-sudo install -o root -g root -m 0755 "$KUBELET_PACKAGE" /usr/bin/kubelet
-if [ $? -ne 0 ]; then
-    echo "Failed to install kubelet"
+    # Extract and install kubelet binary
+    sudo mkdir -p /tmp/kubelet-install
+    sudo tar --use-compress-program=zstd -xf "$KUBELET_PACKAGE_PATH" -C /tmp/kubelet-install
+    sudo install -o root -g root -m 0755 /tmp/kubelet-install/kubelet /usr/bin/kubelet
+    sudo rm -rf /tmp/kubelet-install
+    log_step "INSTALL_KUBELET" "success"
+else
+    echo "Cached kubelet package not found at $KUBELET_PACKAGE_PATH"
     log_step "INSTALL_KUBELET" "failure"
     exit 1
 fi
 
-log_step "INSTALL_KUBELET" "success"
-
-# Step 10: Create kubelet systemd service
+# Step 5: Create kubelet systemd service
 echo "Creating kubelet systemd service"
 sudo mkdir -p /etc/systemd/system/kubelet.service.d
 cat <<EOF | sudo tee /etc/systemd/system/kubelet.service >/dev/null
@@ -1208,7 +1058,7 @@ if [ $? -ne 0 ]; then
 fi
 log_step "CREATE_KUBELET_SERVICE" "success"
 
-# Step 11: Create directories needed by kubelet
+# Step 6: Create directories needed by kubelet
 echo "Creating kubelet directories"
 sudo mkdir -p /etc/kubernetes/manifests
 sudo mkdir -p /var/lib/kubelet
@@ -1220,7 +1070,7 @@ if [ $? -ne 0 ]; then
 fi
 log_step "CREATE_KUBELET_DIRS" "success"
 
-# Step 12: Enable and start kubelet service
+# Step 7: Enable and start kubelet service
 echo "Enabling kubelet service"
 sudo systemctl daemon-reload
 sudo systemctl enable kubelet
@@ -1231,7 +1081,7 @@ if [ $? -ne 0 ]; then
 fi
 log_step "ENABLE_KUBELET" "success"
 
-# Step 13: Verify installation
+# Step 8: Verify installation
 echo "Verifying installation"
 KUBECTL_INSTALLED=$(command -v kubectl >/dev/null 2>&1 && echo "yes" || echo "no")
 KUBEADM_INSTALLED=$(command -v kubeadm >/dev/null 2>&1 && echo "yes" || echo "no")
@@ -1251,7 +1101,7 @@ fi
 
 log_step "OVERALL" "success"
 exit 0
-`, i.arch, i.options.K8SVersion)
+`, i.options.K8SVersion, i.arch, i.options.K8SVersion, i.arch, i.options.K8SVersion, i.arch)
 
 	// Execute the script in a single SSH connection
 	log.Infof("Installing Kubernetes components on node %s", i.nodeName)
@@ -1263,7 +1113,7 @@ exit 0
 	var err error
 
 	for retry := 0; retry < maxRetries; retry++ {
-		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
+		output, err = i.sshRunner.RunCommand(i.nodeName, script)
 
 		// Parse the output to check for any failures or if already installed
 		lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -1315,12 +1165,18 @@ exit 0
 	return fmt.Errorf("failed to install Kubernetes components on node %s after %d attempts", i.nodeName, maxRetries)
 }
 
-// InstallHelm installs Helm using binary files
+// InstallHelm installs Helm using cached packages
 func (i *Initializer) InstallHelm() error {
-	// Create a script that handles the entire Helm installation process
-	// This includes checking if Helm is installed, detecting architecture,
-	// downloading the binary if needed, and installing it
+	log.Infof("Installing Helm using cache on node %s", i.nodeName)
 
+	ctx := context.Background()
+
+	// Ensure Helm package is cached and uploaded using SCP
+	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "helm", i.options.HelmVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+		return fmt.Errorf("failed to ensure helm package: %w", err)
+	}
+
+	// Now install from the cached package on the remote node
 	script := fmt.Sprintf(`#!/bin/bash
 set -e
 
@@ -1337,61 +1193,25 @@ if command -v helm &> /dev/null; then
     exit 0
 fi
 
-# Step 2: Detect architecture
-ARCH=%s
-echo "Detected architecture: $ARCH"
-log_step "ARCH_DETECTION" "success"
-
-# Step 3: Set file paths
-HELM_VERSION="%s"
-HELM_PACKAGE="helm-$HELM_VERSION-linux-$ARCH.tar.gz"
-HELM_PACKAGE_PATH="/usr/local/src/$HELM_PACKAGE"
-DOWNLOAD_URL="https://get.helm.sh/$HELM_PACKAGE"
-
-# Step 4: Check if the package already exists
+# Step 2: Extract and install Helm from cached package
+HELM_PACKAGE_PATH="/usr/local/src/helm/helm-%s-%s.tar.zst"
 if [ -f "$HELM_PACKAGE_PATH" ]; then
-    echo "Helm package already exists at $HELM_PACKAGE_PATH"
-    log_step "PACKAGE_CHECK" "exists"
+    echo "Found cached Helm package at $HELM_PACKAGE_PATH"
+
+    # Extract Helm directly to /tmp and move to /usr/local/bin
+    sudo mkdir -p /tmp/helm-install
+    sudo tar --use-compress-program=zstd -xf "$HELM_PACKAGE_PATH" -C /tmp/helm-install
+    sudo mv /tmp/helm-install/linux-%s/helm /usr/bin/helm
+    sudo chmod +x /usr/bin/helm
+    sudo rm -rf /tmp/helm-install
+    log_step "INSTALL_HELM" "success"
 else
-    echo "Downloading Helm package from $DOWNLOAD_URL"
-    sudo mkdir -p /usr/local/src
-    sudo curl -sSL "$DOWNLOAD_URL" -o "$HELM_PACKAGE_PATH"
-    if [ $? -eq 0 ]; then
-        echo "Successfully downloaded Helm package to $HELM_PACKAGE_PATH"
-        log_step "DOWNLOAD_HELM" "success"
-    else
-        echo "Failed to download Helm package"
-        log_step "DOWNLOAD_HELM" "failure"
-        exit 1
-    fi
-fi
-
-# Step 5: Extract and install Helm
-echo "Extracting and installing Helm"
-sudo mkdir -p /tmp/helm-install
-sudo tar -zxf "$HELM_PACKAGE_PATH" -C /tmp/helm-install
-if [ $? -ne 0 ]; then
-    echo "Failed to extract Helm package"
-    log_step "EXTRACT_HELM" "failure"
-    exit 1
-fi
-log_step "EXTRACT_HELM" "success"
-
-# Step 6: Move binary to /usr/local/bin
-sudo mv /tmp/helm-install/linux-$ARCH/helm /usr/local/bin/helm
-if [ $? -ne 0 ]; then
-    echo "Failed to move Helm binary to /usr/local/bin"
+    echo "Cached Helm package not found at $HELM_PACKAGE_PATH"
     log_step "INSTALL_HELM" "failure"
     exit 1
 fi
-sudo chmod +x /usr/local/bin/helm
-log_step "INSTALL_HELM" "success"
 
-# Step 7: Clean up
-sudo rm -rf /tmp/helm-install
-log_step "CLEANUP" "success"
-
-# Step 8: Verify installation
+# Step 3: Verify installation
 INSTALLED_VERSION=$(helm version --short 2>/dev/null | cut -d "+" -f 1)
 if [ -n "$INSTALLED_VERSION" ]; then
     echo "Successfully installed Helm $INSTALLED_VERSION"
@@ -1404,7 +1224,7 @@ fi
 
 log_step "OVERALL" "success"
 exit 0
-`, i.arch, i.options.HelmVersion)
+`, i.options.HelmVersion, i.arch, i.arch)
 
 	// Execute the script in a single SSH connection
 	log.Infof("Installing Helm on node %s", i.nodeName)
@@ -1416,7 +1236,7 @@ exit 0
 	var err error
 
 	for retry := 0; retry < maxRetries; retry++ {
-		output, err = i.sshRunner.RunSSHCommand(i.nodeName, script)
+		output, err = i.sshRunner.RunCommand(i.nodeName, script)
 
 		// Parse the output to check for any failures or if already installed
 		lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -1485,7 +1305,7 @@ func (i *Initializer) InstallZstd() error {
 // installZstdOnDebian installs zstd on Debian-based systems
 func (i *Initializer) installZstdOnDebian() error {
 	cmd := "sudo apt-get install -y zstd"
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to install zstd on node %s: %w", i.nodeName, err)
 	}
@@ -1506,7 +1326,7 @@ func (i *Initializer) installZstdOnRedhat() error {
 		cmd = "sudo yum install -y zstd"
 	}
 
-	_, err := i.sshRunner.RunSSHCommand(i.nodeName, cmd)
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to install zstd on node %s: %w", i.nodeName, err)
 	}
@@ -1555,28 +1375,16 @@ func (i *Initializer) Initialize() error {
 		}
 	}
 
-	// Install container runtime
+	// Install container runtime using cache
 	if i.options.ContainerRuntime == "containerd" {
 		if err := i.InstallContainerd(); err != nil {
-			// Try to update package repositories and retry
-			if err := i.AptUpdateForFixMissing(); err != nil {
-				return err
-			}
-			if err := i.InstallContainerd(); err != nil {
-				return err
-			}
+			return err
 		}
 	}
 
 	// Install Kubernetes components
 	if err := i.InstallK8sComponents(); err != nil {
-		// Try to update package repositories and retry
-		if err := i.AptUpdateForFixMissing(); err != nil {
-			return err
-		}
-		if err := i.InstallK8sComponents(); err != nil {
-			return err
-		}
+		return err
 	}
 
 	// Install Helm
