@@ -5,20 +5,22 @@ import (
 	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/config/default/metallb"
-	"github.com/monshunter/ohmykube/pkg/ssh"
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 )
 
 // MetalLBInstaller used for installing and configuring MetalLB load balancer
 type MetalLBInstaller struct {
-	sshClient *ssh.Client
-	masterIP  string
+	sshRunner      interfaces.SSHRunner
+	controllerNode string
+	controllerIP   string
 }
 
 // NewMetalLBInstaller creates a new MetalLB installer
-func NewMetalLBInstaller(sshClient *ssh.Client, masterIP string) *MetalLBInstaller {
+func NewMetalLBInstaller(sshRunner interfaces.SSHRunner, controllerNode string, controllerIP string) *MetalLBInstaller {
 	return &MetalLBInstaller{
-		sshClient: sshClient,
-		masterIP:  masterIP,
+		sshRunner:      sshRunner,
+		controllerNode: controllerNode,
+		controllerIP:   controllerIP,
 	}
 }
 
@@ -28,7 +30,7 @@ func (m *MetalLBInstaller) Install() error {
 	metallbCmd := `
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
 `
-	_, err := m.sshClient.RunCommand(metallbCmd)
+	_, err := m.sshRunner.RunCommand(m.controllerNode, metallbCmd)
 	if err != nil {
 		return fmt.Errorf("failed to install MetalLB: %w", err)
 	}
@@ -37,7 +39,7 @@ kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/confi
 	waitCmd := `
 kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=90s
 `
-	_, err = m.sshClient.RunCommand(waitCmd)
+	_, err = m.sshRunner.RunCommand(m.controllerNode, waitCmd)
 	if err != nil {
 		return fmt.Errorf("failed to wait for MetalLB deployment to complete: %w", err)
 	}
@@ -54,14 +56,14 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 	// Create configuration file
 	configFile := "/tmp/metallb-config.yaml"
 	createConfigCmd := fmt.Sprintf("cat <<EOF | tee %s\n%sEOF", configFile, configYAML)
-	_, err = m.sshClient.RunCommand(createConfigCmd)
+	_, err = m.sshRunner.RunCommand(m.controllerNode, createConfigCmd)
 	if err != nil {
 		return fmt.Errorf("failed to create MetalLB configuration file: %w", err)
 	}
 
 	// Apply configuration
 	applyConfigCmd := fmt.Sprintf("kubectl apply -f %s", configFile)
-	_, err = m.sshClient.RunCommand(applyConfigCmd)
+	_, err = m.sshRunner.RunCommand(m.controllerNode, applyConfigCmd)
 	if err != nil {
 		return fmt.Errorf("failed to apply MetalLB configuration: %w", err)
 	}
@@ -72,9 +74,9 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 // getMetalLBAddressRange gets suitable IP address range for MetalLB
 func (m *MetalLBInstaller) getMetalLBAddressRange() (string, error) {
 	// Parse IP address
-	ipParts := strings.Split(m.masterIP, ".")
+	ipParts := strings.Split(m.controllerIP, ".")
 	if len(ipParts) != 4 {
-		return "", fmt.Errorf("invalid IP address format: %s", m.masterIP)
+		return "", fmt.Errorf("invalid IP address format: %s", m.controllerIP)
 	}
 
 	// Use a range of IP addresses in the same subnet as LoadBalancer IP pool

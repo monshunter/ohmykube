@@ -239,7 +239,7 @@ func (sm *SSHManager) UploadFile(nodeName, localPath, remotePath string) error {
 		}
 	}
 
-	return client.TransferFile(localPath, remotePath)
+	return client.UploadFile(localPath, remotePath)
 }
 
 // DownloadFile downloads a file from a remote node to local path using proper SCP protocol

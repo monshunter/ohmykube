@@ -53,11 +53,7 @@ func (k *Manager) InitMaster() error {
 
 	// Transfer configuration file to the VM
 	remoteConfigPath := "/tmp/kubeadm-config.yaml"
-	sshClient, exists := k.SSHManager.GetClient(k.MasterNode)
-	if !exists {
-		return fmt.Errorf("failed to get SSH client for Master node")
-	}
-	if err := sshClient.TransferFile(configPath, remoteConfigPath); err != nil {
+	if err := k.SSHManager.UploadFile(k.MasterNode, configPath, remoteConfigPath); err != nil {
 		return fmt.Errorf("failed to transfer kubeadm configuration file to VM: %w", err)
 	}
 

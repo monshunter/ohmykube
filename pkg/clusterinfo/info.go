@@ -4,19 +4,21 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // ClusterInfo provides functionality to retrieve cluster information
 type ClusterInfo struct {
-	SSHClient *ssh.Client
+	sshRunner      interfaces.SSHRunner
+	controllerNode string
 }
 
 // NewClusterInfo creates a new cluster information retriever
-func NewClusterInfo(sshClient *ssh.Client) *ClusterInfo {
+func NewClusterInfo(sshRunner interfaces.SSHRunner, controllerNode string) *ClusterInfo {
 	return &ClusterInfo{
-		SSHClient: sshClient,
+		sshRunner:      sshRunner,
+		controllerNode: controllerNode,
 	}
 }
 
@@ -29,7 +31,7 @@ func (c *ClusterInfo) GetPodCIDR() (string, error) {
 	getPodCIDRFromConfigMap := `
 kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfiguration}' | grep -A3 networking | grep podSubnet | awk '{print $2}'
 `
-	output, err := c.SSHClient.RunCommand(getPodCIDRFromConfigMap)
+	output, err := c.sshRunner.RunCommand(c.controllerNode, getPodCIDRFromConfigMap)
 	if err == nil && strings.TrimSpace(output) != "" {
 		return strings.TrimSpace(output), nil
 	}
@@ -38,7 +40,7 @@ kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfigur
 	getFromControllerManager := `
 kubectl -n kube-system get pod -l component=kube-controller-manager -o jsonpath='{.items[0].spec.containers[0].command}' | grep -o -- '--cluster-cidr=[0-9./]*' | cut -d= -f2
 `
-	output, err = c.SSHClient.RunCommand(getFromControllerManager)
+	output, err = c.sshRunner.RunCommand(c.controllerNode, getFromControllerManager)
 	if err == nil && strings.TrimSpace(output) != "" {
 		return strings.TrimSpace(output), nil
 	}
@@ -57,7 +59,7 @@ func (c *ClusterInfo) GetServiceCIDR() (string, error) {
 	getServiceCIDRFromConfigMap := `
 kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfiguration}' | grep -A5 networking | grep serviceSubnet | awk '{print $2}'
 `
-	output, err := c.SSHClient.RunCommand(getServiceCIDRFromConfigMap)
+	output, err := c.sshRunner.RunCommand(c.controllerNode, getServiceCIDRFromConfigMap)
 	if err == nil && strings.TrimSpace(output) != "" {
 		return strings.TrimSpace(output), nil
 	}
@@ -66,7 +68,7 @@ kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfigur
 	getFromAPIServer := `
 kubectl -n kube-system get pod -l component=kube-apiserver -o jsonpath='{.items[0].spec.containers[0].command}' | grep -o -- '--service-cluster-ip-range=[0-9./]*' | cut -d= -f2
 `
-	output, err = c.SSHClient.RunCommand(getFromAPIServer)
+	output, err = c.sshRunner.RunCommand(c.controllerNode, getFromAPIServer)
 	if err == nil && strings.TrimSpace(output) != "" {
 		return strings.TrimSpace(output), nil
 	}
@@ -79,7 +81,7 @@ kubectl -n kube-system get pod -l component=kube-apiserver -o jsonpath='{.items[
 // GetKubernetesVersion retrieves the cluster Kubernetes version
 func (c *ClusterInfo) GetKubernetesVersion() (string, error) {
 	cmd := "kubectl version -o json | jq -r '.serverVersion.gitVersion'"
-	output, err := c.SSHClient.RunCommand(cmd)
+	output, err := c.sshRunner.RunCommand(c.controllerNode, cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to get Kubernetes version: %w", err)
 	}
@@ -95,7 +97,7 @@ func (c *ClusterInfo) GetClusterDNSDomain() (string, error) {
 	getDNSDomainFromConfigMap := `
 kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfiguration}' | grep -A5 networking | grep dnsDomain | awk '{print $2}'
 `
-	output, err := c.SSHClient.RunCommand(getDNSDomainFromConfigMap)
+	output, err := c.sshRunner.RunCommand(c.controllerNode, getDNSDomainFromConfigMap)
 	if err == nil && strings.TrimSpace(output) != "" {
 		return strings.TrimSpace(output), nil
 	}
@@ -108,7 +110,7 @@ kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfigur
 // GetNodeCount retrieves the number of nodes in the cluster
 func (c *ClusterInfo) GetNodeCount() (int, error) {
 	cmd := "kubectl get nodes --no-headers | wc -l"
-	output, err := c.SSHClient.RunCommand(cmd)
+	output, err := c.sshRunner.RunCommand(c.controllerNode, cmd)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get cluster node count: %w", err)
 	}

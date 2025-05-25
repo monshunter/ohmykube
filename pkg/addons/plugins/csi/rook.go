@@ -3,25 +3,25 @@ package csi
 import (
 	"fmt"
 
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // RookInstaller is responsible for installing Rook-Ceph CSI
 type RookInstaller struct {
-	SSHClient   *ssh.Client
-	MasterNode  string
-	RookVersion string
-	CephVersion string
+	sshRunner      interfaces.SSHRunner
+	controllerNode string
+	RookVersion    string
+	CephVersion    string
 }
 
 // NewRookInstaller creates a Rook installer
-func NewRookInstaller(sshClient *ssh.Client, masterNode string) *RookInstaller {
+func NewRookInstaller(sshRunner interfaces.SSHRunner, controllerNode string) *RookInstaller {
 	return &RookInstaller{
-		SSHClient:   sshClient,
-		MasterNode:  masterNode,
-		RookVersion: "v1.17.2", // Rook version
-		CephVersion: "17.2.6",  // Ceph version
+		sshRunner:      sshRunner,
+		controllerNode: controllerNode,
+		RookVersion:    "v1.17.2", // Rook version
+		CephVersion:    "17.2.6",  // Ceph version
 	}
 }
 
@@ -45,7 +45,7 @@ helm install --create-namespace --namespace rook-ceph rook-ceph-cluster \
    --set operatorNamespace=rook-ceph rook-release/rook-ceph-cluster
 `
 
-	_, err := r.SSHClient.RunCommand(helmInstallCmd)
+	_, err := r.sshRunner.RunCommand(r.controllerNode, helmInstallCmd)
 	if err != nil {
 		return fmt.Errorf("failed to install Rook-Ceph CSI: %w", err)
 	}

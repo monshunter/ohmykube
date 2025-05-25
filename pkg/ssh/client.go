@@ -183,8 +183,8 @@ func (c *Client) RunCommand(command string) (string, error) {
 	return "", lastErr
 }
 
-// TransferFile transfers a local file to the remote server using SCP protocol
-func (c *Client) TransferFile(localPath, remotePath string) error {
+// UploadFile uploads a local file to the remote server using SCP protocol
+func (c *Client) UploadFile(localPath, remotePath string) error {
 	maxRetries := 3
 	var lastErr error
 

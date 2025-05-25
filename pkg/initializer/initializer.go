@@ -76,6 +76,10 @@ func NewInitializerWithOptions(sshRunner interfaces.SSHRunner, nodeName string, 
 
 // DoSystemUpdate updates the system package repositories based on OS type
 func (i *Initializer) DoSystemUpdate() error {
+	if !i.options.UpdateSystem {
+		log.Infof("Skipping system update on node %s", i.nodeName)
+		return nil
+	}
 	// Call appropriate update function based on OS type
 	switch i.osType {
 	case osTypeDebian:

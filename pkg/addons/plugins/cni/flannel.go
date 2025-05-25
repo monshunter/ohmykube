@@ -4,25 +4,25 @@ import (
 	"fmt"
 
 	"github.com/monshunter/ohmykube/pkg/clusterinfo"
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // FlannelInstaller is responsible for installing Flannel CNI
 type FlannelInstaller struct {
-	SSHClient  *ssh.Client
-	MasterNode string
-	PodCIDR    string
-	Version    string
+	sshRunner      interfaces.SSHRunner
+	controllerNode string
+	PodCIDR        string
+	Version        string
 }
 
 // NewFlannelInstaller creates a Flannel installer
-func NewFlannelInstaller(sshClient *ssh.Client, masterNode string) *FlannelInstaller {
+func NewFlannelInstaller(sshRunner interfaces.SSHRunner, controllerNode string) *FlannelInstaller {
 	return &FlannelInstaller{
-		SSHClient:  sshClient,
-		MasterNode: masterNode,
-		PodCIDR:    "10.244.0.0/16", // Flannel default Pod CIDR
-		Version:    "v0.26.7",       // Flannel version
+		sshRunner:      sshRunner,
+		controllerNode: controllerNode,
+		PodCIDR:        "10.244.0.0/16", // Flannel default Pod CIDR
+		Version:        "v0.26.7",       // Flannel version
 	}
 }
 
@@ -33,13 +33,13 @@ func (f *FlannelInstaller) Install() error {
 sudo modprobe br_netfilter
 echo "br_netfilter" | sudo tee /etc/modules-load.d/br_netfilter.conf
 `
-	_, err := f.SSHClient.RunCommand(brNetfilterCmd)
+	_, err := f.sshRunner.RunCommand(f.controllerNode, brNetfilterCmd)
 	if err != nil {
 		return fmt.Errorf("failed to load br_netfilter module: %w", err)
 	}
 
 	// Use ClusterInfo to get the cluster's Pod CIDR
-	clusterInfo := clusterinfo.NewClusterInfo(f.SSHClient)
+	clusterInfo := clusterinfo.NewClusterInfo(f.sshRunner, f.controllerNode)
 	podCIDR, err := clusterInfo.GetPodCIDR()
 	if err == nil && podCIDR != "" {
 		f.PodCIDR = podCIDR
@@ -52,7 +52,7 @@ echo "br_netfilter" | sudo tee /etc/modules-load.d/br_netfilter.conf
 helm repo add flannel https://flannel-io.github.io/flannel/
 helm repo update
 `
-	_, err = f.SSHClient.RunCommand(addRepoCmd)
+	_, err = f.sshRunner.RunCommand(f.controllerNode, addRepoCmd)
 	if err != nil {
 		return fmt.Errorf("failed to add Flannel Helm repository: %w", err)
 	}
@@ -72,7 +72,7 @@ helm install flannel flannel/flannel \
   --timeout 300s
 `, f.Version, f.PodCIDR)
 
-	_, err = f.SSHClient.RunCommand(installCmd)
+	_, err = f.sshRunner.RunCommand(f.controllerNode, installCmd)
 	if err != nil {
 		return fmt.Errorf("failed to install Flannel using Helm: %w", err)
 	}
@@ -80,7 +80,7 @@ helm install flannel flannel/flannel \
 	// Wait for Flannel to be ready
 	log.Info("Waiting for Flannel to become ready...")
 	waitCmd := `kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=300s`
-	_, err = f.SSHClient.RunCommand(waitCmd)
+	_, err = f.sshRunner.RunCommand(f.controllerNode, waitCmd)
 	if err != nil {
 		log.Infof("Warning: Timed out waiting for Flannel to be ready, but will continue: %v", err)
 	}

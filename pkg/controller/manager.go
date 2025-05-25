@@ -401,8 +401,8 @@ func (m *Manager) CreateCluster() error {
 	m.Cluster.Save()
 
 	log.Info("Cluster created successfully! You can access the cluster with the following commands:")
-	fmt.Printf("\t\texport KUBECONFIG=%s\n", kubeconfigPath)
-	fmt.Println("\t\tkubectl get nodes")
+	log.Infof("\texport KUBECONFIG=%s", kubeconfigPath)
+	log.Info("\tkubectl get nodes")
 
 	return nil
 }

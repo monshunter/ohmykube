@@ -4,27 +4,27 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // CiliumInstaller is responsible for installing Cilium CNI
 type CiliumInstaller struct {
-	SSHClient     *ssh.Client
-	MasterNode    string
-	Version       string
-	APIServerHost string
-	APIServerPort string
+	sshRunner      interfaces.SSHRunner
+	controllerNode string
+	Version        string
+	APIServerHost  string
+	APIServerPort  string
 }
 
 // NewCiliumInstaller creates a Cilium installer
-func NewCiliumInstaller(sshClient *ssh.Client, masterNode string, masterIP string) *CiliumInstaller {
+func NewCiliumInstaller(sshRunner interfaces.SSHRunner, controllerNode string, controllerIP string) *CiliumInstaller {
 	return &CiliumInstaller{
-		SSHClient:     sshClient,
-		MasterNode:    masterNode,
-		Version:       "1.14.5", // Cilium version
-		APIServerHost: masterIP, // Use master node IP as API server address
-		APIServerPort: "6443",   // Default API server port
+		sshRunner:      sshRunner,
+		controllerNode: controllerNode,
+		Version:        "1.14.5",
+		APIServerHost:  controllerIP,
+		APIServerPort:  "6443",
 	}
 }
 
@@ -71,11 +71,11 @@ spec:
 
 	// Transfer config file to VM
 	remoteConfigPath := "/tmp/cilium-config.yaml"
-	if err := c.SSHClient.TransferFile(tmpfile.Name(), remoteConfigPath); err != nil {
+	if err := c.sshRunner.UploadFile(c.controllerNode, tmpfile.Name(), remoteConfigPath); err != nil {
 		return fmt.Errorf("failed to transfer Cilium config file to VM: %w", err)
 	}
 	// Add Cilium Helm repository
-	_, err = c.SSHClient.RunCommand(`
+	_, err = c.sshRunner.RunCommand(c.controllerNode, `
 helm repo add cilium https://helm.cilium.io
 helm repo update
 `)
@@ -96,14 +96,14 @@ helm install cilium cilium/cilium --version %s \
   --set k8sServicePort=%s
 `, c.Version, c.APIServerHost, c.APIServerPort)
 
-	_, err = c.SSHClient.RunCommand(installCmd)
+	_, err = c.sshRunner.RunCommand(c.controllerNode, installCmd)
 	if err != nil {
 		return fmt.Errorf("failed to install Cilium: %w", err)
 	}
 
 	// Wait for Cilium to be ready
 	log.Info("Waiting for Cilium to become ready...")
-	_, err = c.SSHClient.RunCommand(`
+	_, err = c.sshRunner.RunCommand(c.controllerNode, `
 kubectl -n kube-system wait --for=condition=ready pod -l k8s-app=cilium --timeout=5m
 `)
 	if err != nil {

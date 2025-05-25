@@ -43,19 +43,11 @@ func (m *Manager) InstallCNI() error {
 	m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
 		"Installing", fmt.Sprintf("Installing %s CNI", m.CNIType))
 
-	// Ensure master node's SSH client is created
-	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
-	if !exists {
-		m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
-			"SSHError", "Failed to get SSH client for Master node")
-		return fmt.Errorf("failed to get SSH client for Master node")
-	}
-
 	var err error
 	switch m.CNIType {
 	case api.CNITypeCilium:
 		// Get Master node IP
-		ciliumInstaller := cni.NewCiliumInstaller(sshClient, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
+		ciliumInstaller := cni.NewCiliumInstaller(m.SSHManager, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
 		err = ciliumInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
@@ -64,7 +56,7 @@ func (m *Manager) InstallCNI() error {
 		}
 
 	case api.CNITypeFlannel:
-		flannelInstaller := cni.NewFlannelInstaller(sshClient, m.Cluster.GetMasterName())
+		flannelInstaller := cni.NewFlannelInstaller(m.SSHManager, m.Cluster.GetMasterName())
 		err = flannelInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
@@ -97,19 +89,11 @@ func (m *Manager) InstallCSI() error {
 	m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
 		"Installing", fmt.Sprintf("Installing %s CSI", m.CSIType))
 
-	// Ensure master node's SSH client is created
-	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
-	if !exists {
-		m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
-			"SSHError", "Failed to get SSH client for Master node")
-		return fmt.Errorf("failed to get SSH client for Master node")
-	}
-
 	var err error
 	switch m.CSIType {
 	case api.CSITypeRook:
 		// Use Rook installer to install Rook-Ceph CSI
-		rookInstaller := csi.NewRookInstaller(sshClient, m.Cluster.GetMasterName())
+		rookInstaller := csi.NewRookInstaller(m.SSHManager, m.Cluster.GetMasterName())
 		err = rookInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
@@ -119,7 +103,7 @@ func (m *Manager) InstallCSI() error {
 
 	case api.CSITypeLocalPath:
 		// Use LocalPath installer to install local-path-provisioner
-		localPathInstaller := csi.NewLocalPathInstaller(sshClient, m.Cluster.GetMasterName())
+		localPathInstaller := csi.NewLocalPathInstaller(m.SSHManager, m.Cluster.GetMasterName())
 		err = localPathInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
@@ -157,16 +141,8 @@ func (m *Manager) InstallLB() error {
 	m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
 		"Installing", "Installing MetalLB LoadBalancer")
 
-	// Ensure master node's SSH client is created
-	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
-	if !exists {
-		m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
-			"SSHError", "Failed to get SSH client for Master node")
-		return fmt.Errorf("failed to get SSH client for Master node")
-	}
-
 	// Use MetalLB installer
-	metallbInstaller := lb.NewMetalLBInstaller(sshClient, m.Cluster.GetMasterIP())
+	metallbInstaller := lb.NewMetalLBInstaller(m.SSHManager, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
 	if err := metallbInstaller.Install(); err != nil {
 		m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
 			"InstallationFailed", fmt.Sprintf("Failed to install MetalLB: %v", err))
