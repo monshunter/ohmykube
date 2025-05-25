@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/initializer"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
@@ -24,7 +25,7 @@ var addCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load cluster information
-		clusterInfo, err := cluster.Load(clusterName)
+		cls, err := cluster.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
@@ -38,21 +39,28 @@ var addCmd = &cobra.Command{
 		}
 		// Create cluster configuration
 		config := &cluster.Config{
-			Name:   clusterInfo.Name,
+			Name:   cls.Name,
 			Master: cluster.Resource{},
 		}
-		config.SetKubernetesVersion(clusterInfo.Spec.K8sVersion)
-		config.SetLauncherType(clusterInfo.Spec.Launcher)
+		config.SetKubernetesVersion(cls.Spec.K8sVersion)
+		config.SetLauncherType(cls.Spec.Launcher)
 		config.SetTemplate(limaTemplate)
 		config.SetParallel(parallel)
+		// Get default initialization options and modify required fields
+		initOptions := initializer.DefaultInitOptions()
+		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
+		initOptions.EnableIPVS = cls.Spec.ProxyMode == "ipvs"
+		initOptions.K8SVersion = cls.Spec.K8sVersion
 
 		// Create cluster manager
-		manager, err := manager.NewManager(config, sshConfig, clusterInfo)
+		manager, err := manager.NewManager(config, sshConfig, cls)
 		if err != nil {
 			log.Errorf("Failed to create cluster manager: %v", err)
 			return fmt.Errorf("failed to create cluster manager: %w", err)
 		}
 		defer manager.Close()
+		// Set environment initialization options
+		manager.SetInitOptions(initOptions)
 		for range count {
 			// Add node (InitOptions is already initialized in NewManager with DefaultInitOptions)
 			if err := manager.AddWorkerNode(addNodeCPU, addNodeMemory, addNodeDisk); err != nil {

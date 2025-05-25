@@ -77,52 +77,50 @@ func (d *Downloader) DownloadFile(ctx context.Context, url, destPath string) err
 	return nil
 }
 
-// copyWithProgress copies data from src to dst with progress logging
-func (d *Downloader) copyWithProgress(dst io.Writer, src io.Reader, totalSize int64, url string) (int64, error) {
-	var written int64
-	buf := make([]byte, 32*1024) // 32KB buffer
+// progressReader wraps an io.Reader to provide progress logging
+type progressReader struct {
+	reader      io.Reader
+	totalSize   int64
+	written     int64
+	url         string
+	lastLogTime time.Time
+	logInterval time.Duration
+}
 
-	lastLogTime := time.Now()
-	logInterval := 10 * time.Second
+func newProgressReader(reader io.Reader, totalSize int64, url string) *progressReader {
+	return &progressReader{
+		reader:      reader,
+		totalSize:   totalSize,
+		url:         url,
+		lastLogTime: time.Now(),
+		logInterval: 10 * time.Second,
+	}
+}
 
-	for {
-		nr, er := src.Read(buf)
-		if nr > 0 {
-			nw, ew := dst.Write(buf[0:nr])
-			if nw < 0 || nr < nw {
-				nw = 0
-				if ew == nil {
-					ew = fmt.Errorf("invalid write result")
-				}
-			}
-			written += int64(nw)
-			if ew != nil {
-				return written, ew
-			}
-			if nr != nw {
-				return written, io.ErrShortWrite
-			}
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 {
+		pr.written += int64(n)
 
-			// Log progress periodically
-			now := time.Now()
-			if now.Sub(lastLogTime) >= logInterval {
-				if totalSize > 0 {
-					progress := float64(written) / float64(totalSize) * 100
-					log.Infof("Download progress for %s: %.1f%% (%d/%d bytes)", url, progress, written, totalSize)
-				} else {
-					log.Infof("Download progress for %s: %d bytes", url, written)
-				}
-				lastLogTime = now
+		// Log progress periodically
+		now := time.Now()
+		if now.Sub(pr.lastLogTime) >= pr.logInterval {
+			if pr.totalSize > 0 {
+				progress := float64(pr.written) / float64(pr.totalSize) * 100
+				log.Infof("Download progress for %s: %.1f%% (%d/%d bytes)", pr.url, progress, pr.written, pr.totalSize)
+			} else {
+				log.Infof("Download progress for %s: %d bytes", pr.url, pr.written)
 			}
-		}
-		if er != nil {
-			if er != io.EOF {
-				return written, er
-			}
-			break
+			pr.lastLogTime = now
 		}
 	}
-	return written, nil
+	return n, err
+}
+
+// copyWithProgress copies data from src to dst with progress logging using io.Copy
+func (d *Downloader) copyWithProgress(dst io.Writer, src io.Reader, totalSize int64, url string) (int64, error) {
+	progressSrc := newProgressReader(src, totalSize, url)
+	return io.Copy(dst, progressSrc)
 }
 
 // CalculateChecksum calculates the SHA256 checksum of a file
@@ -153,23 +151,23 @@ func (d *Downloader) GetFileSize(filePath string) (int64, error) {
 // DownloadWithRetry downloads a file with retry logic
 func (d *Downloader) DownloadWithRetry(ctx context.Context, url, destPath string, maxRetries int) error {
 	var lastErr error
-	
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		log.Infof("Download attempt %d/%d for %s", attempt, maxRetries, url)
-		
+
 		err := d.DownloadFile(ctx, url, destPath)
 		if err == nil {
 			return nil
 		}
-		
+
 		lastErr = err
 		log.Errorf("Download attempt %d failed: %v", attempt, err)
-		
+
 		if attempt < maxRetries {
 			// Wait before retrying (exponential backoff)
 			waitTime := time.Duration(attempt) * 5 * time.Second
 			log.Infof("Waiting %v before retry...", waitTime)
-			
+
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -178,6 +176,6 @@ func (d *Downloader) DownloadWithRetry(ctx context.Context, url, destPath string
 			}
 		}
 	}
-	
+
 	return fmt.Errorf("download failed after %d attempts: %w", maxRetries, lastErr)
 }

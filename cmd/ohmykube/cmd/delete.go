@@ -24,7 +24,7 @@ var deleteCmd = &cobra.Command{
 		// Get node names from args
 		deleteNodeNames := args
 		// Load cluster information
-		clusterInfo, err := cluster.Load(clusterName)
+		cls, err := cluster.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
@@ -39,14 +39,14 @@ var deleteCmd = &cobra.Command{
 
 		// Create cluster configuration
 		config := &cluster.Config{
-			Name:   clusterInfo.Name,
+			Name:   cls.Name,
 			Master: cluster.Resource{},
 		}
 		config.SetParallel(parallel)
-		config.SetLauncherType(clusterInfo.Spec.Launcher)
+		config.SetLauncherType(cls.Spec.Launcher)
 
 		// Create cluster manager
-		manager, err := manager.NewManager(config, sshConfig, clusterInfo)
+		manager, err := manager.NewManager(config, sshConfig, cls)
 		if err != nil {
 			log.Errorf("Failed to create cluster manager: %v", err)
 			return fmt.Errorf("failed to create cluster manager: %w", err)

@@ -1288,6 +1288,127 @@ exit 0
 	return fmt.Errorf("failed to install Helm on node %s after %d attempts", i.nodeName, maxRetries)
 }
 
+// SetupDNSResolution sets up custom DNS resolution to prevent CoreDNS loop detection issues
+func (i *Initializer) SetupDNSResolution() error {
+	log.Infof("Setting up DNS resolution configuration on node %s", i.nodeName)
+
+	// Create a script that sets up the custom DNS resolution based on OS type
+	script := `#!/bin/bash
+set -e
+
+# Function to log steps and their status
+log_step() {
+    echo "STEP_STATUS: $1=$2"
+}
+
+# Step 1: Create the ohmykube resolve directory
+echo "Creating /run/ohmykube/resolve directory..."
+sudo mkdir -p /run/ohmykube/resolve
+if [ $? -eq 0 ]; then
+    log_step "CREATE_RESOLVE_DIR" "success"
+else
+    log_step "CREATE_RESOLVE_DIR" "failure"
+    exit 1
+fi
+
+# Step 2: Detect OS type and determine source resolv.conf
+echo "Detecting OS type for DNS resolution setup..."
+SOURCE_RESOLV_CONF=""
+
+if [ -f /etc/debian_version ]; then
+    # Debian/Ubuntu system
+    if [ -f /run/systemd/resolve/resolv.conf ] && systemctl is-active systemd-resolved >/dev/null 2>&1; then
+        # Ubuntu with systemd-resolved
+        SOURCE_RESOLV_CONF="/run/systemd/resolve/resolv.conf"
+        echo "Detected Ubuntu/Debian with systemd-resolved, using /run/systemd/resolve/resolv.conf"
+        log_step "DETECT_OS_DNS" "ubuntu_systemd_resolved"
+    else
+        # Debian without systemd-resolved
+        SOURCE_RESOLV_CONF="/etc/resolv.conf"
+        echo "Detected Debian without systemd-resolved, using /etc/resolv.conf"
+        log_step "DETECT_OS_DNS" "debian_standard"
+    fi
+elif [ -f /etc/redhat-release ]; then
+    # RedHat/Rocky/CentOS system
+    SOURCE_RESOLV_CONF="/etc/resolv.conf"
+    echo "Detected RedHat-based system, using /etc/resolv.conf"
+    log_step "DETECT_OS_DNS" "redhat_standard"
+else
+    # Unknown system, default to /etc/resolv.conf
+    SOURCE_RESOLV_CONF="/etc/resolv.conf"
+    echo "Unknown OS type, defaulting to /etc/resolv.conf"
+    log_step "DETECT_OS_DNS" "unknown_default"
+fi
+
+# Step 3: Verify source resolv.conf exists
+if [ ! -f "$SOURCE_RESOLV_CONF" ]; then
+    echo "Source resolv.conf file $SOURCE_RESOLV_CONF does not exist"
+    log_step "VERIFY_SOURCE" "failure"
+    exit 1
+fi
+log_step "VERIFY_SOURCE" "success"
+
+# Step 4: Create symbolic link to the custom resolv.conf
+echo "Creating symbolic link from $SOURCE_RESOLV_CONF to /run/ohmykube/resolve/resolv.conf"
+sudo ln -sf "$SOURCE_RESOLV_CONF" /run/ohmykube/resolve/resolv.conf
+if [ $? -eq 0 ]; then
+    log_step "CREATE_SYMLINK" "success"
+else
+    log_step "CREATE_SYMLINK" "failure"
+    exit 1
+fi
+
+# Step 5: Verify the setup
+echo "Verifying DNS resolution setup..."
+if [ -L /run/ohmykube/resolve/resolv.conf ] && [ -f /run/ohmykube/resolve/resolv.conf ]; then
+    LINK_TARGET=$(readlink /run/ohmykube/resolve/resolv.conf)
+    echo "Successfully created DNS resolution setup:"
+    echo "Custom resolv.conf: /run/ohmykube/resolve/resolv.conf"
+    echo "Points to: $LINK_TARGET"
+    echo "Content preview:"
+    head -3 /run/ohmykube/resolve/resolv.conf | sed 's/^/    /'
+    log_step "VERIFY_SETUP" "success"
+else
+    echo "Failed to verify DNS resolution setup"
+    log_step "VERIFY_SETUP" "failure"
+    exit 1
+fi
+
+log_step "OVERALL" "success"
+exit 0
+`
+
+	// Execute the script in a single SSH connection
+	output, err := i.sshRunner.RunCommand(i.nodeName, script)
+	if err != nil {
+		log.Errorf("Failed to setup DNS resolution on node %s: %v", i.nodeName, err)
+		return fmt.Errorf("failed to setup DNS resolution on node %s: %w", i.nodeName, err)
+	}
+
+	// Parse the output to check for any failures
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "STEP_STATUS:") {
+			parts := strings.SplitN(strings.TrimPrefix(line, "STEP_STATUS: "), "=", 2)
+			if len(parts) == 2 {
+				step := parts[0]
+				status := parts[1]
+				log.Infof("DNS resolution setup step %s: %s on node %s", step, status, i.nodeName)
+
+				if status == "failure" {
+					return fmt.Errorf("failed to complete DNS resolution setup step %s on node %s", step, i.nodeName)
+				}
+			}
+		} else if strings.Contains(line, "Detected") || strings.Contains(line, "Successfully created") || strings.Contains(line, "Points to:") || strings.Contains(line, "Custom resolv.conf:") {
+			// Log important information about the DNS setup
+			log.Infof("%s on node %s", line, i.nodeName)
+		}
+	}
+
+	log.Infof("Successfully setup DNS resolution on node %s", i.nodeName)
+	return nil
+}
+
 // InstallZstd installs zstd package based on OS type
 func (i *Initializer) InstallZstd() error {
 	// Call appropriate install function based on OS type
@@ -1344,6 +1465,12 @@ func (i *Initializer) Initialize() error {
 	if err := i.InstallZstd(); err != nil {
 		return err
 	}
+
+	// Setup DNS resolution to prevent CoreDNS loop detection issues
+	if err := i.SetupDNSResolution(); err != nil {
+		return err
+	}
+
 	// Based on options, disable swap if specified
 	if i.options.DisableSwap {
 		if err := i.DisableSwap(); err != nil {
