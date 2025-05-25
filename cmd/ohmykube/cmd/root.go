@@ -7,12 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	password      string
-	sshKeyFile    string
-	sshPubKeyFile string
-)
-
 var rootCmd = &cobra.Command{
 	Use:   "ohmykube",
 	Short: "OhMyKube - Tool for quickly setting up real Kubernetes clusters locally",
@@ -35,6 +29,9 @@ const (
 )
 
 var (
+	password             string
+	sshKeyFile           string
+	sshPubKeyFile        string
 	defaultSSHKeyFile    string
 	defaultSSHPubKeyFile string
 	clusterName          string
@@ -42,6 +39,7 @@ var (
 	parallel             int
 	limaTemplate         string
 	proxyMode            string
+	updateSystem         bool
 )
 
 func init() {
@@ -60,6 +58,8 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
 	rootCmd.PersistentFlags().StringVar(&limaTemplate, "lima-template", "ubuntu-24.04", "Lima file or template")
 	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
+	rootCmd.PersistentFlags().BoolVar(&updateSystem, "update-system", false, "Update system packages before installation")
+
 	// Add subcommands
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)

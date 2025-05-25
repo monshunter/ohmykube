@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/config"
+	"github.com/monshunter/ohmykube/pkg/controller"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
@@ -24,7 +24,7 @@ var deleteCmd = &cobra.Command{
 		// Get node names from args
 		deleteNodeNames := args
 		// Load cluster information
-		cls, err := cluster.Load(clusterName)
+		cls, err := config.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
@@ -38,15 +38,15 @@ var deleteCmd = &cobra.Command{
 		}
 
 		// Create cluster configuration
-		config := &cluster.Config{
+		config := &config.Config{
 			Name:   cls.Name,
-			Master: cluster.Resource{},
+			Master: config.Resource{},
 		}
 		config.SetParallel(parallel)
 		config.SetLauncherType(cls.Spec.Launcher)
 
 		// Create cluster manager
-		manager, err := manager.NewManager(config, sshConfig, cls)
+		manager, err := controller.NewManager(config, sshConfig, cls, nil)
 		if err != nil {
 			log.Errorf("Failed to create cluster manager: %v", err)
 			return fmt.Errorf("failed to create cluster manager: %w", err)

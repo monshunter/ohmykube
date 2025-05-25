@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/log"
 )
 
@@ -57,7 +57,7 @@ func (c *SSHConfig) GetSSHPubKey() string {
 
 // SSHManager manages SSH clients and their lifecycle
 type SSHManager struct {
-	cluster   *cluster.Cluster
+	cluster   *config.Cluster
 	sshConfig *SSHConfig
 	clients   map[string]*Client
 	mutex     sync.RWMutex
@@ -73,7 +73,7 @@ func (sm *SSHManager) GetSSHConfig() *SSHConfig {
 }
 
 // NewSSHManager creates a new SSH manager
-func NewSSHManager(cluster *cluster.Cluster, sshConfig *SSHConfig) *SSHManager {
+func NewSSHManager(cluster *config.Cluster, sshConfig *SSHConfig) *SSHManager {
 	manager := &SSHManager{
 		cluster:             cluster,
 		sshConfig:           sshConfig,

@@ -3,9 +3,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/config"
+	"github.com/monshunter/ohmykube/pkg/controller"
 	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
-	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
@@ -20,8 +20,8 @@ var downCmd = &cobra.Command{
 			return err
 		}
 
-		if launcher == "" && cluster.CheckExists(clusterName) {
-			clusterInfo, err := cluster.Load(clusterName)
+		if launcher == "" && config.CheckExists(clusterName) {
+			clusterInfo, err := config.Load(clusterName)
 			if err != nil {
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}
@@ -33,14 +33,14 @@ var downCmd = &cobra.Command{
 		}
 
 		// Create cluster configuration
-		config := cluster.NewConfig(clusterName, workersCount, "iptables",
-			cluster.Resource{}, cluster.Resource{})
+		config := config.NewConfig(clusterName, workersCount, "iptables",
+			config.Resource{}, config.Resource{})
 		config.SetKubernetesVersion("")
 		config.SetLauncherType(launcherType.String())
 		config.SetTemplate(limaTemplate)
 
 		// Create cluster manager
-		manager, err := manager.NewManager(config, sshConfig, nil)
+		manager, err := controller.NewManager(config, sshConfig, nil, nil)
 		if err != nil {
 			return err
 		}

@@ -1,38 +1,5 @@
 package initializer
 
-import (
-	"context"
-
-	"github.com/monshunter/ohmykube/pkg/interfaces"
-)
-
-// SSHRunner defines the interface for SSH operations (commands + file transfer)
-type SSHRunner = interfaces.SSHRunner
-
-// SSHCommandRunner defines the interface for executing SSH commands (for backward compatibility)
-type SSHCommandRunner = interfaces.SSHCommandRunner
-
-// PackageCacheManager defines the interface for package cache management
-type PackageCacheManager interface {
-	// EnsurePackage ensures the specified package is available both locally and on target nodes (legacy)
-	EnsurePackage(ctx context.Context, packageName, version, arch string, sshRunner SSHCommandRunner, nodeName string) error
-
-	// EnsurePackageWithSCP ensures the specified package is available both locally and on target nodes using SCP
-	EnsurePackageWithSCP(ctx context.Context, packageName, version, arch string, sshRunner SSHRunner, nodeName string) error
-
-	// GetLocalPackagePath returns the local path of a cached package
-	GetLocalPackagePath(packageName, version, arch string) (string, error)
-
-	// IsPackageCached checks if a package is already cached locally
-	IsPackageCached(packageName, version, arch string) bool
-
-	// UploadPackageToNode uploads a cached package to a target node (legacy)
-	UploadPackageToNode(ctx context.Context, packageName, version, arch string, sshRunner SSHCommandRunner, nodeName string) error
-
-	// UploadPackageWithSCP uploads a cached package to a target node using SCP
-	UploadPackageWithSCP(ctx context.Context, packageName, version, arch string, sshRunner SSHRunner, nodeName string) error
-}
-
 // InitOptions defines environment initialization options
 type InitOptions struct {
 	DisableSwap       bool   // Whether to disable swap
@@ -45,6 +12,9 @@ type InitOptions struct {
 	K8SVersion        string
 	CriCtlVersion     string // crictl version for CRI debugging
 	NerdctlVersion    string // nerdctl version for Docker-compatible CLI
+	UsePackageCache   bool   // Whether to use package cache system
+	UseImageCache     bool   // Whether to use image cache system
+	UpdateSystem      bool   // Whether to update system packages before installation
 }
 
 // DefaultInitOptions returns default initialization options
@@ -60,6 +30,9 @@ func DefaultInitOptions() InitOptions {
 		K8SVersion:        "v1.33.1",
 		CriCtlVersion:     "v1.33.0", // Latest stable version of crictl
 		NerdctlVersion:    "2.1.2",   // Latest stable version of nerdctl
+		UsePackageCache:   false,     // Default to not use package cache
+		UseImageCache:     false,     // Default to not use image cache
+		UpdateSystem:      false,     // Default to not update system packages
 	}
 }
 
@@ -86,19 +59,4 @@ type NodeInitResult struct {
 	NodeName string
 	Success  bool
 	Error    error
-}
-
-// BatchInitializer is the interface for batch environment initializers, supporting parallel initialization of multiple nodes
-type BatchInitializer interface {
-	// Initialize initializes all nodes in parallel
-	Initialize() error
-
-	// InitializeWithConcurrencyLimit initializes in parallel with concurrency limit
-	InitializeWithConcurrencyLimit(maxConcurrency int) error
-
-	// InitializeWithResults initializes all nodes in parallel and returns detailed results
-	InitializeWithResults() []NodeInitResult
-
-	// InitializeWithConcurrencyLimitAndResults initializes with concurrency limit and returns detailed results
-	InitializeWithConcurrencyLimitAndResults(maxConcurrency int) []NodeInitResult
 }

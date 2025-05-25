@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/monshunter/ohmykube/pkg/cluster"
-	"github.com/monshunter/ohmykube/pkg/kubeconfig"
+	"github.com/monshunter/ohmykube/pkg/config"
+	"github.com/monshunter/ohmykube/pkg/kube"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -17,7 +17,7 @@ var downloadKubeconfigCmd = &cobra.Command{
 	Long:  `Download the current cluster's kubeconfig file to the local ~/.kube directory for local debugging and cluster management`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load cluster information
-		clusterInfo, err := cluster.Load(clusterName)
+		clusterInfo, err := config.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
@@ -53,7 +53,7 @@ var downloadKubeconfigCmd = &cobra.Command{
 		defer sshClient.Close()
 
 		// Use the unified kubeconfig download function
-		kubeconfigPath, err := kubeconfig.DownloadToLocal(sshClient, clusterInfo.Name, "")
+		kubeconfigPath, err := kube.DownloadToLocal(sshClient, clusterInfo.Name, "")
 		if err != nil {
 			log.Errorf("Failed to download kubeconfig: %v", err)
 			return fmt.Errorf("failed to download kubeconfig: %w", err)

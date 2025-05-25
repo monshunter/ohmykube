@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/monshunter/ohmykube/pkg/initializer/cache"
+	"github.com/monshunter/ohmykube/pkg/cache"
 )
 
 // MockSSHRunner implements a simple SSH runner for demonstration
@@ -20,7 +20,7 @@ func main() {
 	fmt.Println("===========================")
 
 	// Create cache manager
-	manager, err := cache.NewManager()
+	manager, err := cache.NewPackageManager()
 	if err != nil {
 		log.Fatalf("Failed to create cache manager: %v", err)
 	}

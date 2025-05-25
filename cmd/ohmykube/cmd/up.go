@@ -3,11 +3,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/monshunter/ohmykube/pkg/cluster"
+	"github.com/monshunter/ohmykube/pkg/config"
+	"github.com/monshunter/ohmykube/pkg/controller"
 	"github.com/monshunter/ohmykube/pkg/initializer"
 	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/manager"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
@@ -37,10 +37,10 @@ var upCmd = &cobra.Command{
 - Optional CSI: local-path-provisioner(default) or rook-ceph
 - MetalLB as LoadBalancer implementation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var cls *cluster.Cluster
+		var cls *config.Cluster
 		var err error
-		if cluster.CheckExists(clusterName) {
-			cls, err = cluster.Load(clusterName)
+		if config.CheckExists(clusterName) {
+			cls, err = config.Load(clusterName)
 			if err != nil {
 				log.Errorf("Failed to load cluster information: %v", err)
 				return fmt.Errorf("failed to load cluster information: %w", err)
@@ -61,43 +61,40 @@ var upCmd = &cobra.Command{
 		}
 		// Create environment initialization options
 		// Create cluster configuration
-		config := cluster.NewConfig(
+		cfg := config.NewConfig(
 			clusterName,
 			workersCount,
 			proxyMode,
-			cluster.Resource{
+			config.Resource{
 				CPU:    masterCPU,
 				Memory: masterMemory,
 				Disk:   masterDisk,
-			}, cluster.Resource{
+			}, config.Resource{
 				CPU:    workerCPU,
 				Memory: workerMemory,
 				Disk:   workerDisk,
 			})
-		config.SetKubernetesVersion(k8sVersion)
-		config.SetLauncherType(launcherType.String())
-		config.SetTemplate(limaTemplate)
+		cfg.SetKubernetesVersion(k8sVersion)
+		cfg.SetLauncherType(launcherType.String())
+		cfg.SetTemplate(limaTemplate)
+		cfg.SetCNIType(cniType)
+		cfg.SetUpdateSystem(updateSystem)
 
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
 		initOptions.EnableIPVS = proxyMode == "ipvs"
 		initOptions.K8SVersion = k8sVersion
+		initOptions.UpdateSystem = updateSystem
 
 		// Create cluster manager and pass options
-		manager, err := manager.NewManager(config, sshConfig, cls)
+		manager, err := controller.NewManager(cfg, sshConfig, cls, nil)
 		if err != nil {
 			return err
 		}
 
 		// Set environment initialization options
 		manager.SetInitOptions(initOptions)
-
-		// Set CNI type
-		manager.SetCNIType(cniType)
-
-		// Set CSI type
-		manager.SetCSIType(csiType)
 
 		// Set whether to download kubeconfig
 		manager.SetDownloadKubeconfig(downloadKubeconfig)

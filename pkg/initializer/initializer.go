@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monshunter/ohmykube/pkg/default/containerd"
-	"github.com/monshunter/ohmykube/pkg/default/ipvs"
+	"github.com/monshunter/ohmykube/pkg/cache"
+	"github.com/monshunter/ohmykube/pkg/config/default/containerd"
+	"github.com/monshunter/ohmykube/pkg/config/default/ipvs"
 	"github.com/monshunter/ohmykube/pkg/envar"
-	"github.com/monshunter/ohmykube/pkg/initializer/cache"
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
 )
 
@@ -29,30 +30,30 @@ const (
 
 // Initializer used to initialize a single Kubernetes node environment
 type Initializer struct {
-	sshRunner    SSHRunner
-	nodeName     string
-	options      InitOptions
-	osType       osType
-	arch         string
-	useDnf       bool
-	cacheManager PackageCacheManager
+	sshRunner      interfaces.SSHRunner
+	nodeName       string
+	options        InitOptions
+	osType         osType
+	arch           string
+	useDnf         bool
+	packageManager cache.PackageCacheManager
 }
 
 // NewInitializer creates a new node initializer
-func NewInitializer(sshRunner SSHRunner, nodeName string) (*Initializer, error) {
+func NewInitializer(sshRunner interfaces.SSHRunner, nodeName string) (*Initializer, error) {
 	// Create cache manager
-	cacheManager, err := cache.NewManager()
+	packageManager, err := cache.NewPackageManager()
 	if err != nil {
 		log.Errorf("Failed to create cache manager: %v", err)
 		return nil, fmt.Errorf("failed to create cache manager: %w", err)
 	}
 
 	initializer := &Initializer{
-		sshRunner:    sshRunner,
-		nodeName:     nodeName,
-		options:      DefaultInitOptions(),
-		arch:         "arm64",
-		cacheManager: cacheManager,
+		sshRunner:      sshRunner,
+		nodeName:       nodeName,
+		options:        DefaultInitOptions(),
+		arch:           "arm64",
+		packageManager: packageManager,
 	}
 	err = initializer.detectOSType()
 	if err != nil {
@@ -64,7 +65,7 @@ func NewInitializer(sshRunner SSHRunner, nodeName string) (*Initializer, error) 
 }
 
 // NewInitializerWithOptions creates a new node initializer with specified options
-func NewInitializerWithOptions(sshRunner SSHRunner, nodeName string, options InitOptions) (*Initializer, error) {
+func NewInitializerWithOptions(sshRunner interfaces.SSHRunner, nodeName string, options InitOptions) (*Initializer, error) {
 	initializer, err := NewInitializer(sshRunner, nodeName)
 	if err != nil {
 		return nil, err
@@ -494,17 +495,17 @@ func (i *Initializer) InstallContainerd() error {
 	ctx := context.Background()
 
 	// Ensure containerd package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "containerd", i.options.ContainerdVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "containerd", i.options.ContainerdVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure containerd package: %w", err)
 	}
 
 	// Ensure runc package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "runc", i.options.RuncVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "runc", i.options.RuncVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure runc package: %w", err)
 	}
 
 	// Ensure CNI plugins package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "cni-plugins", i.options.CNIPluginsVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "cni-plugins", i.options.CNIPluginsVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure cni-plugins package: %w", err)
 	}
 
@@ -728,12 +729,12 @@ func (i *Initializer) InstallCrictlAndNerdctl() error {
 	ctx := context.Background()
 
 	// Ensure crictl package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "crictl", i.options.CriCtlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "crictl", i.options.CriCtlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure crictl package: %w", err)
 	}
 
 	// Ensure nerdctl package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "nerdctl", i.options.NerdctlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "nerdctl", i.options.NerdctlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure nerdctl package: %w", err)
 	}
 
@@ -930,17 +931,17 @@ func (i *Initializer) InstallK8sComponents() error {
 	ctx := context.Background()
 
 	// Ensure kubectl package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "kubectl", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "kubectl", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure kubectl package: %w", err)
 	}
 
 	// Ensure kubeadm package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "kubeadm", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "kubeadm", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure kubeadm package: %w", err)
 	}
 
 	// Ensure kubelet package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "kubelet", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "kubelet", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure kubelet package: %w", err)
 	}
 
@@ -1172,7 +1173,7 @@ func (i *Initializer) InstallHelm() error {
 	ctx := context.Background()
 
 	// Ensure Helm package is cached and uploaded using SCP
-	if err := i.cacheManager.EnsurePackageWithSCP(ctx, "helm", i.options.HelmVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackageWithSCP(ctx, "helm", i.options.HelmVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure helm package: %w", err)
 	}
 
