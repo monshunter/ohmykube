@@ -2,11 +2,7 @@ package cni
 
 import (
 	"fmt"
-	"io"
-	"os"
-	"strings"
 
-	"github.com/hashicorp/go-retryablehttp"
 	"github.com/monshunter/ohmykube/pkg/clusterinfo"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
@@ -30,9 +26,8 @@ func NewFlannelInstaller(sshClient *ssh.Client, masterNode string) *FlannelInsta
 	}
 }
 
-// Install installs Flannel CNI
+// Install installs Flannel CNI using Helm
 func (f *FlannelInstaller) Install() error {
-	ymlURL := fmt.Sprintf("https://github.com/flannel-io/flannel/releases/download/%s/kube-flannel.yml", f.Version)
 	// Ensure br_netfilter module is loaded
 	brNetfilterCmd := `
 sudo modprobe br_netfilter
@@ -51,60 +46,46 @@ echo "br_netfilter" | sudo tee /etc/modules-load.d/br_netfilter.conf
 		log.Infof("Retrieved cluster Pod CIDR: %s", f.PodCIDR)
 	}
 
-	// Step 1: Download the flannel manifest locally
-	log.Info("Downloading Flannel manifest")
-	resp, err := retryablehttp.Get(ymlURL)
+	// Add official Flannel Helm repository
+	log.Info("Adding official Flannel Helm repository...")
+	addRepoCmd := `
+helm repo add flannel https://flannel-io.github.io/flannel/
+helm repo update
+`
+	_, err = f.SSHClient.RunCommand(addRepoCmd)
 	if err != nil {
-		return fmt.Errorf("failed to download Flannel manifest: %w", err)
+		return fmt.Errorf("failed to add Flannel Helm repository: %w", err)
 	}
-	defer resp.Body.Close()
 
-	// Step 2: Read and modify the YAML content
-	yamlContent, err := io.ReadAll(resp.Body)
+	// Install Flannel using Helm with minimal configuration
+	log.Info("Installing Flannel using Helm...")
+	installCmd := fmt.Sprintf(`
+# Needs manual creation of namespace to avoid helm error
+kubectl create ns kube-flannel
+kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
+helm install flannel flannel/flannel \
+  --version %s \
+  --set podCidr="%s" \
+  --namespace kube-flannel \
+  --create-namespace \
+  --wait \
+  --timeout 300s
+`, f.Version, f.PodCIDR)
+
+	_, err = f.SSHClient.RunCommand(installCmd)
 	if err != nil {
-		return fmt.Errorf("failed to read Flannel manifest: %w", err)
-	}
-
-	// Replace the default Pod CIDR with the specified one
-	log.Infof("Replacing default Pod CIDR with %s", f.PodCIDR)
-	oldCIDR := `"Network": "10.244.0.0/16"`
-	newCIDR := fmt.Sprintf(`"Network": "%s"`, f.PodCIDR)
-	modifiedYaml := strings.Replace(string(yamlContent), oldCIDR, newCIDR, -1)
-
-	// Step 3: Save the modified YAML to a temporary file and transfer to the remote server
-	localTempFile, err := os.CreateTemp("", "kube-flannel-*.yml")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(localTempFile.Name())
-
-	if _, err = localTempFile.WriteString(modifiedYaml); err != nil {
-		return fmt.Errorf("failed to write to temp file: %w", err)
-	}
-	localTempFile.Close()
-
-	// Upload the modified file to the remote server
-	remoteTempFile := "/tmp/kube-flannel.yml"
-	log.Info("Transferring modified Flannel manifest to remote server")
-	if err = f.SSHClient.TransferFile(localTempFile.Name(), remoteTempFile); err != nil {
-		return fmt.Errorf("failed to transfer file to remote server: %w", err)
-	}
-
-	// Step 4: Apply the modified YAML on the remote server
-	log.Info("Applying Flannel manifest on the remote server")
-	applyCmd := fmt.Sprintf("kubectl apply -f %s", remoteTempFile)
-	_, err = f.SSHClient.RunCommand(applyCmd)
-	if err != nil {
-		return fmt.Errorf("failed to apply Flannel manifest: %w", err)
+		return fmt.Errorf("failed to install Flannel using Helm: %w", err)
 	}
 
 	// Wait for Flannel to be ready
-	waitCmd := `kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=120s`
+	log.Info("Waiting for Flannel to become ready...")
+	waitCmd := `kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=300s`
 	_, err = f.SSHClient.RunCommand(waitCmd)
 	if err != nil {
 		log.Infof("Warning: Timed out waiting for Flannel to be ready, but will continue: %v", err)
 	}
 
+	log.Info("Flannel installation completed successfully")
 	return nil
 }
 
