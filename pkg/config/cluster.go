@@ -12,8 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var clusterLock sync.RWMutex
-
 var localRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type Phase string
@@ -263,6 +261,7 @@ type Cluster struct {
 	Metadata   `yaml:"metadata,omitempty"`
 	Spec       ClusterSpec   `yaml:"spec,omitempty"`
 	Status     ClusterStatus `yaml:"status,omitempty"`
+	lock       sync.RWMutex
 }
 
 type ClusterSpec struct {
@@ -279,8 +278,17 @@ type ClusterSpec struct {
 type ClusterStatus struct {
 	Phase      ClusterPhase `yaml:"phase,omitempty"`
 	Auth       Auth         `yaml:"auth,omitempty"`
+	Images     Images       `yaml:"images,omitempty"` // Cluster images (names correspond to global cache)
 	Conditions []Condition  `yaml:"conditions,omitempty"`
 }
+
+// Image represents a simple image reference
+// The Name field corresponds to the name in the global image cache
+type Image struct {
+	Name string `yaml:"name,omitempty"` // Corresponds to global cache image name (e.g., "registry.k8s.io//kube-apiserver:v1.33.0_arm64")
+}
+
+type Images []Image
 
 func NewCluster(config *Config) *Cluster {
 	cls := &Cluster{
@@ -327,6 +335,14 @@ func (c *Cluster) GetMasterName() string {
 	return c.Spec.Master.Name
 }
 
+func (c *Cluster) GetWorkerNames() []string {
+	names := make([]string, len(c.Spec.Workers))
+	for i, node := range c.Spec.Workers {
+		names[i] = node.Name
+	}
+	return names
+}
+
 func (c *Cluster) Nodes2IPsMap() map[string]string {
 	ips := make(map[string]string)
 	ips[c.Spec.Master.Name] = c.Spec.Master.Status.IP
@@ -358,8 +374,8 @@ func (c *Cluster) GetNodeByName(name string) *Node {
 }
 
 func (c *Cluster) RemoveNode(name string) {
-	clusterLock.Lock()
-	defer clusterLock.Unlock()
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	if c.Spec.Master.Name == name {
 		c.Spec.Master = nil
 	}
@@ -372,8 +388,8 @@ func (c *Cluster) RemoveNode(name string) {
 }
 
 func (c *Cluster) AddNode(node *Node) {
-	clusterLock.Lock()
-	defer clusterLock.Unlock()
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	c.Spec.Workers = append(c.Spec.Workers, node)
 }
 
@@ -405,6 +421,36 @@ func (c *Cluster) GenWorkerName() string {
 		}
 	}
 	return nodeName
+}
+
+// RecordClusterImage records an image when it's being cached
+// Implements interfaces.ClusterImageTracker
+func (c *Cluster) RecordImage(imageName string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	// Check if image already exists
+	for _, img := range c.Status.Images {
+		if img.Name == imageName {
+			return // Image already tracked
+		}
+	}
+
+	// Add new image (we don't need arch since it's embedded in the image name)
+	c.Status.Images = append(c.Status.Images, Image{
+		Name: imageName,
+	})
+}
+
+// GetClusterImageNames returns all recorded cluster image names
+// Implements interfaces.ClusterImageTracker
+func (c *Cluster) GetImageNames() []string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	names := make([]string, len(c.Status.Images))
+	for i, img := range c.Status.Images {
+		names[i] = img.Name
+	}
+	return names
 }
 
 // Save saves cluster information to a file

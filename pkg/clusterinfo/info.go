@@ -46,7 +46,7 @@ kubectl -n kube-system get pod -l component=kube-controller-manager -o jsonpath=
 	}
 
 	// Both methods failed, return default value with a warning
-	log.Infof("Warning: Unable to get cluster Pod CIDR, using default value %s", defaultPodCIDR)
+	log.Warningf(" Unable to get cluster Pod CIDR, using default value %s", defaultPodCIDR)
 	return defaultPodCIDR, nil
 }
 
@@ -74,7 +74,7 @@ kubectl -n kube-system get pod -l component=kube-apiserver -o jsonpath='{.items[
 	}
 
 	// Both methods failed, return default value with a warning
-	log.Infof("Warning: Unable to get cluster Service CIDR, using default value %s", defaultServiceCIDR)
+	log.Warningf(" Unable to get cluster Service CIDR, using default value %s", defaultServiceCIDR)
 	return defaultServiceCIDR, nil
 }
 
@@ -103,7 +103,7 @@ kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfigur
 	}
 
 	// If failed, return default value
-	log.Infof("Warning: Unable to get cluster DNS domain, using default value %s", defaultDNSDomain)
+	log.Warningf(" Unable to get cluster DNS domain, using default value %s", defaultDNSDomain)
 	return defaultDNSDomain, nil
 }
 

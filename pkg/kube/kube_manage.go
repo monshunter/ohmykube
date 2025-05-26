@@ -1,15 +1,23 @@
 package kube
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/monshunter/ohmykube/pkg/cache"
 	"github.com/monshunter/ohmykube/pkg/config/default/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
+
+// ImageSource represents a source of container images
+type ImageSource struct {
+	Type    string
+	Version string
+}
 
 // Manager stores kubeadm configuration
 type Manager struct {
@@ -20,11 +28,12 @@ type Manager struct {
 	ClusterDNS        string
 	ProxyMode         string
 	KubernetesVersion string
-	CustomConfigPath  string // Added: custom configuration path
+	CustomConfigPath  string // Added: custom configuration pathWill be set to interfaces.ClusterImageManager when needed
 }
 
 // NewManager creates a new kubeadm configuration
-func NewManager(sshManager *ssh.SSHManager, k8sVersion string, masterNode string, proxyMode string) *Manager {
+func NewManager(sshManager *ssh.SSHManager, k8sVersion string,
+	masterNode string, proxyMode string) *Manager {
 	return &Manager{
 		SSHManager:        sshManager,
 		MasterNode:        masterNode,
@@ -38,6 +47,12 @@ func NewManager(sshManager *ssh.SSHManager, k8sVersion string, masterNode string
 
 // InitMaster initializes Kubernetes control plane
 func (k *Manager) InitMaster() error {
+	// Cache required kubeadm images before initialization
+	if err := k.cacheKubeadmImages(k.MasterNode); err != nil {
+		log.Warningf("Failed to cache kubeadm images: %v", err)
+		// Continue with initialization even if image caching fails
+	}
+
 	masterIP := k.SSHManager.GetIP(k.MasterNode)
 	// Use new configuration generation system
 	configPath, err := kubeadm.GenerateKubeadmConfig(
@@ -86,6 +101,12 @@ func (k *Manager) PrintJoinCommand() (string, error) {
 
 // JoinNode adds a node to the cluster
 func (k *Manager) JoinNode(nodeName, joinCommand string) error {
+	// Preheat all cluster images to accelerate container startup
+	if err := k.cacheClusterImages(nodeName); err != nil {
+		log.Warningf("Failed to preheat cluster images for node %s: %v", nodeName, err)
+		// Continue with join even if cluster image preheating fails
+	}
+
 	if !strings.HasPrefix(joinCommand, "sudo ") {
 		joinCommand = "sudo " + joinCommand
 	}
@@ -123,4 +144,36 @@ func (k *Manager) GetKubeconfig() (string, error) {
 // SetCustomConfig sets custom configuration file path
 func (k *Manager) SetCustomConfig(configPath string) {
 	k.CustomConfigPath = configPath
+}
+
+// cacheKubeadmImages caches required kubeadm images before cluster initialization
+func (k *Manager) cacheKubeadmImages(nodeName string) error {
+	ctx := context.Background()
+
+	// Create image manager with default configuration
+	imageManager, err := cache.NewImageManager()
+	if err != nil {
+		return fmt.Errorf("failed to create image manager: %w", err)
+	}
+
+	// Define kubeadm image source for cache
+	cacheSource := cache.ImageSource{
+		Type:    "kubeadm",
+		Version: k.KubernetesVersion,
+	}
+
+	// Cache images for node - this will automatically record them via the callback
+	return imageManager.EnsureImages(ctx, cacheSource, k.SSHManager, nodeName, k.MasterNode)
+}
+
+// cacheClusterImages caches all cluster images to the target node for preheating
+func (k *Manager) cacheClusterImages(nodeName string) error {
+	// Create image manager with default configuration
+	imageManager, err := cache.NewImageManager()
+	if err != nil {
+		return fmt.Errorf("failed to create image manager: %w", err)
+	}
+
+	// Cache all cluster images for the node
+	return imageManager.CacheClusterImagesForNodes([]string{nodeName}, k.SSHManager)
 }

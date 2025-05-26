@@ -8,26 +8,32 @@ import (
 	"github.com/monshunter/ohmykube/pkg/addons/plugins/csi"
 	"github.com/monshunter/ohmykube/pkg/addons/plugins/lb"
 	"github.com/monshunter/ohmykube/pkg/config"
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
-type Manager struct {
-	Cluster    *config.Cluster
-	SSHManager *ssh.SSHManager
-	CNIType    api.CNIType
-	CSIType    api.CSIType
-	LBType     api.LBType
+// ImageSource represents a source of container images
+type ImageSource struct {
+	Type    string
+	Version string
 }
 
-func NewManager(cluster *config.Cluster, sshManager *ssh.SSHManager,
+type Manager struct {
+	Cluster   *config.Cluster
+	sshRunner interfaces.SSHRunner
+	CNIType   api.CNIType
+	CSIType   api.CSIType
+	LBType    api.LBType
+}
+
+func NewManager(cluster *config.Cluster, sshRunner interfaces.SSHRunner,
 	cniType api.CNIType, csiType api.CSIType, lbType api.LBType) *Manager {
 	return &Manager{
-		Cluster:    cluster,
-		SSHManager: sshManager,
-		CNIType:    cniType,
-		CSIType:    csiType,
-		LBType:     lbType,
+		Cluster:   cluster,
+		sshRunner: sshRunner,
+		CNIType:   cniType,
+		CSIType:   csiType,
+		LBType:    lbType,
 	}
 }
 
@@ -47,7 +53,7 @@ func (m *Manager) InstallCNI() error {
 	switch m.CNIType {
 	case api.CNITypeCilium:
 		// Get Master node IP
-		ciliumInstaller := cni.NewCiliumInstaller(m.SSHManager, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
+		ciliumInstaller := cni.NewCiliumInstaller(m.sshRunner, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
 		err = ciliumInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
@@ -56,7 +62,7 @@ func (m *Manager) InstallCNI() error {
 		}
 
 	case api.CNITypeFlannel:
-		flannelInstaller := cni.NewFlannelInstaller(m.SSHManager, m.Cluster.GetMasterName())
+		flannelInstaller := cni.NewFlannelInstaller(m.sshRunner, m.Cluster.GetMasterName())
 		err = flannelInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
@@ -93,7 +99,7 @@ func (m *Manager) InstallCSI() error {
 	switch m.CSIType {
 	case api.CSITypeRook:
 		// Use Rook installer to install Rook-Ceph CSI
-		rookInstaller := csi.NewRookInstaller(m.SSHManager, m.Cluster.GetMasterName())
+		rookInstaller := csi.NewRookInstaller(m.sshRunner, m.Cluster.GetMasterName())
 		err = rookInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
@@ -103,7 +109,7 @@ func (m *Manager) InstallCSI() error {
 
 	case api.CSITypeLocalPath:
 		// Use LocalPath installer to install local-path-provisioner
-		localPathInstaller := csi.NewLocalPathInstaller(m.SSHManager, m.Cluster.GetMasterName())
+		localPathInstaller := csi.NewLocalPathInstaller(m.sshRunner, m.Cluster.GetMasterName())
 		err = localPathInstaller.Install()
 		if err != nil {
 			m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
@@ -142,7 +148,7 @@ func (m *Manager) InstallLB() error {
 		"Installing", "Installing MetalLB LoadBalancer")
 
 	// Use MetalLB installer
-	metallbInstaller := lb.NewMetalLBInstaller(m.SSHManager, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
+	metallbInstaller := lb.NewMetalLBInstaller(m.sshRunner, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
 	if err := metallbInstaller.Install(); err != nil {
 		m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
 			"InstallationFailed", fmt.Sprintf("Failed to install MetalLB: %v", err))

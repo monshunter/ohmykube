@@ -4,7 +4,15 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 )
+
+type ImageSource = interfaces.ImageSource
+type ImageCacheManager = interfaces.ImageCacheManager
+type ImageDiscovery = interfaces.ImageDiscovery
+type ImageRecorder = interfaces.ImageRecorder
+type SSHRunner = interfaces.SSHRunner
 
 // PackageType represents the type of package
 type PackageType string
@@ -305,31 +313,22 @@ func (r ImageReference) CacheKey() string {
 
 // ImageInfo stores information about a cached image
 type ImageInfo struct {
-	Reference        ImageReference `json:"reference"`
-	LocalPath        string         `json:"localPath"`
-	Size             int64          `json:"size"`
-	LastAccessed     time.Time      `json:"lastAccessed"`
-	LastUpdated      time.Time      `json:"lastUpdated"`
-	OriginalSize     int64          `json:"originalSize,omitempty"`
-	CompressionRatio float64        `json:"compressionRatio,omitempty"`
-	Architectures    []string       `json:"architectures,omitempty"` // Supported architectures
+	Name             string         `yaml:"name"`
+	Reference        ImageReference `yaml:"reference"`
+	LocalPath        string         `yaml:"localpath"`
+	Size             int64          `yaml:"size"`
+	LastAccessed     time.Time      `yaml:"lastaccessed"`
+	LastUpdated      time.Time      `yaml:"lastupdated"`
+	OriginalSize     int64          `yaml:"originalsize,omitempty"`
+	CompressionRatio float64        `yaml:"compressionratio,omitempty"`
+	Architectures    []string       `yaml:"architectures,omitempty"` // Supported architectures
 }
 
 // ImageIndex represents the index of all cached images
 type ImageIndex struct {
-	Version   string               `yaml:"version"`
-	Images    map[string]ImageInfo `yaml:"images"`
-	UpdatedAt time.Time            `yaml:"updated_at"`
-}
-
-// ImageSource defines where and how to discover required images
-type ImageSource struct {
-	Type        string            // "helm", "manifest", "kubeadm", "custom"
-	ChartName   string            // For helm charts
-	ChartRepo   string            // For helm charts
-	ChartValues map[string]string // For helm charts
-	ManifestURL string            // For kubernetes manifests
-	Version     string            // Version information
+	Version   string      `yaml:"version"`
+	Images    []ImageInfo `yaml:"images"`
+	UpdatedAt time.Time   `yaml:"updated_at"`
 }
 
 // ImageManagementStrategy defines where and how images should be managed
@@ -339,7 +338,7 @@ const (
 	// ImageManagementAuto automatically detects the best strategy based on available tools
 	ImageManagementAuto ImageManagementStrategy = iota
 
-	// ImageManagementLocal prefers local machine operations (requires docker/podman/helm locally)
+	// ImageManagementLocal prefers local machine operations (requires nerdctl locally)
 	ImageManagementLocal
 
 	// ImageManagementController prefers controller node operations (uses tools on controller)
@@ -405,15 +404,11 @@ func ControllerOnlyImageManagementConfig() ImageManagementConfig {
 
 // ToolAvailability tracks which tools are available where
 type ToolAvailability struct {
-	LocalDocker  bool // docker available locally
-	LocalPodman  bool // podman available locally
 	LocalNerdctl bool // nerdctl available locally
 	LocalHelm    bool // helm available locally
 	LocalKubeadm bool // kubeadm available locally
 	LocalCurl    bool // curl available locally
 
-	ControllerDocker  bool // docker available on controller
-	ControllerPodman  bool // podman available on controller
 	ControllerNerdctl bool // nerdctl available on controller
 	ControllerHelm    bool // helm available on controller
 	ControllerKubeadm bool // kubeadm available on controller

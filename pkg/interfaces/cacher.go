@@ -1,17 +1,9 @@
-package cache
+package interfaces
 
 import (
 	"context"
 	"time"
-
-	"github.com/monshunter/ohmykube/pkg/interfaces"
 )
-
-// SSHRunner defines the interface for SSH operations (commands + file transfer)
-type SSHRunner = interfaces.SSHRunner
-
-// SSHCommandRunner defines the interface for executing SSH commands (for backward compatibility)
-type SSHCommandRunner = interfaces.SSHCommandRunner
 
 // PackageCacheManager defines the interface for package cache management
 type PackageCacheManager interface {
@@ -53,4 +45,23 @@ type ImageCacheManager interface {
 
 	// GetCacheStats returns statistics about the image cache
 	GetCacheStats() (int, int64)
+}
+
+// ImageDiscovery provides methods to discover required images
+type ImageDiscovery interface {
+	// GetRequiredImages returns a list of images required for a specific application/version
+	GetRequiredImages(ctx context.Context, source ImageSource, sshRunner SSHRunner, controllerNode string) ([]string, error)
+
+	// GetRequiredImagesForArch discovers required images for a specific architecture
+	GetRequiredImagesForArch(ctx context.Context, source ImageSource, arch string, sshRunner SSHRunner, controllerNode string) ([]string, error)
+}
+
+// ImageSource defines where and how to discover required images
+type ImageSource struct {
+	Type        string            // "helm", "manifest", "kubeadm", "custom"
+	ChartName   string            // For helm charts
+	ChartRepo   string            // For helm charts
+	ChartValues map[string]string // For helm charts
+	ManifestURL string            // For kubernetes manifests
+	Version     string            // Version information
 }

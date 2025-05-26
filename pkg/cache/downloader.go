@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/utils"
 )
 
 // Downloader handles downloading packages from remote URLs
@@ -73,7 +74,7 @@ func (d *Downloader) DownloadFile(ctx context.Context, url, destPath string) err
 		return fmt.Errorf("failed to write to destination file: %w", err)
 	}
 
-	log.Infof("Successfully downloaded %s (%d bytes) to %s", url, written, destPath)
+	log.Infof("Successfully downloaded %s (%s) to %s", url, utils.FormatSize(written), destPath)
 	return nil
 }
 

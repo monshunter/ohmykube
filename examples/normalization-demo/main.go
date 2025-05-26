@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/monshunter/ohmykube/pkg/cache"
+	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/utils"
 )
 
 func main() {
@@ -40,7 +41,7 @@ func main() {
 		log.Fatalf("Failed to create binary file: %v", err)
 	}
 
-	fmt.Printf("Created binary file: %s (%d bytes)\n", binaryPath, len(binaryContent))
+	fmt.Printf("Created binary file: %s (%s)\n", binaryPath, utils.FormatSize(int64(len(binaryContent))))
 
 	// Normalize to tar.zst
 	normalizedPath := filepath.Join(tempDir, "kubectl.tar.zst")
@@ -50,7 +51,7 @@ func main() {
 
 	// Check the result
 	normalizedInfo, _ := os.Stat(normalizedPath)
-	fmt.Printf("Normalized to: %s (%d bytes)\n", normalizedPath, normalizedInfo.Size())
+	fmt.Printf("Normalized to: %s (%s)\n", normalizedPath, utils.FormatSize(normalizedInfo.Size()))
 
 	// Extract and verify
 	extractDir := filepath.Join(tempDir, "extract1")
@@ -60,7 +61,7 @@ func main() {
 
 	extractedFile := filepath.Join(extractDir, "kubectl")
 	extractedContent, _ := os.ReadFile(extractedFile)
-	fmt.Printf("Extracted file: %s (%d bytes)\n", extractedFile, len(extractedContent))
+	fmt.Printf("Extracted file: %s (%s)\n", extractedFile, utils.FormatSize(int64(len(extractedContent))))
 	fmt.Printf("Content matches: %t\n\n", string(extractedContent) == string(binaryContent))
 
 	// Demo 2: Show supported formats

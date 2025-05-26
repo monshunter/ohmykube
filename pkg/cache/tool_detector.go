@@ -21,44 +21,32 @@ func NewToolDetector() *ToolDetector {
 func (td *ToolDetector) DetectToolAvailability(ctx context.Context, sshRunner interfaces.SSHRunner, controllerNode string) (*ToolAvailability, error) {
 	availability := &ToolAvailability{}
 
-	// Detect local tools
-	availability.LocalDocker = td.IsLocalToolAvailable("docker")
-	availability.LocalPodman = td.IsLocalToolAvailable("podman")
+	// Detect local tools (only nerdctl for container operations)
 	availability.LocalNerdctl = td.IsLocalToolAvailable("nerdctl")
 	availability.LocalHelm = td.IsLocalToolAvailable("helm")
 	availability.LocalKubeadm = td.IsLocalToolAvailable("kubeadm")
 	availability.LocalCurl = td.IsLocalToolAvailable("curl")
 
-	// Detect controller tools
+	// Detect controller tools (only nerdctl for container operations)
 	var err error
-	availability.ControllerDocker, err = td.isRemoteToolAvailable(sshRunner, controllerNode, "docker")
-	if err != nil {
-		log.Infof("Warning: Failed to check docker on controller: %v", err)
-	}
-
-	availability.ControllerPodman, err = td.isRemoteToolAvailable(sshRunner, controllerNode, "podman")
-	if err != nil {
-		log.Infof("Warning: Failed to check podman on controller: %v", err)
-	}
-
 	availability.ControllerNerdctl, err = td.isRemoteToolAvailable(sshRunner, controllerNode, "nerdctl")
 	if err != nil {
-		log.Infof("Warning: Failed to check nerdctl on controller: %v", err)
+		log.Warningf("Failed to check nerdctl on controller: %v", err)
 	}
 
 	availability.ControllerHelm, err = td.isRemoteToolAvailable(sshRunner, controllerNode, "helm")
 	if err != nil {
-		log.Infof("Warning: Failed to check helm on controller: %v", err)
+		log.Warningf("Failed to check helm on controller: %v", err)
 	}
 
 	availability.ControllerKubeadm, err = td.isRemoteToolAvailable(sshRunner, controllerNode, "kubeadm")
 	if err != nil {
-		log.Infof("Warning: Failed to check kubeadm on controller: %v", err)
+		log.Warningf("Failed to check kubeadm on controller: %v", err)
 	}
 
 	availability.ControllerCurl, err = td.isRemoteToolAvailable(sshRunner, controllerNode, "curl")
 	if err != nil {
-		log.Infof("Warning: Failed to check curl on controller: %v", err)
+		log.Warningf("Failed to check curl on controller: %v", err)
 	}
 
 	return availability, nil
@@ -86,9 +74,9 @@ func (td *ToolDetector) DetermineOptimalStrategy(availability *ToolAvailability,
 		return config.Strategy
 	}
 
-	// If strategy is auto, determine the best one
+	// If strategy is auto, determine the best one using consistent tool preference
 	if config.Strategy == ImageManagementAuto {
-		return td.selectBestStrategy(availability, config.FallbackOrder)
+		return td.selectBestStrategyConsistent(availability)
 	}
 
 	// Check if the preferred strategy is viable
@@ -105,79 +93,36 @@ func (td *ToolDetector) DetermineOptimalStrategy(availability *ToolAvailability,
 	}
 
 	// Default to controller strategy as last resort
-	log.Infof("Warning: No viable strategy found, defaulting to controller strategy")
+	log.Warningf("No viable strategy found, defaulting to controller strategy")
 	return ImageManagementController
 }
 
-// selectBestStrategy selects the best strategy based on tool availability
-func (td *ToolDetector) selectBestStrategy(availability *ToolAvailability, preferenceOrder []ImageManagementStrategy) ImageManagementStrategy {
-	// Score each strategy based on tool availability
-	scores := map[ImageManagementStrategy]int{
-		ImageManagementLocal:      td.scoreLocalStrategy(availability),
-		ImageManagementController: td.scoreControllerStrategy(availability),
-		ImageManagementTarget:     1, // Always viable but lowest score
-	}
+// selectBestStrategyConsistent selects the best strategy using consistent tool preference: local → controller → target
+func (td *ToolDetector) selectBestStrategyConsistent(availability *ToolAvailability) ImageManagementStrategy {
+	// Always prefer local → controller → target order for automatic policy
+	preferredStrategies := []ImageManagementStrategy{ImageManagementLocal, ImageManagementController, ImageManagementTarget}
 
-	// Find the highest scoring strategy from preference order
-	bestStrategy := ImageManagementTarget
-	bestScore := 0
-
-	for _, strategy := range preferenceOrder {
-		if score := scores[strategy]; score > bestScore && td.isStrategyViable(strategy, availability) {
-			bestStrategy = strategy
-			bestScore = score
+	for _, strategy := range preferredStrategies {
+		if td.isStrategyViable(strategy, availability) {
+			log.Infof("Selected %s strategy (consistent automatic policy)", strategy.String())
+			return strategy
 		}
 	}
 
-	log.Infof("Selected %s strategy (score: %d)", bestStrategy.String(), bestScore)
-	return bestStrategy
-}
-
-// scoreLocalStrategy scores the local strategy based on available tools
-func (td *ToolDetector) scoreLocalStrategy(availability *ToolAvailability) int {
-	score := 0
-	if availability.LocalDocker || availability.LocalPodman || availability.LocalNerdctl {
-		score += 10 // Container runtime available
-	}
-	if availability.LocalHelm {
-		score += 5 // Helm available
-	}
-	if availability.LocalKubeadm {
-		score += 3 // Kubeadm available
-	}
-	if availability.LocalCurl {
-		score += 1 // Curl available
-	}
-	return score
-}
-
-// scoreControllerStrategy scores the controller strategy based on available tools
-func (td *ToolDetector) scoreControllerStrategy(availability *ToolAvailability) int {
-	score := 0
-	if availability.ControllerDocker || availability.ControllerPodman || availability.ControllerNerdctl {
-		score += 8 // Container runtime available (slightly lower than local)
-	}
-	if availability.ControllerHelm {
-		score += 4 // Helm available
-	}
-	if availability.ControllerKubeadm {
-		score += 2 // Kubeadm available
-	}
-	if availability.ControllerCurl {
-		score += 1 // Curl available
-	}
-	return score
+	// This should never happen since target strategy is always viable
+	log.Warningf("No viable strategy found, defaulting to target strategy")
+	return ImageManagementTarget
 }
 
 // isStrategyViable checks if a strategy is viable given tool availability
 func (td *ToolDetector) isStrategyViable(strategy ImageManagementStrategy, availability *ToolAvailability) bool {
 	switch strategy {
 	case ImageManagementLocal:
-		// Need at least a container runtime locally
-		return availability.LocalDocker || availability.LocalPodman || availability.LocalNerdctl
+		// Need nerdctl locally for reliable container operations
+		return availability.LocalNerdctl
 	case ImageManagementController:
-		// Need at least a container runtime on controller
-		return availability.ControllerDocker || availability.ControllerPodman || availability.ControllerNerdctl
+		// Need nerdctl on controller for reliable container operations
+		return availability.ControllerNerdctl
 	case ImageManagementTarget:
 		// Always viable as we can install tools on target if needed
 		return true
@@ -190,11 +135,121 @@ func (td *ToolDetector) isStrategyViable(strategy ImageManagementStrategy, avail
 func (td *ToolDetector) LogToolAvailability(availability *ToolAvailability) {
 	log.Infof("Tool availability detected:")
 	log.Infof("  Local tools:")
-	log.Infof("    Docker: %t, Podman: %t, Nerdctl: %t", availability.LocalDocker, availability.LocalPodman, availability.LocalNerdctl)
+	log.Infof("    Nerdctl: %t", availability.LocalNerdctl)
 	log.Infof("    Helm: %t, Kubeadm: %t, Curl: %t", availability.LocalHelm, availability.LocalKubeadm, availability.LocalCurl)
 	log.Infof("  Controller tools:")
-	log.Infof("    Docker: %t, Podman: %t, Nerdctl: %t", availability.ControllerDocker, availability.ControllerPodman, availability.ControllerNerdctl)
+	log.Infof("    Nerdctl: %t", availability.ControllerNerdctl)
 	log.Infof("    Helm: %t, Kubeadm: %t, Curl: %t", availability.ControllerHelm, availability.ControllerKubeadm, availability.ControllerCurl)
+}
+
+// DetermineOptimalStrategyForSource determines the optimal strategy based on specific image source requirements
+func (td *ToolDetector) DetermineOptimalStrategyForSource(source ImageSource, availability *ToolAvailability, config ImageManagementConfig) ImageManagementStrategy {
+	if config.ForceStrategy {
+		return config.Strategy
+	}
+
+	// For automatic policy, use the same strategy selection as the general case
+	// but validate that the selected strategy can handle this specific source
+	if config.Strategy == ImageManagementAuto {
+		return td.selectBestStrategyForSource(source, availability)
+	}
+
+	// Check if the preferred strategy can handle this source
+	if td.CanStrategyHandleSource(config.Strategy, source, availability) {
+		return config.Strategy
+	}
+
+	// Try fallback strategies
+	for _, fallback := range config.FallbackOrder {
+		if td.CanStrategyHandleSource(fallback, source, availability) {
+			log.Infof("Falling back to %s strategy for %s source", fallback.String(), source.Type)
+			return fallback
+		}
+	}
+
+	// Default to target strategy as last resort
+	log.Warningf("No viable strategy found for %s source, defaulting to target strategy", source.Type)
+	return ImageManagementTarget
+}
+
+// selectBestStrategyForSource selects the best strategy that can handle the specific source
+func (td *ToolDetector) selectBestStrategyForSource(source ImageSource, availability *ToolAvailability) ImageManagementStrategy {
+	// Always prefer local → controller → target order for automatic policy
+	preferredStrategies := []ImageManagementStrategy{ImageManagementLocal, ImageManagementController, ImageManagementTarget}
+
+	for _, strategy := range preferredStrategies {
+		if td.CanStrategyHandleSource(strategy, source, availability) {
+			log.Infof("Selected %s strategy for %s source (automatic policy)", strategy.String(), source.Type)
+			return strategy
+		}
+	}
+
+	// This should never happen since target strategy is always viable
+	log.Warningf("No strategy found for %s source, defaulting to target strategy", source.Type)
+	return ImageManagementTarget
+}
+
+// CanStrategyHandleSource checks if a strategy can handle a specific image source
+func (td *ToolDetector) CanStrategyHandleSource(strategy ImageManagementStrategy, source ImageSource, availability *ToolAvailability) bool {
+	// Check what tools are required for this specific source type
+	requiredTools := td.getRequiredToolsForSource(source)
+	return td.hasRequiredToolsForStrategy(strategy, requiredTools, availability)
+}
+
+// getRequiredToolsForSource returns the tools required for a specific image source type
+func (td *ToolDetector) getRequiredToolsForSource(source ImageSource) []string {
+	switch source.Type {
+	case "helm":
+		return []string{"helm"} // Only need helm for templating and image discovery
+	case "kubeadm":
+		return []string{"kubeadm"} // Only need kubeadm for image discovery
+	case "manifest":
+		return []string{"curl"} // Only need curl to download manifests
+	default:
+		return []string{"container"} // Default: need container runtime
+	}
+}
+
+// hasRequiredToolsForStrategy checks if a strategy has all required tools
+func (td *ToolDetector) hasRequiredToolsForStrategy(strategy ImageManagementStrategy, requiredTools []string, availability *ToolAvailability) bool {
+	for _, tool := range requiredTools {
+		if !td.hasToolForStrategy(strategy, tool, availability) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasToolForStrategy checks if a specific tool is available for a strategy
+func (td *ToolDetector) hasToolForStrategy(strategy ImageManagementStrategy, tool string, availability *ToolAvailability) bool {
+	switch strategy {
+	case ImageManagementLocal:
+		switch tool {
+		case "container":
+			return availability.LocalNerdctl
+		case "helm":
+			return availability.LocalHelm
+		case "kubeadm":
+			return availability.LocalKubeadm
+		case "curl":
+			return availability.LocalCurl
+		}
+	case ImageManagementController:
+		switch tool {
+		case "container":
+			return availability.ControllerNerdctl
+		case "helm":
+			return availability.ControllerHelm
+		case "kubeadm":
+			return availability.ControllerKubeadm
+		case "curl":
+			return availability.ControllerCurl
+		}
+	case ImageManagementTarget:
+		// Target strategy is always viable as we can install tools if needed
+		return true
+	}
+	return false
 }
 
 // GetPreferredContainerTool returns the preferred container tool for a given strategy
@@ -204,22 +259,10 @@ func (td *ToolDetector) GetPreferredContainerTool(strategy ImageManagementStrate
 		if availability.LocalNerdctl {
 			return "nerdctl"
 		}
-		if availability.LocalDocker {
-			return "docker"
-		}
-		if availability.LocalPodman {
-			return "podman"
-		}
 	case ImageManagementController:
 		if availability.ControllerNerdctl {
 			return "nerdctl"
 		}
-		if availability.ControllerDocker {
-			return "docker"
-		}
-		if availability.ControllerPodman {
-			return "podman"
-		}
 	}
-	return "nerdctl" // Default fallback
+	return "nerdctl" // Default fallback - nerdctl is required
 }

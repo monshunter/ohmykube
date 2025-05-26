@@ -36,7 +36,7 @@ type Initializer struct {
 	osType         osType
 	arch           string
 	useDnf         bool
-	packageManager cache.PackageCacheManager
+	packageManager interfaces.PackageCacheManager
 }
 
 // NewInitializer creates a new node initializer

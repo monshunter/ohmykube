@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/cache"
+	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/utils"
 )
 
 func main() {
@@ -58,7 +59,7 @@ func main() {
 	fmt.Println("2. Current cache statistics:")
 	count, totalSize := imageCacheManager.GetCacheStats()
 	fmt.Printf("   - Cached images: %d\n", count)
-	fmt.Printf("   - Total size: %d bytes (%.2f MB)\n", totalSize, float64(totalSize)/(1024*1024))
+	fmt.Printf("   - Total size: %s\n", utils.FormatSize(totalSize))
 	fmt.Println()
 
 	// Demo image reference parsing
@@ -161,7 +162,7 @@ func main() {
 	fmt.Println("7. Final cache statistics:")
 	count, totalSize = imageCacheManager.GetCacheStats()
 	fmt.Printf("   - Cached images: %d\n", count)
-	fmt.Printf("   - Total size: %d bytes (%.2f MB)\n", totalSize, float64(totalSize)/(1024*1024))
+	fmt.Printf("   - Total size: %s\n", utils.FormatSize(totalSize))
 	fmt.Println()
 
 	fmt.Println("=== Demo completed ===")

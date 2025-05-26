@@ -1,8 +1,10 @@
 package cni
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/monshunter/ohmykube/pkg/cache"
 	"github.com/monshunter/ohmykube/pkg/clusterinfo"
 	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
@@ -28,6 +30,12 @@ func NewFlannelInstaller(sshRunner interfaces.SSHRunner, controllerNode string) 
 
 // Install installs Flannel CNI using Helm
 func (f *FlannelInstaller) Install() error {
+	// Cache required images before installation
+	if err := f.cacheImages(); err != nil {
+		log.Warningf("Failed to cache Flannel images: %v", err)
+		// Continue with installation even if image caching fails
+	}
+
 	// Ensure br_netfilter module is loaded
 	brNetfilterCmd := `
 sudo modprobe br_netfilter
@@ -82,7 +90,7 @@ helm install flannel flannel/flannel \
 	waitCmd := `kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=300s`
 	_, err = f.sshRunner.RunCommand(f.controllerNode, waitCmd)
 	if err != nil {
-		log.Infof("Warning: Timed out waiting for Flannel to be ready, but will continue: %v", err)
+		log.Warningf("Timed out waiting for Flannel to be ready, but will continue: %v", err)
 	}
 
 	log.Info("Flannel installation completed successfully")
@@ -97,4 +105,46 @@ func (f *FlannelInstaller) SetPodCIDR(cidr string) {
 // SetVersion sets the Flannel version
 func (f *FlannelInstaller) SetVersion(version string) {
 	f.Version = version
+}
+
+// cacheImages caches required Flannel images before installation
+func (f *FlannelInstaller) cacheImages() error {
+	ctx := context.Background()
+
+	// First, ensure the Helm repository is added with the correct name
+	log.Info("Adding Flannel Helm repository for image caching...")
+	addRepoCmd := `
+helm repo add flannel https://flannel-io.github.io/flannel/ || true
+helm repo update
+`
+	_, err := f.sshRunner.RunCommand(f.controllerNode, addRepoCmd)
+	if err != nil {
+		return fmt.Errorf("failed to add Flannel Helm repository for caching: %w", err)
+	}
+
+	// Create image manager with default configuration
+	imageManager, err := cache.NewImageManager()
+	if err != nil {
+		return fmt.Errorf("failed to create image manager: %w", err)
+	}
+
+	// Define Flannel Helm chart source (repository already added above)
+	source := cache.ImageSource{
+		Type:      "helm",
+		ChartName: "flannel/flannel",
+		ChartRepo: "", // Empty since repository is already added
+		Version:   f.Version,
+		ChartValues: map[string]string{
+			"podCidr": f.PodCIDR,
+		},
+	}
+
+	// Cache images for all nodes in the cluster
+	// For now, we'll cache for the controller node
+	err = imageManager.EnsureImages(ctx, source, f.sshRunner, f.controllerNode, f.controllerNode)
+	if err != nil {
+		return fmt.Errorf("failed to cache Flannel images: %w", err)
+	}
+	_ = imageManager.ReCacheClusterImages(f.sshRunner)
+	return nil
 }

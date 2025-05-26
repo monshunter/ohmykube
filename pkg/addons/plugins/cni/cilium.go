@@ -1,9 +1,11 @@
 package cni
 
 import (
+	"context"
 	"fmt"
 	"os"
 
+	"github.com/monshunter/ohmykube/pkg/cache"
 	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
 )
@@ -30,6 +32,12 @@ func NewCiliumInstaller(sshRunner interfaces.SSHRunner, controllerNode string, c
 
 // Install installs Cilium CNI
 func (c *CiliumInstaller) Install() error {
+	// Cache required images before installation
+	if err := c.cacheImages(); err != nil {
+		log.Warningf("Failed to cache Cilium images: %v", err)
+		// Continue with installation even if image caching fails
+	}
+
 	// Prepare Cilium configuration
 	ciliumConfig := `apiVersion: helm.k8s.io/v1
 kind: HelmRelease
@@ -111,5 +119,42 @@ kubectl -n kube-system wait --for=condition=ready pod -l k8s-app=cilium --timeou
 	}
 
 	log.Info("Cilium installation completed successfully")
+	return nil
+}
+
+// cacheImages caches required Cilium images before installation
+func (c *CiliumInstaller) cacheImages() error {
+	// Import the required packages
+	ctx := context.Background()
+
+	// Create image manager with default configuration
+	imageManager, err := cache.NewImageManager()
+	if err != nil {
+		return fmt.Errorf("failed to create image manager: %w", err)
+	}
+
+	// Define Cilium Helm chart source
+	source := cache.ImageSource{
+		Type:      "helm",
+		ChartName: "cilium/cilium",
+		ChartRepo: "https://helm.cilium.io",
+		Version:   c.Version,
+		ChartValues: map[string]string{
+			"ipam.mode":            "kubernetes",
+			"hubble.relay.enabled": "true",
+			"hubble.ui.enabled":    "true",
+			"kubeProxyReplacement": "true",
+			"k8sServiceHost":       c.APIServerHost,
+			"k8sServicePort":       c.APIServerPort,
+		},
+	}
+
+	// Cache images for all nodes in the cluster
+	// For now, we'll cache for the controller node
+	err = imageManager.EnsureImages(ctx, source, c.sshRunner, c.controllerNode, c.controllerNode)
+	if err != nil {
+		return fmt.Errorf("failed to cache Cilium images: %w", err)
+	}
+	_ = imageManager.ReCacheClusterImages(c.sshRunner)
 	return nil
 }

@@ -2,14 +2,16 @@ package ssh
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/utils"
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -183,12 +185,17 @@ func (c *Client) RunCommand(command string) (string, error) {
 	return "", lastErr
 }
 
-// UploadFile uploads a local file to the remote server using SCP protocol
+// UploadFile uploads a local file to the remote server using SFTP protocol
 func (c *Client) UploadFile(localPath, remotePath string) error {
+	log.Infof("Starting SFTP upload: %s -> %s", localPath, remotePath)
 	maxRetries := 3
 	var lastErr error
 
 	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			log.Infof("Retrying SFTP upload (attempt %d/%d)", i+1, maxRetries)
+		}
+
 		// Ensure connection
 		if err := c.Connect(); err != nil {
 			lastErr = err
@@ -199,112 +206,85 @@ func (c *Client) UploadFile(localPath, remotePath string) error {
 			return lastErr
 		}
 
-		// Read local file
-		data, err := os.ReadFile(localPath)
-		if err != nil {
-			return fmt.Errorf("failed to read local file: %w", err)
-		}
-
-		// Get file info
-		fileInfo, err := os.Stat(localPath)
-		if err != nil {
-			return fmt.Errorf("failed to get file info: %w", err)
-		}
-
-		// Use SCP protocol for file transfer
-		if err := c.scpUpload(remotePath, data, fileInfo.Mode()); err != nil {
-			lastErr = fmt.Errorf("failed to upload file via SCP: %w", err)
+		// Use SFTP protocol for file transfer
+		if err := c.sftpUpload(localPath, remotePath); err != nil {
+			lastErr = fmt.Errorf("failed to upload file via SFTP: %w", err)
 			if i < maxRetries-1 {
+				log.Infof("SFTP upload failed, retrying: %v", err)
 				time.Sleep(2 * time.Second)
 				continue
 			}
 			return lastErr
 		}
 
+		log.Infof("SFTP upload completed successfully")
 		return nil
 	}
 
 	return lastErr
 }
 
-// scpUpload implements SCP protocol for uploading files
-func (c *Client) scpUpload(remotePath string, data []byte, mode os.FileMode) error {
-	// Create SCP session
-	session, err := c.client.NewSession()
+// sftpUpload implements SFTP protocol for uploading files
+func (c *Client) sftpUpload(localPath, remotePath string) error {
+	// Create SFTP client
+	sftpClient, err := sftp.NewClient(c.client)
 	if err != nil {
-		return fmt.Errorf("failed to create SSH session: %w", err)
+		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
-	defer session.Close()
+	defer sftpClient.Close()
 
-	// Create pipes
-	stdin, err := session.StdinPipe()
+	// Open local file
+	localFile, err := os.Open(localPath)
 	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe: %w", err)
+		return fmt.Errorf("failed to open local file: %w", err)
 	}
+	defer localFile.Close()
 
-	stdout, err := session.StdoutPipe()
+	// Get local file info for logging and permissions
+	localInfo, err := localFile.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
+		return fmt.Errorf("failed to get local file info: %w", err)
 	}
 
-	// Start SCP command with sudo support
-	scpCmd := fmt.Sprintf("sudo scp -t %s", remotePath)
-	if err := session.Start(scpCmd); err != nil {
-		return fmt.Errorf("failed to start SCP session: %w", err)
+	// Ensure remote directory exists
+	remoteDir := filepath.Dir(remotePath)
+	if err := sftpClient.MkdirAll(remoteDir); err != nil {
+		return fmt.Errorf("failed to create remote directory: %w", err)
 	}
 
-	// Wait for initial response
-	response := make([]byte, 1)
-	if _, err := stdout.Read(response); err != nil {
-		return fmt.Errorf("failed to read SCP response: %w", err)
+	// Create remote file
+	remoteFile, err := sftpClient.Create(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to create remote file: %w", err)
 	}
-	if response[0] != 0 {
-		return fmt.Errorf("SCP server returned error: %d", response[0])
+	defer remoteFile.Close()
+
+	// Copy file using io.Copy (much faster and simpler)
+	log.Infof("Uploading file: %s", utils.FormatSize(localInfo.Size()))
+	_, err = io.Copy(remoteFile, localFile)
+	if err != nil {
+		return fmt.Errorf("failed to copy file: %w", err)
 	}
 
-	// Send file header (mode, size, filename)
-	filename := filepath.Base(remotePath)
-	header := fmt.Sprintf("C%04o %d %s\n", mode&0777, len(data), filename)
-	if _, err := stdin.Write([]byte(header)); err != nil {
-		return fmt.Errorf("failed to send SCP header: %w", err)
+	// Set file permissions (best effort)
+	if err := sftpClient.Chmod(remotePath, localInfo.Mode()); err != nil {
+		log.Warningf("Failed to set remote file permissions: %v", err)
 	}
 
-	// Wait for response
-	if _, err := stdout.Read(response); err != nil {
-		return fmt.Errorf("failed to read SCP header response: %w", err)
-	}
-	if response[0] != 0 {
-		return fmt.Errorf("SCP server rejected header: %d", response[0])
-	}
-
-	// Send file data
-	if _, err := stdin.Write(data); err != nil {
-		return fmt.Errorf("failed to send file data: %w", err)
-	}
-
-	// Send end-of-file marker
-	if _, err := stdin.Write([]byte{0}); err != nil {
-		return fmt.Errorf("failed to send EOF marker: %w", err)
-	}
-
-	// Wait for final response
-	if _, err := stdout.Read(response); err != nil {
-		return fmt.Errorf("failed to read final SCP response: %w", err)
-	}
-	if response[0] != 0 {
-		return fmt.Errorf("SCP transfer failed: %d", response[0])
-	}
-
-	stdin.Close()
-	return session.Wait()
+	return nil
 }
 
-// DownloadFile downloads a file from the remote server using SCP protocol
+// DownloadFile downloads a file from the remote server using SFTP protocol
 func (c *Client) DownloadFile(remotePath, localPath string) error {
+	log.Infof("Starting SFTP download: %s -> %s", remotePath, localPath)
 	maxRetries := 3
 	var lastErr error
 
 	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			log.Infof("Retrying SFTP download (attempt %d/%d)", i+1, maxRetries)
+		}
+
 		// Ensure connection
 		if err := c.Connect(); err != nil {
 			lastErr = err
@@ -315,85 +295,44 @@ func (c *Client) DownloadFile(remotePath, localPath string) error {
 			return lastErr
 		}
 
-		// Use SCP protocol for file download
-		if err := c.scpDownload(remotePath, localPath); err != nil {
-			lastErr = fmt.Errorf("failed to download file via SCP: %w", err)
+		// Use SFTP protocol for file download
+		if err := c.sftpDownload(remotePath, localPath); err != nil {
+			lastErr = fmt.Errorf("failed to download file via SFTP: %w", err)
 			if i < maxRetries-1 {
+				log.Infof("SFTP download failed, retrying: %v", err)
 				time.Sleep(2 * time.Second)
 				continue
 			}
 			return lastErr
 		}
 
+		log.Infof("SFTP download completed successfully")
 		return nil
 	}
 
 	return lastErr
 }
 
-// scpDownload implements SCP protocol for downloading files
-func (c *Client) scpDownload(remotePath, localPath string) error {
-	// Create SCP session
-	session, err := c.client.NewSession()
+// sftpDownload implements SFTP protocol for downloading files
+func (c *Client) sftpDownload(remotePath, localPath string) error {
+	// Create SFTP client
+	sftpClient, err := sftp.NewClient(c.client)
 	if err != nil {
-		return fmt.Errorf("failed to create SSH session: %w", err)
+		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
-	defer session.Close()
+	defer sftpClient.Close()
 
-	// Create pipes
-	stdin, err := session.StdinPipe()
+	// Open remote file
+	remoteFile, err := sftpClient.Open(remotePath)
 	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe: %w", err)
+		return fmt.Errorf("failed to open remote file: %w", err)
 	}
+	defer remoteFile.Close()
 
-	stdout, err := session.StdoutPipe()
+	// Get remote file info for logging
+	remoteInfo, err := remoteFile.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	// Start SCP command for download
-	scpCmd := fmt.Sprintf("scp -f %s", remotePath)
-	if err := session.Start(scpCmd); err != nil {
-		return fmt.Errorf("failed to start SCP session: %w", err)
-	}
-
-	// Send ready signal
-	if _, err := stdin.Write([]byte{0}); err != nil {
-		return fmt.Errorf("failed to send ready signal: %w", err)
-	}
-
-	// Read file header
-	headerBuf := make([]byte, 1024)
-	n, err := stdout.Read(headerBuf)
-	if err != nil {
-		return fmt.Errorf("failed to read SCP header: %w", err)
-	}
-
-	header := string(headerBuf[:n])
-	if !strings.HasPrefix(header, "C") {
-		return fmt.Errorf("invalid SCP header: %s", header)
-	}
-
-	// Parse header to get file size
-	parts := strings.Fields(header)
-	if len(parts) < 3 {
-		return fmt.Errorf("malformed SCP header: %s", header)
-	}
-
-	var fileSize int64
-	if _, err := fmt.Sscanf(parts[1], "%d", &fileSize); err != nil {
-		return fmt.Errorf("failed to parse file size: %w", err)
-	}
-
-	// Send acknowledgment
-	if _, err := stdin.Write([]byte{0}); err != nil {
-		return fmt.Errorf("failed to send acknowledgment: %w", err)
-	}
-
-	// Read file data
-	data := make([]byte, fileSize)
-	if _, err := stdout.Read(data); err != nil {
-		return fmt.Errorf("failed to read file data: %w", err)
+		return fmt.Errorf("failed to get remote file info: %w", err)
 	}
 
 	// Ensure local directory exists
@@ -402,16 +341,24 @@ func (c *Client) scpDownload(remotePath, localPath string) error {
 		return fmt.Errorf("failed to create local directory: %w", err)
 	}
 
-	// Write to local file
-	if err := os.WriteFile(localPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write local file: %w", err)
+	// Create local file
+	localFile, err := os.Create(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to create local file: %w", err)
+	}
+	defer localFile.Close()
+
+	// Copy file using io.Copy (much faster and simpler)
+	log.Infof("Downloading file: %s", utils.FormatSize(remoteInfo.Size()))
+	_, err = io.Copy(localFile, remoteFile)
+	if err != nil {
+		return fmt.Errorf("failed to copy file: %w", err)
 	}
 
-	// Send final acknowledgment
-	if _, err := stdin.Write([]byte{0}); err != nil {
-		return fmt.Errorf("failed to send final acknowledgment: %w", err)
+	// Set file permissions (best effort)
+	if err := localFile.Chmod(remoteInfo.Mode()); err != nil {
+		log.Warningf("Failed to set local file permissions: %v", err)
 	}
 
-	stdin.Close()
-	return session.Wait()
+	return nil
 }
