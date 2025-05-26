@@ -66,7 +66,7 @@ make install
 ohmykube up
 
 # View cluster status
-export KUBECONFIG=~/.kube/config-ohmykube
+export KUBECONFIG=~/.kube/ohmykube-config
 kubectl get nodes
 
 # Delete the cluster
