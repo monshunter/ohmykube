@@ -1,7 +1,11 @@
-# OhMyKube
+# Oh My Kube
 
 <p align="center">
   <strong>Quickly Set Up Complete Kubernetes Environments on Real Virtual Machines</strong>
+</p>
+
+<p align="center">
+  <a href="README-zh.md">中文文档</a> | English
 </p>
 
 <p align="center">
@@ -13,7 +17,7 @@
   <a href="#roadmap">Roadmap</a>
 </p>
 
-OhMyKube is a Kubernetes cluster creation tool built on real virtual machines, filling the gap between containerized tools (like kind, k3d) and production-grade tools (like kubespray, sealos). Using Lima virtualization technology and kubeadm, it provides a Kubernetes environment that's more realistic than containers but simpler to deploy than manual setups.
+OhMyKube is a Kubernetes cluster creation tool built on real virtual machines. It uses Lima virtualization technology and kubeadm, making it easy for developers to quickly create a simple Kubernetes environment.
 
 ## Core Features
 
@@ -29,7 +33,7 @@ OhMyKube is a Kubernetes cluster creation tool built on real virtual machines, f
 
 Among many Kubernetes tools, OhMyKube offers unique value:
 
-| Feature | Kind/K3d | OhMyKube | Kubespray/Sealos |
+| Feature | Kind/K3d/Minikube | OhMyKube | Kubespray/Sealos |
 |---------|----------|----------|------------------|
 | Environment Realism | 🟡 Container Simulation | 🟢 Real VM | 🟢 Production Grade |
 | Resource Isolation | 🟡 Container Level | 🟢 VM Level | 🟢 Physical/VM Level |
