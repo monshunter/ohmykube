@@ -16,21 +16,21 @@ import (
 	"github.com/monshunter/ohmykube/pkg/initializer"
 	"github.com/monshunter/ohmykube/pkg/kube"
 	"github.com/monshunter/ohmykube/pkg/launcher"
+	"github.com/monshunter/ohmykube/pkg/launcher/options"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // Manager cluster manager
 type Manager struct {
-	Config             *config.Config
-	VMProvider         launcher.Launcher
-	LauncherType       launcher.LauncherType
-	KubeManager        *kube.Manager
-	SSHManager         *ssh.SSHManager
-	AddonManager       addons.AddonManager
-	Cluster            *config.Cluster
-	InitOptions        initializer.InitOptions
-	DownloadKubeconfig bool // Whether to download kubeconfig to local
+	Config       *config.Config
+	VMProvider   launcher.Launcher
+	LauncherType launcher.LauncherType
+	KubeManager  *kube.Manager
+	SSHManager   *ssh.SSHManager
+	AddonManager addons.AddonManager
+	Cluster      *config.Cluster
+	InitOptions  initializer.InitOptions
 }
 
 // NewManager creates a new cluster manager
@@ -41,12 +41,15 @@ func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluste
 	// Create the VM launcher
 	vmLauncher, err := launcher.NewLauncher(
 		launcherType,
-		launcher.Config{
-			Template:  cfg.Template,
-			Password:  sshConfig.Password,
-			SSHKey:    sshConfig.GetSSHKey(),
-			SSHPubKey: sshConfig.GetSSHPubKey(),
-			Parallel:  cfg.Parallel,
+		&options.Options{
+			Template:     cfg.Template,
+			Password:     sshConfig.Password,
+			SSHKey:       sshConfig.GetSSHKey(),
+			SSHPubKey:    sshConfig.GetSSHPubKey(),
+			Parallel:     cfg.Parallel,
+			Prefix:       cfg.Name,
+			Force:        true,
+			OutputFormat: cfg.OutputFormat,
 		},
 	)
 	if err != nil {
@@ -67,14 +70,13 @@ func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluste
 	}
 
 	manager := &Manager{
-		Config:             cfg,
-		VMProvider:         vmLauncher,
-		LauncherType:       launcherType,
-		SSHManager:         sshManager,
-		AddonManager:       addonManager,
-		Cluster:            cls,
-		InitOptions:        initializer.DefaultInitOptions(),
-		DownloadKubeconfig: true, // Default to download kubeconfig
+		Config:       cfg,
+		VMProvider:   vmLauncher,
+		LauncherType: launcherType,
+		SSHManager:   sshManager,
+		AddonManager: addonManager,
+		Cluster:      cls,
+		InitOptions:  initializer.DefaultInitOptions(),
 		KubeManager: kube.NewManager(sshManager, cfg.KubernetesVersion,
 			cls.Spec.Master.Name, cfg.ProxyMode),
 	}
@@ -89,7 +91,7 @@ func (m *Manager) SetInitOptions(options initializer.InitOptions) {
 
 // GetNodeIP gets the node IP address
 func (m *Manager) GetNodeIP(nodeName string) (string, error) {
-	return m.VMProvider.GetNodeIP(nodeName)
+	return m.VMProvider.GetAddress(nodeName)
 }
 
 // WaitForSSHReady waits for the node's SSH service to be ready
@@ -212,21 +214,9 @@ func (m *Manager) RunCommand(nodeName, command string) (string, error) {
 	return m.SSHManager.RunCommand(nodeName, command)
 }
 
-// SetDownloadKubeconfig sets whether to download kubeconfig to local
-func (m *Manager) SetDownloadKubeconfig(download bool) {
-	m.DownloadKubeconfig = download
-}
-
 // SetupKubeconfig configures local kubeconfig
 func (m *Manager) SetupKubeconfig() (string, error) {
-	// Get SSH client for the Master node
-	sshClient, exists := m.SSHManager.GetClient(m.Cluster.GetMasterName())
-	if !exists {
-		return "", fmt.Errorf("failed to get SSH client for Master node")
-	}
-
-	// Use unified kubeconfig download logic
-	return kube.DownloadToLocal(sshClient, m.Cluster.Name, "")
+	return m.KubeManager.DownloadKubeConfig(m.Cluster.Name, "")
 }
 
 // CreateCluster creates a new cluster
@@ -378,22 +368,10 @@ func (m *Manager) CreateCluster() error {
 		log.Info("Skipping LoadBalancer installation as it was already completed")
 	}
 
-	// 8. Download kubeconfig to local (optional step)
-	var kubeconfigPath string
-	var err error
-	if m.DownloadKubeconfig {
-		log.Info("Downloading kubeconfig to local...")
-		kubeconfigPath, err = m.SetupKubeconfig()
-		if err != nil {
-			return fmt.Errorf("failed to download kubeconfig to local: %w", err)
-		}
-	} else {
-		// Just get the path without downloading the file
-		kubeconfigPath, err = kube.GetKubeconfigPath(m.Config.Name)
-		if err != nil {
-			return fmt.Errorf("failed to get kubeconfig path: %w", err)
-		}
-		log.Info("Skipping kubeconfig download...")
+	log.Info("Downloading kubeconfig to local...")
+	kubeconfigPath, err := m.SetupKubeconfig()
+	if err != nil {
+		return fmt.Errorf("failed to download kubeconfig to local: %w", err)
 	}
 
 	// Mark cluster as ready
@@ -441,7 +419,7 @@ func (m *Manager) CreateMasterVM() error {
 	m.Cluster.Spec.Master.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
 		"Creating", "Creating master VM")
 
-	err := m.VMProvider.CreateVM(masterName, m.Cluster.Spec.Master.Spec.CPU,
+	err := m.VMProvider.Create(masterName, m.Cluster.Spec.Master.Spec.CPU,
 		m.Cluster.Spec.Master.Spec.Memory, m.Cluster.Spec.Master.Spec.Disk)
 
 	if err != nil {
@@ -524,7 +502,7 @@ func (m *Manager) CreateWorkerVM(nodeName string, cpu int, memory int, disk int)
 	node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
 		"Creating", "Creating worker VM")
 
-	err := m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
+	err := m.VMProvider.Create(nodeName, cpu, memory, disk)
 
 	if err != nil {
 		node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
@@ -730,7 +708,7 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
 		"Creating", "Creating worker VM")
 
-	err := m.VMProvider.CreateVM(nodeName, cpu, memory, disk)
+	err := m.VMProvider.Create(nodeName, cpu, memory, disk)
 	if err != nil {
 		node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
 			"CreationFailed", fmt.Sprintf("Failed to create worker VM: %v", err))
@@ -817,7 +795,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 
 	// Delete virtual machine
 	log.Infof("Deleting node %s...", nodeName)
-	err := m.VMProvider.DeleteVM(nodeName)
+	err := m.VMProvider.Delete(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", nodeName, err)
 	}
@@ -834,7 +812,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 }
 
 func (m *Manager) drainAndDeleteNode(nodeName string) error {
-	log.Infof("Draining node %s from Kubernetes config...", nodeName)
+	log.Infof("Draining node %s from Kubernetes...", nodeName)
 	drainCmd := fmt.Sprintf(`kubectl drain %s --ignore-daemonsets --delete-emptydir-data --force`, nodeName)
 	_, err := m.RunCommand(m.Cluster.GetMasterName(), drainCmd)
 	if err != nil {
@@ -855,7 +833,7 @@ func (m *Manager) DeleteCluster() error {
 
 	// List all virtual machines
 	prefix := m.Cluster.Prefix()
-	vms, err := m.VMProvider.ListVM(prefix)
+	vms, err := m.VMProvider.List()
 	if err != nil {
 		return fmt.Errorf("failed to list virtual machines: %w", err)
 	}
@@ -867,7 +845,7 @@ func (m *Manager) DeleteCluster() error {
 			// Close SSH connection
 			m.SSHManager.CloseClient(vm)
 
-			err := m.VMProvider.DeleteVM(vm)
+			err := m.VMProvider.Delete(vm)
 			if err != nil {
 				log.Errorf("failed to delete node %s: %v", vm, err)
 			}
@@ -903,35 +881,47 @@ func (m *Manager) SetKubeadmConfigPath(configPath string) {
 	m.KubeManager.SetCustomConfig(configPath)
 }
 
-// SetLauncherType sets the VM launcher type
-func (m *Manager) SetLauncherType(launcherType launcher.LauncherType) error {
-	// If the launcher type is the same, no need to change
-	if m.LauncherType == launcherType {
-		return nil
+// StartVM starts a virtual machine
+func (m *Manager) StartVM(nodeName string) error {
+	// Check if node exists
+	nodeInfo := m.Cluster.GetNodeByName(nodeName)
+	if nodeInfo == nil {
+		return fmt.Errorf("node %s does not exist", nodeName)
+	}
+	return m.VMProvider.Start(nodeName)
+}
+
+// StopVM stops a virtual machine
+func (m *Manager) StopVM(nodeName string, force bool) error {
+	// Check if node exists
+	nodeInfo := m.Cluster.GetNodeByName(nodeName)
+	if nodeInfo == nil {
+		return fmt.Errorf("node %s does not exist", nodeName)
 	}
 
-	// Get SSH configuration
-	sshConfig := m.SSHManager.GetSSHConfig()
-
-	// Create a new launcher with the specified type
-	vmLauncher, err := launcher.NewLauncher(
-		launcherType,
-		launcher.Config{
-			Template:  m.Config.Template,
-			Password:  sshConfig.Password,
-			SSHKey:    sshConfig.GetSSHKey(),
-			SSHPubKey: sshConfig.GetSSHPubKey(),
-			Parallel:  m.Config.Parallel,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create VM launcher: %w", err)
+	// Evict node from Kubernetes
+	if !force {
+		err := m.drainAndDeleteNode(nodeName)
+		if err != nil {
+			return err
+		}
 	}
+	return m.VMProvider.Stop(nodeName)
+}
 
-	// Update the manager with the new launcher
-	m.VMProvider = vmLauncher
-	m.LauncherType = launcherType
-	return nil
+// ListVMs lists all virtual machines with optional format
+func (m *Manager) ListVMs() ([]string, error) {
+	return m.VMProvider.List()
+}
+
+// OpenShell opens an interactive shell to a virtual machine
+func (m *Manager) OpenShell(nodeName string) error {
+	// Check if node exists
+	nodeInfo := m.Cluster.GetNodeByName(nodeName)
+	if nodeInfo == nil {
+		return fmt.Errorf("node %s does not exist", nodeName)
+	}
+	return m.VMProvider.Shell(nodeName)
 }
 
 // canResumeClusterCreation checks if there are any conditions set that indicate

@@ -115,7 +115,7 @@ memorySwap: {}
 nodeStatusReportFrequency: 0s
 nodeStatusUpdateFrequency: 0s
 # resolvConf: /run/systemd/resolve/resolv.conf
-resolvConf: /run/ohmykube/resolve/resolv.conf
+resolvConf: /etc/ohmykube/resolve/resolv.conf
 rotateCertificates: true
 runtimeRequestTimeout: 0s
 shutdownGracePeriod: 0s

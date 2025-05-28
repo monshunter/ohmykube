@@ -1,20 +1,24 @@
-.PHONY: build clean test
+.PHONY: build install clean test
 
 BINARY_NAME=ohmykube
 VERSION=0.1.0
 BUILD_TIME=$(shell date +%FT%T%z)
 GO_VERSION=$(shell go version | awk '{print $$3}')
+GOPATH ?= $(shell go env GOPATH)
 
 LDFLAGS=-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GoVersion=${GO_VERSION}"
 
 build:
-	go build ${LDFLAGS} -o ${BINARY_NAME} ./cmd/ohmykube
+	mkdir -p bin/
+	go build ${LDFLAGS} -o bin/${BINARY_NAME} ./cmd/ohmykube
 
-install: build
-	mv ${BINARY_NAME} $(GOPATH)/bin/
+install:
+	mkdir -p $(GOPATH)/bin/
+	go build ${LDFLAGS} -o $(GOPATH)/bin/${BINARY_NAME} ./cmd/ohmykube
 
 clean:
 	go clean
+	rm -f bin/${BINARY_NAME}
 	rm -f ${BINARY_NAME}
 
 test:

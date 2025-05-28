@@ -1,35 +1,33 @@
 package launcher
 
-// VMInfo represents information about a virtual machine
-type VMInfo struct {
-	Name   string
-	Status string
-	IP     string
-}
-
 // Launcher defines the interface for virtual machine launcher implementations
 type Launcher interface {
-	// CreateVM creates a new virtual machine
-	CreateVM(name string, cpus, memory, disk int) error
+	Name() string
 
-	// DeleteVM deletes a virtual machine
-	DeleteVM(name string) error
+	// Create creates a new virtual machine
+	Create(name string, args ...any) error
 
-	// InfoVM gets information about a VM
-	InfoVM(name string) error
+	// Delete deletes a virtual machine
+	Delete(name string) error
 
-	// InitAuth initializes authentication for the VM
-	InitAuth(name string) error
+	// Start starts a virtual machine
+	Start(name string) error
 
-	// ExecCommand executes a command on the specified virtual machine
-	ExecCommand(vmName, command string) (string, error)
+	// Stop stops a virtual machine
+	Stop(name string) error
 
-	// ListVM lists all virtual machines with the given prefix
-	ListVM(prefix string) ([]string, error)
+	// Shell opens an interactive shell to the virtual machine
+	Shell(name string) error
 
-	// TransferFile transfers a local file to the virtual machine
-	TransferFile(localPath, vmName, remotePath string) error
+	// Info gets information about a VM
+	Info(name string) error
 
-	// GetNodeIP gets the IP address of a node
-	GetNodeIP(nodeName string) (string, error)
+	// Exec executes a command on the specified virtual machine
+	Exec(vmName, command string) (string, error)
+
+	// List lists all virtual machines with the given prefix
+	List() ([]string, error)
+
+	// GetAddress gets the IP address of a node
+	GetAddress(name string) (string, error)
 }

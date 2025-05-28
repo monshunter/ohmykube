@@ -19,31 +19,6 @@
 
 OhMyKube is a Kubernetes cluster creation tool built on real virtual machines. It uses Lima virtualization technology and kubeadm, making it easy for developers to quickly create a simple Kubernetes environment.
 
-## Core Features
-
-- 🌟 **Real Virtual Machines**: Uses independent VMs instead of containers to run Kubernetes nodes, closer to production environments
-- 🔄 **One-Click Deployment**: Simple command-line interface for quick creation, deletion, and scaling of clusters
-- 🧩 **Network Plugin Options**: Supports Flannel (default) and Cilium to meet different scenario requirements
-- 💾 **Storage Integration**: Automatically installs Local-Path-Provisioner or Rook-Ceph storage systems
-- 🔌 **Load Balancing**: Built-in MetalLB provides a genuine LoadBalancer service experience
-- 🛠️ **Highly Flexible**: Supports custom kubeadm configurations and adjustable resource allocation
-- 🚀 **Quick Node Management**: Easily add or remove worker nodes
-
-## Why Choose OhMyKube
-
-Among many Kubernetes tools, OhMyKube offers unique value:
-
-| Feature | Kind/K3d/Minikube | OhMyKube | Kubespray/Sealos |
-|---------|----------|----------|------------------|
-| Environment Realism | 🟡 Container Simulation | 🟢 Real VM | 🟢 Production Grade |
-| Resource Isolation | 🟡 Container Level | 🟢 VM Level | 🟢 Physical/VM Level |
-| Ease of Use | 🟢 Very Simple | 🟢 Simple | 🟡 More Complex |
-| Startup Speed | 🟢 Very Fast | 🟡 Medium | 🔴 Slower |
-| Suitable for Local Development | 🟢 Yes | 🟢 Yes | 🟡 Yes but Heavy |
-| Proximity to Production | 🔴 Major Differences | 🟢 Similar | 🟢 Identical |
-| Network Model | 🟡 Simplified | 🟢 Realistic | 🟢 Realistic |
-| Storage Support | 🟡 Limited | 🟢 Comprehensive | 🟢 Comprehensive |
-| Hardware Requirements | 🟢 Low | 🟡 Medium | 🔴 High |
 
 ## Quick Start
 
@@ -107,6 +82,9 @@ ohmykube up --kubeadm-config /path/to/custom-kubeadm-config.yaml
 ### Cluster Management
 
 ```bash
+# List all nodes
+ohmykube list
+
 # Add a node
 ohmykube add --cpu 2 --memory 4 --disk 20
 
@@ -116,11 +94,18 @@ ohmykube delete ohmykube-worker-2
 # Force delete (without evicting Pods first)
 ohmykube delete ohmykube-worker-2 --force
 
-# Download kubeconfig
-ohmykube download-kubeconfig
+# Start a node
+ohmykube start ohmykube-worker-2
+
+# Stop a node
+ohmykube stop ohmykube-worker-2
+
+# Enter node Shell
+ohmykube shell ohmykube-worker-2
+
 ```
 
-### Custom Kubeadm Configuration
+### Custom Kubeadm Configuration (not supported yet, but coming soon)
 
 You can provide a custom kubeadm configuration file to override the default settings. The following sections are supported:
 
@@ -150,12 +135,6 @@ networking:
 We are planning the following feature enhancements:
 
 ### Coming Soon 🚀
-
-- **Image Management Enhancements**
-  - Local Harbor registry support (`ohmykube registry`)
-  - Image synchronization tools (`ohmykube load`, similar to kind load)
-  - Image caching mechanism to accelerate cluster creation
-
 - **Multi-Cluster Management**
   - Project initialization (`ohmykube init`)
   - Cluster switching (`ohmykube switch`)
@@ -184,9 +163,9 @@ We are planning the following feature enhancements:
 
 ## Supported Platforms
 
-- Mac arm64 (priority support)
-- Linux arm64/amd64
-- Other platforms (experimental support)
+- Mac arm64 (supported)
+- Linux arm64/amd64 (coming soon)
+- Other platforms (coming soon)
 
 ## Contributing
 

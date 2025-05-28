@@ -40,3 +40,7 @@ func OhMyKubeLogDir() string {
 func IsEnableDefaultMiror() bool {
 	return os.Getenv("OHMYKUBE_ENABLE_MIRROR") == "1"
 }
+
+func OhMyKubeLimaHome() string {
+	return filepath.Join(OhMyKubeHome(), ".lima")
+}

@@ -1307,8 +1307,8 @@ log_step() {
 }
 
 # Step 1: Create the ohmykube resolve directory
-echo "Creating /run/ohmykube/resolve directory..."
-sudo mkdir -p /run/ohmykube/resolve
+echo "Creating /etc/ohmykube/resolve directory..."
+sudo mkdir -p /etc/ohmykube/resolve
 if [ $? -eq 0 ]; then
     log_step "CREATE_RESOLVE_DIR" "success"
 else
@@ -1354,8 +1354,8 @@ fi
 log_step "VERIFY_SOURCE" "success"
 
 # Step 4: Create symbolic link to the custom resolv.conf
-echo "Creating symbolic link from $SOURCE_RESOLV_CONF to /run/ohmykube/resolve/resolv.conf"
-sudo ln -sf "$SOURCE_RESOLV_CONF" /run/ohmykube/resolve/resolv.conf
+echo "Creating symbolic link from $SOURCE_RESOLV_CONF to /etc/ohmykube/resolve/resolv.conf"
+sudo ln -sf "$SOURCE_RESOLV_CONF" /etc/ohmykube/resolve/resolv.conf
 if [ $? -eq 0 ]; then
     log_step "CREATE_SYMLINK" "success"
 else
@@ -1365,13 +1365,13 @@ fi
 
 # Step 5: Verify the setup
 echo "Verifying DNS resolution setup..."
-if [ -L /run/ohmykube/resolve/resolv.conf ] && [ -f /run/ohmykube/resolve/resolv.conf ]; then
-    LINK_TARGET=$(readlink /run/ohmykube/resolve/resolv.conf)
+if [ -L /etc/ohmykube/resolve/resolv.conf ] && [ -f /etc/ohmykube/resolve/resolv.conf ]; then
+    LINK_TARGET=$(readlink /etc/ohmykube/resolve/resolv.conf)
     echo "Successfully created DNS resolution setup:"
-    echo "Custom resolv.conf: /run/ohmykube/resolve/resolv.conf"
+    echo "Custom resolv.conf: /etc/ohmykube/resolve/resolv.conf"
     echo "Points to: $LINK_TARGET"
     echo "Content preview:"
-    head -3 /run/ohmykube/resolve/resolv.conf | sed 's/^/    /'
+    head -3 /etc/ohmykube/resolve/resolv.conf | sed 's/^/    /'
     log_step "VERIFY_SETUP" "success"
 else
     echo "Failed to verify DNS resolution setup"

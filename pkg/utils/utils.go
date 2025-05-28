@@ -2,6 +2,8 @@ package utils // FormatFileSize formats a file size in bytes to a human-readable
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/log"
@@ -96,5 +98,46 @@ func findImagesRecursive(data any, images *[]string) {
 			// Recursively search each element in the list
 			findImagesRecursive(item, images)
 		}
+	}
+}
+
+// IsProcessRunning checks if a process with the given name is running
+// This function works cross-platform (macOS, Linux, Windows)
+func IsProcessRunning(processName string) (bool, error) {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		// Use tasklist on Windows
+		cmd = exec.Command("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s*", processName))
+	case "darwin", "linux":
+		// Use pgrep on macOS and Linux for more reliable detection
+		cmd = exec.Command("pgrep", "-f", processName)
+	default:
+		return false, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		// pgrep returns exit code 1 when no processes are found, which is normal
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == 1 {
+				return false, nil // Process not found, but no error
+			}
+		}
+		return false, fmt.Errorf("failed to check process %s: %w", processName, err)
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+
+	switch runtime.GOOS {
+	case "windows":
+		// On Windows, tasklist returns the process info if found
+		return strings.Contains(outputStr, processName), nil
+	case "darwin", "linux":
+		// On Unix systems, pgrep returns process IDs if found
+		return outputStr != "", nil
+	default:
+		return false, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
 }

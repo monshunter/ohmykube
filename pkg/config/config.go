@@ -25,6 +25,7 @@ type Config struct {
 	CSI               string
 	LB                string
 	UpdateSystem      bool
+	OutputFormat      string
 }
 
 func NewConfig(name string, workers int, proxyMode string, masterResource Resource, workerResource Resource) *Config {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/monshunter/ohmykube/pkg/launcher/limactl"
+	"github.com/monshunter/ohmykube/pkg/launcher/options"
 )
 
 // LauncherType represents the type of VM launcher to use
@@ -28,25 +29,11 @@ func (l LauncherType) IsValid() bool {
 	// TODO: Add validation for future cloud providers
 }
 
-// Config contains common configuration options for launchers
-type Config struct {
-	Image     string
-	Template  string
-	Password  string
-	SSHKey    string
-	SSHPubKey string
-	Parallel  int
-	// Future cloud provider configs can be added here:
-	// Region    string
-	// AccessKey string
-	// SecretKey string
-}
-
 // NewLauncher creates a new launcher of the specified type
-func NewLauncher(launcherType LauncherType, config Config) (Launcher, error) {
+func NewLauncher(launcherType LauncherType, options *options.Options) (Launcher, error) {
 	switch launcherType {
 	case LimactlLauncher:
-		return limactl.NewLimactlLauncher(config.Template, config.Password, config.SSHKey, config.SSHPubKey, config.Parallel)
+		return limactl.NewLimactlLauncher(options)
 	default:
 		return nil, fmt.Errorf("unsupported launcher type: %s, currently only 'limactl' is supported", launcherType)
 	}
