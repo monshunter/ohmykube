@@ -11,10 +11,11 @@ import (
 )
 
 var shellCmd = &cobra.Command{
-	Use:   "shell [nodeName]",
-	Short: "Open an interactive shell to a virtual machine",
-	Long:  `Open an interactive shell to a virtual machine. If no name is provided, connects to the master node.`,
-	Args:  cobra.MinimumNArgs(1),
+	Use:     "shell [nodeName]",
+	Aliases: []string{"sh"},
+	Short:   "Open an interactive shell to a virtual machine",
+	Long:    `Open an interactive shell to a virtual machine. If no name is provided, connects to the master node.`,
+	Args:    cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		nodeName := args[0]
 		// Load cluster information if it exists
@@ -57,8 +58,4 @@ var shellCmd = &cobra.Command{
 
 		return nil
 	},
-}
-
-func init() {
-	rootCmd.AddCommand(shellCmd)
 }

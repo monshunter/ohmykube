@@ -352,20 +352,22 @@ func (m *Manager) CreateCluster() error {
 	}
 
 	// 7. Install MetalLB if not already done
-	if !m.Cluster.HasCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue) {
-		log.Info("Installing MetalLB LoadBalancer...")
-		err := m.AddonManager.InstallLB()
-		if err != nil {
-			m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
-				"LoadBalancerInstallFailed", fmt.Sprintf("Failed to install LoadBalancer: %v", err))
+	if m.Config.LB == "metallb" && m.InitOptions.EnableIPVS() {
+		if !m.Cluster.HasCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue) {
+			log.Info("Installing MetalLB LoadBalancer...")
+			err := m.AddonManager.InstallLB()
+			if err != nil {
+				m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
+					"LoadBalancerInstallFailed", fmt.Sprintf("Failed to install LoadBalancer: %v", err))
+				m.Cluster.Save()
+				return fmt.Errorf("failed to install LoadBalancer: %w", err)
+			}
+			m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue,
+				"LoadBalancerInstalled", "MetalLB LoadBalancer installed successfully")
 			m.Cluster.Save()
-			return fmt.Errorf("failed to install LoadBalancer: %w", err)
+		} else {
+			log.Info("Skipping LoadBalancer installation as it was already completed")
 		}
-		m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue,
-			"LoadBalancerInstalled", "MetalLB LoadBalancer installed successfully")
-		m.Cluster.Save()
-	} else {
-		log.Info("Skipping LoadBalancer installation as it was already completed")
 	}
 
 	log.Info("Downloading kubeconfig to local...")

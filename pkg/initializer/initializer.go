@@ -1484,7 +1484,7 @@ func (i *Initializer) Initialize() error {
 	}
 
 	// Based on options, enable IPVS if specified
-	if i.options.EnableIPVS {
+	if i.options.EnableIPVS() {
 		if err := i.EnableIPVS(); err != nil {
 			// Try to update package repositories and retry
 			if err := i.AptUpdateForFixMissing(); err != nil {
@@ -1494,16 +1494,15 @@ func (i *Initializer) Initialize() error {
 				return err
 			}
 		}
-	} else {
-		// If not enabling IPVS, still need to set network bridging
+	}
+	// If not enabling IPVS, still need to set network bridging
+	if err := i.EnableNetworkBridge(); err != nil {
+		// Try to update package repositories and retry
+		if err := i.AptUpdateForFixMissing(); err != nil {
+			return err
+		}
 		if err := i.EnableNetworkBridge(); err != nil {
-			// Try to update package repositories and retry
-			if err := i.AptUpdateForFixMissing(); err != nil {
-				return err
-			}
-			if err := i.EnableNetworkBridge(); err != nil {
-				return err
-			}
+			return err
 		}
 	}
 

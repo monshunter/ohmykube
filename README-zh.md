@@ -75,6 +75,9 @@ ohmykube up --cni cilium
 # 选择存储插件
 ohmykube up --csi rook-ceph
 
+# 禁用 LoadBalancer
+ohmykube up --lb ""
+
 # 使用自定义 kubeadm 配置
 ohmykube up --kubeadm-config /path/to/custom-kubeadm-config.yaml
 ```

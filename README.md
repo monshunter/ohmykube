@@ -76,6 +76,9 @@ ohmykube up --cni cilium
 # Select storage plugin
 ohmykube up --csi rook-ceph
 
+# Disable LoadBalancer
+ohmykube up --lb ""
+
 # Use custom kubeadm configuration
 ohmykube up --kubeadm-config /path/to/custom-kubeadm-config.yaml
 ```

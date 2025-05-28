@@ -16,10 +16,11 @@ var (
 )
 
 var deleteCmd = &cobra.Command{
-	Use:   "delete",
-	Short: "Delete one or more nodes",
-	Long:  `Delete one or more nodes from an existing Kubernetes cluster`,
-	Args:  cobra.MinimumNArgs(1),
+	Use:     "delete",
+	Aliases: []string{"del"},
+	Short:   "Delete one or more nodes",
+	Long:    `Delete one or more nodes from an existing Kubernetes cluster`,
+	Args:    cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Get node names from args
 		deleteNodeNames := args
@@ -66,6 +67,5 @@ var deleteCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(deleteCmd)
 	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "Force delete the node even if it cannot be gracefully removed from the cluster")
 }

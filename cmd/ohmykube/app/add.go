@@ -54,7 +54,7 @@ var addCmd = &cobra.Command{
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
-		initOptions.EnableIPVS = cls.Spec.ProxyMode == "ipvs"
+		initOptions.ProxyMode = initializer.ProxyMode(cls.Spec.ProxyMode)
 		initOptions.K8SVersion = cls.Spec.K8sVersion
 		initOptions.UpdateSystem = updateSystem
 
@@ -82,7 +82,6 @@ var addCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(addCmd)
 	addCmd.Flags().IntVar(&addNodeMemory, "memory", 2, "Node memory (GB)")
 	addCmd.Flags().IntVar(&addNodeCPU, "cpu", 1, "Node CPU cores")
 	addCmd.Flags().IntVar(&addNodeDisk, "disk", 10, "Node disk space (GB)")

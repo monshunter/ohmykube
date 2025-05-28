@@ -17,10 +17,11 @@ var (
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List virtual machines",
-	Long:  `List all virtual machines managed by OhMyKube. Supports various output formats.`,
-	Args:  cobra.NoArgs,
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List virtual machines",
+	Long:    `List all virtual machines managed by OhMyKube. Supports various output formats.`,
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load cluster information if it exists
 		var cls *config.Cluster
@@ -93,6 +94,5 @@ var listCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(listCmd)
 	listCmd.Flags().StringVar(&outputFormat, "output-format", "", "Output format (json, yaml, table)")
 }

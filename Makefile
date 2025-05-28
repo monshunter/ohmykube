@@ -1,7 +1,7 @@
 .PHONY: build install clean test
 
 BINARY_NAME=ohmykube
-VERSION=0.1.0
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date +%FT%T%z)
 GO_VERSION=$(shell go version | awk '{print $$3}')
 GOPATH ?= $(shell go env GOPATH)

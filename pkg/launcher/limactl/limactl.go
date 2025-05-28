@@ -77,8 +77,6 @@ func checkSocketVmnetDaemon() error {
 			Refer to https://lima-vm.io/docs/config/network/vmnet/ for more information.`)
 		return fmt.Errorf("socket_vmnet daemon is not running")
 	}
-
-	log.Info("socket_vmnet daemon is running")
 	return nil
 }
 

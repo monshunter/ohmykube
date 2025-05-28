@@ -66,6 +66,5 @@ var stopCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(stopCmd)
 	stopCmd.Flags().BoolVar(&forceStop, "force", false, "Force stop the VM")
 }

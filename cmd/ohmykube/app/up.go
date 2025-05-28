@@ -26,6 +26,7 @@ var (
 	kubeadmConfigPath string
 	cni               string
 	csi               string
+	lb                string
 )
 
 var upCmd = &cobra.Command{
@@ -47,6 +48,7 @@ var upCmd = &cobra.Command{
 			launcher = cls.Spec.Launcher
 			proxyMode = cls.Spec.ProxyMode
 			k8sVersion = cls.Spec.K8sVersion
+			lb = cls.Spec.LB
 		}
 
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
@@ -78,11 +80,13 @@ var upCmd = &cobra.Command{
 		cfg.SetTemplate(limaTemplate)
 		cfg.SetCNIType(cni)
 		cfg.SetUpdateSystem(updateSystem)
+		cfg.SetLBType(lb)
+		cfg.SetCSIType(csi)
 
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
-		initOptions.EnableIPVS = proxyMode == "ipvs"
+		initOptions.ProxyMode = initializer.ProxyMode(proxyMode)
 		initOptions.K8SVersion = k8sVersion
 		initOptions.UpdateSystem = updateSystem
 
@@ -127,5 +131,8 @@ func init() {
 	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "Enable Swap (only for K8s 1.28+)")
 	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "Custom kubeadm config file path")
 	upCmd.Flags().StringVar(&cni, "cni", "flannel", "CNI type to install (flannel, cilium, none)")
-	upCmd.Flags().StringVar(&csi, "csi", "local-path-provisioner", "CSI type to install (local-path-provisioner, rook-ceph, none)")
+	upCmd.Flags().StringVar(&csi, "csi", "local-path-provisioner",
+		"CSI type to install (local-path-provisioner, rook-ceph, none)")
+	upCmd.Flags().StringVar(&lb, "lb", "metallb",
+		"LoadBalancer (only metallb is supported for now, and ipvs mode is required), leave empty to disable")
 }
