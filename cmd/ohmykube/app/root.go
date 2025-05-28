@@ -24,10 +24,6 @@ func Run() error {
 	return rootCmd.Execute()
 }
 
-const (
-	defaultPassword = "ohmykube123"
-)
-
 var (
 	password             string
 	sshKeyFile           string
@@ -50,7 +46,7 @@ func init() {
 	defaultSSHKeyFile = homeDir + "/.ssh/id_rsa"
 	defaultSSHPubKeyFile = homeDir + "/.ssh/id_rsa.pub"
 	// Global flags can be added here
-	rootCmd.PersistentFlags().StringVar(&password, "password", defaultPassword, "Password")
+	rootCmd.PersistentFlags().StringVar(&password, "password", "ohmykube123", "Password")
 	rootCmd.PersistentFlags().StringVar(&sshKeyFile, "ssh-key", defaultSSHKeyFile, "ssh private key file")
 	rootCmd.PersistentFlags().StringVar(&sshPubKeyFile, "ssh-pub-key", defaultSSHPubKeyFile, "ssh public key file")
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")

@@ -98,3 +98,4 @@ lerna-debug.log*
 # extra
 localk8s
 /ohmykube
+/bin

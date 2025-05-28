@@ -14,6 +14,7 @@
   <a href="#quick-start">Quick Start</a> •
   <a href="#use-cases">Use Cases</a> •
   <a href="#detailed-documentation">Detailed Documentation</a> •
+  <a href="#kubernetes-version-support">Kubernetes Version Support</a> •
   <a href="#roadmap">Roadmap</a>
 </p>
 
@@ -166,6 +167,24 @@ We are planning the following feature enhancements:
 - Mac arm64 (supported)
 - Linux arm64/amd64 (coming soon)
 - Other platforms (coming soon)
+
+## Kubernetes Version Support
+
+| Kubernetes Version | Support Status | Testing Status | Notes |
+|-------------------|----------------|----------------|-------|
+| v1.33.x | ✅ Supported | ✅ Tested | Latest stable release |
+| v1.32.x | ✅ Supported | ✅ Tested | Fully tested and supported |
+| v1.31.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.30.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.29.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.28.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.27.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.26.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.25.x | 🔄 Planned | ⏳ Pending | Support in development |
+| v1.24.x | 🔄 Planned | ⏳ Pending | Minimum planned version |
+| < v1.24.0 | ❌ Unsupported | ❌ Not planned | Deprecated features, security concerns |
+
+> **Note**: OhMyKube prioritizes support for the latest Kubernetes versions first, then gradually extends support to older versions. We recommend using the latest stable Kubernetes version (v1.32.0+) for the best experience and security.
 
 ## Contributing
 
