@@ -1,7 +1,7 @@
-# Oh My Kube
+# Oh My Kube: Make Kubernetes Simple and Fast!
 
 <p align="center">
-  <strong>Quickly Set Up Complete Kubernetes Environments on Real Virtual Machines</strong>
+  <strong>Quickly Set Up Complete Kubernetes Environments on Virtual Machines</strong>
 </p>
 
 <p align="center">
@@ -9,17 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="#core-features">Core Features</a> •
-  <a href="#why-choose-ohmykube">Why Choose OhMyKube</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#use-cases">Use Cases</a> •
-  <a href="#detailed-documentation">Detailed Documentation</a> •
   <a href="#kubernetes-version-support">Kubernetes Version Support</a> •
   <a href="#roadmap">Roadmap</a>
 </p>
-
-OhMyKube is a Kubernetes cluster creation tool built on real virtual machines. It uses Lima virtualization technology and kubeadm, making it easy for developers to quickly create a simple Kubernetes environment.
-
 
 ## Quick Start
 
@@ -52,16 +46,6 @@ kubectl get nodes
 # Delete the cluster
 ohmykube down
 ```
-
-## Use Cases
-
-- **Development and Testing**: Test applications in an environment similar to production
-- **Learning Kubernetes**: Understand how real Kubernetes clusters work
-- **Local CI/CD**: Build complete integration testing environments locally
-- **Network and Storage Research**: Test different CNI and CSI combinations
-- **Cluster Management Practice**: Learn node management, maintenance, and troubleshooting
-
-## Detailed Documentation
 
 ### Creating Custom Clusters
 
@@ -133,6 +117,14 @@ networking:
   podSubnet: 192.168.0.0/16
   serviceSubnet: 10.96.0.0/12
 ```
+
+## Use Cases
+
+- **Development and Testing**: Test applications in an environment similar to production
+- **Learning Kubernetes**: Understand how real Kubernetes clusters work
+- **Local CI/CD**: Build complete integration testing environments locally
+- **Network and Storage Research**: Test different CNI and CSI combinations
+- **Cluster Management Practice**: Learn node management, maintenance, and troubleshooting
 
 ## Roadmap
 

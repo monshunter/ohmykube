@@ -1,7 +1,7 @@
-# Oh My Kube
+# Oh My Kube：搞定K8S，就是简单，就是快！
 
 <p align="center">
-  <strong>在真实虚拟机上快速搭建完整的 Kubernetes 环境</strong>
+  <strong>在虚拟机上快速搭建完整的 Kubernetes 环境</strong>
 </p>
 
 <p align="center">
@@ -9,16 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="#核心特性">核心特性</a> •
-  <a href="#为什么选择-ohmykube">为什么选择 OhMyKube</a> •
   <a href="#快速开始">快速开始</a> •
   <a href="#使用场景">使用场景</a> •
-  <a href="#详细文档">详细文档</a> •
   <a href="#kubernetes-版本支持">Kubernetes 版本支持</a> •
   <a href="#发展路线图">发展路线图</a>
 </p>
-
-OhMyKube 是一个基于真实虚拟机构建的 Kubernetes 集群创建工具，使用 Lima 虚拟化技术和 kubeadm，便于开发者快速创建简单的 Kubernetes 环境。
 
 ## 快速开始
 
@@ -51,16 +46,6 @@ kubectl get nodes
 # 删除集群
 ohmykube down
 ```
-
-## 使用场景
-
-- **开发和测试**：在类似生产环境中测试应用程序
-- **学习 Kubernetes**：了解真实 Kubernetes 集群的工作原理
-- **本地 CI/CD**：在本地构建完整的集成测试环境
-- **网络和存储研究**：测试不同的 CNI 和 CSI 组合
-- **集群管理实践**：学习节点管理、维护和故障排除
-
-## 详细文档
 
 ### 创建自定义集群
 
@@ -132,6 +117,14 @@ networking:
   podSubnet: 192.168.0.0/16
   serviceSubnet: 10.96.0.0/12
 ```
+
+## 使用场景
+
+- **开发和测试**：在类似生产环境中测试应用程序
+- **学习 Kubernetes**：了解真实 Kubernetes 集群的工作原理
+- **本地 CI/CD**：在本地构建完整的集成测试环境
+- **网络和存储研究**：测试不同的 CNI 和 CSI 组合
+- **集群管理实践**：学习节点管理、维护和故障排除
 
 ## 发展路线图
 
