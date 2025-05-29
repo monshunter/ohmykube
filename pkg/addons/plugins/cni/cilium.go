@@ -127,10 +127,10 @@ func (c *CiliumInstaller) cacheImages() error {
 	// Import the required packages
 	ctx := context.Background()
 
-	// Create image manager with default configuration
-	imageManager, err := cache.NewImageManager()
+	// Get singleton image manager
+	imageManager, err := cache.GetImageManager()
 	if err != nil {
-		return fmt.Errorf("failed to create image manager: %w", err)
+		return fmt.Errorf("failed to get image manager: %w", err)
 	}
 
 	// Define Cilium Helm chart source

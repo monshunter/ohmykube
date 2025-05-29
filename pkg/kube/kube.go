@@ -151,7 +151,7 @@ func (k *Manager) cacheKubeadmImages(nodeName string) error {
 	ctx := context.Background()
 
 	// Create image manager with default configuration
-	imageManager, err := cache.NewImageManager()
+	imageManager, err := cache.GetImageManager()
 	if err != nil {
 		return fmt.Errorf("failed to create image manager: %w", err)
 	}
@@ -169,7 +169,7 @@ func (k *Manager) cacheKubeadmImages(nodeName string) error {
 // cacheClusterImages caches all cluster images to the target node for preheating
 func (k *Manager) cacheClusterImages(nodeName string) error {
 	// Create image manager with default configuration
-	imageManager, err := cache.NewImageManager()
+	imageManager, err := cache.GetImageManager()
 	if err != nil {
 		return fmt.Errorf("failed to create image manager: %w", err)
 	}

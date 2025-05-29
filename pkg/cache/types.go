@@ -3,6 +3,7 @@ package cache
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/interfaces"
@@ -206,6 +207,18 @@ type ImageReference struct {
 	Arch     string // Architecture: amd64, arm64
 }
 
+func (r *ImageReference) Copy() *ImageReference {
+	return &ImageReference{
+		Registry: r.Registry,
+		Project:  r.Project,
+		Image:    r.Image,
+		Tag:      r.Tag,
+		Digest:   r.Digest,
+		Original: r.Original,
+		Arch:     r.Arch,
+	}
+}
+
 // ParseImageReference parses an image reference string into its components
 func ParseImageReference(ref string, arch string) ImageReference {
 	result := ImageReference{
@@ -324,11 +337,83 @@ type ImageInfo struct {
 	Architectures    []string       `yaml:"architectures,omitempty"` // Supported architectures
 }
 
+func (i *ImageInfo) Copy() *ImageInfo {
+	return &ImageInfo{
+		Name:             i.Name,
+		Reference:        *i.Reference.Copy(),
+		LocalPath:        i.LocalPath,
+		Size:             i.Size,
+		LastAccessed:     i.LastAccessed,
+		LastUpdated:      i.LastUpdated,
+		OriginalSize:     i.OriginalSize,
+		CompressionRatio: i.CompressionRatio,
+		Architectures:    i.Architectures,
+	}
+}
+
 // ImageIndex represents the index of all cached images
 type ImageIndex struct {
 	Version   string      `yaml:"version"`
 	Images    []ImageInfo `yaml:"images"`
 	UpdatedAt time.Time   `yaml:"updated_at"`
+	lock      sync.RWMutex
+}
+
+// findImageByName finds an image in the array by name (cache key)
+func (m *ImageIndex) findImageByName(name string) (*ImageInfo, int) {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	for i, img := range m.Images {
+		if img.Name == name {
+			return &img, i
+		}
+	}
+	return nil, -1
+}
+
+// removeImageByName removes an image from the array by name (cache key)
+func (m *ImageIndex) removeImageByName(name string) bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	for i, img := range m.Images {
+		if img.Name == name {
+			// Remove by swapping with last element and truncating
+			m.Images[i] = m.Images[len(m.Images)-1]
+			m.Images = m.Images[:len(m.Images)-1]
+			return true
+		}
+	}
+	return false
+}
+
+// updateOrAddImage updates an existing image or adds a new one to the array
+func (m *ImageIndex) updateOrAddImage(name string, imageInfo ImageInfo) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	imageInfo.Name = name
+	for i, img := range m.Images {
+		if img.Name == name {
+			// Update existing
+			m.Images[i] = imageInfo
+			return
+		}
+	}
+	// Add new
+	m.Images = append(m.Images, imageInfo)
+}
+
+func (m *ImageIndex) Copy() *ImageIndex {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	newIndex := &ImageIndex{
+		Version:   m.Version,
+		UpdatedAt: m.UpdatedAt,
+	}
+	newIndex.Images = make([]ImageInfo, len(m.Images))
+	for i, img := range m.Images {
+		newIndex.Images[i] = *img.Copy()
+	}
+	return newIndex
 }
 
 // ImageManagementStrategy defines where and how images should be managed

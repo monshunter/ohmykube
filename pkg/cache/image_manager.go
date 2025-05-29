@@ -28,6 +28,8 @@ type ImageManager struct {
 	availability   *ToolAvailability
 	imageRecorder  interfaces.ImageRecorder
 	cachedRecorder *imageCachedMarker
+	archRecords    map[string]string
+	lock           sync.RWMutex
 }
 
 type imageCachedMarker struct {
@@ -53,6 +55,13 @@ func SetGlobalImageRecorder(imageRecorder interfaces.ImageRecorder) {
 	globalImageRecorder = imageRecorder
 }
 
+// Singleton pattern implementation
+var (
+	instance     *ImageManager
+	instanceOnce sync.Once
+	instanceErr  error
+)
+
 // NewImageManager creates a new image cache manager with default configuration
 func NewImageManager() (*ImageManager, error) {
 	return NewImageManagerWithConfig(DefaultImageManagementConfig())
@@ -77,6 +86,7 @@ func NewImageManagerWithConfig(config ImageManagementConfig) (*ImageManager, err
 		config:         config,
 		imageRecorder:  globalImageRecorder,
 		cachedRecorder: &imageCachedMarker{},
+		archRecords:    make(map[string]string),
 	}
 
 	// Load existing index or create new one
@@ -85,6 +95,16 @@ func NewImageManagerWithConfig(config ImageManagementConfig) (*ImageManager, err
 	}
 
 	return manager, nil
+}
+
+// GetImageManager returns the singleton instance of ImageManager
+// This is the recommended way to get an ImageManager instance to avoid creating multiple
+// identical objects during the same execution.
+func GetImageManager() (*ImageManager, error) {
+	instanceOnce.Do(func() {
+		instance, instanceErr = NewImageManagerWithConfig(DefaultImageManagementConfig())
+	})
+	return instance, instanceErr
 }
 
 // SetImageRecorder sets the image recorder for image tracking
@@ -125,13 +145,15 @@ func (m *ImageManager) loadIndex() error {
 
 // saveIndex saves the image index to disk
 func (m *ImageManager) saveIndex() error {
-	m.imageIndex.UpdatedAt = time.Now()
+	imageIndex := m.imageIndex.Copy()
+	imageIndex.UpdatedAt = time.Now()
 
-	data, err := yaml.Marshal(m.imageIndex)
+	data, err := yaml.Marshal(imageIndex)
 	if err != nil {
 		return fmt.Errorf("failed to marshal index: %w", err)
 	}
-
+	m.lock.Lock()
+	defer m.lock.Unlock()
 	if err := os.WriteFile(m.indexPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write index file: %w", err)
 	}
@@ -139,55 +161,11 @@ func (m *ImageManager) saveIndex() error {
 	return nil
 }
 
-func (m *ImageManager) FindImageByName(name string) *ImageInfo {
-	image, _ := m.findImageByName(name)
-	return image
-}
-
-// findImageByName finds an image in the array by name (cache key)
-func (m *ImageManager) findImageByName(name string) (*ImageInfo, int) {
-	for i, img := range m.imageIndex.Images {
-		if img.Name == name {
-			return &img, i
-		}
-	}
-	return nil, -1
-}
-
-// removeImageByName removes an image from the array by name (cache key)
-func (m *ImageManager) removeImageByName(name string) bool {
-	for i, img := range m.imageIndex.Images {
-		if img.Name == name {
-			// Remove by swapping with last element and truncating
-			m.imageIndex.Images[i] = m.imageIndex.Images[len(m.imageIndex.Images)-1]
-			m.imageIndex.Images = m.imageIndex.Images[:len(m.imageIndex.Images)-1]
-			return true
-		}
-	}
-	return false
-}
-
-// updateOrAddImage updates an existing image or adds a new one to the array
-func (m *ImageManager) updateOrAddImage(name string, imageInfo ImageInfo) {
-	imageInfo.Name = name
-	for i, img := range m.imageIndex.Images {
-		if img.Name == name {
-			// Update existing
-			m.imageIndex.Images[i] = imageInfo
-			return
-		}
-	}
-	// Add new
-	m.imageIndex.Images = append(m.imageIndex.Images, imageInfo)
-}
-
 // EnsureImages ensures all required images are cached and available on the target node
 func (m *ImageManager) EnsureImages(ctx context.Context, source ImageSource, sshRunner interfaces.SSHRunner, nodeName string, controllerNode string) error {
 	// Initialize tool availability if not already done
-	if m.availability == nil {
-		if err := m.initializeToolAvailability(ctx, sshRunner, controllerNode); err != nil {
-			return fmt.Errorf("failed to initialize tool availability: %w", err)
-		}
+	if err := m.initializeToolAvailability(ctx, sshRunner, controllerNode); err != nil {
+		return fmt.Errorf("failed to initialize tool availability: %w", err)
 	}
 
 	// Get node architecture first
@@ -229,10 +207,8 @@ func (m *ImageManager) EnsureImages(ctx context.Context, source ImageSource, ssh
 // EnsureImage ensures a specific image is cached and available on the target node
 func (m *ImageManager) EnsureImage(ctx context.Context, image string, sshRunner interfaces.SSHRunner, nodeName string, controllerNode string) error {
 	// Initialize tool availability if not already done
-	if m.availability == nil {
-		if err := m.initializeToolAvailability(ctx, sshRunner, controllerNode); err != nil {
-			return fmt.Errorf("failed to initialize tool availability: %w", err)
-		}
+	if err := m.initializeToolAvailability(ctx, sshRunner, controllerNode); err != nil {
+		return fmt.Errorf("failed to initialize tool availability: %w", err)
 	}
 
 	// Get node architecture
@@ -249,13 +225,13 @@ func (m *ImageManager) EnsureImage(ctx context.Context, image string, sshRunner 
 	cacheKey := ref.CacheKey()
 	if m.IsImageCached(cacheKey) {
 		// Verify the cached image is for the correct architecture
-		imageInfo, _ := m.findImageByName(cacheKey)
+		imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
 		if imageInfo != nil && imageInfo.Reference.Arch == arch {
 			log.Infof("Image %s is already cached locally for architecture %s", ref.String(), arch)
 		} else {
 			log.Infof("Image %s cached for different architecture (%s), need to cache for %s", ref.String(), imageInfo.Reference.Arch, arch)
 			// Remove the incorrectly cached image and re-cache for correct architecture
-			m.removeImageByName(cacheKey)
+			m.imageIndex.removeImageByName(cacheKey)
 			m.saveIndex()
 		}
 	}
@@ -289,7 +265,7 @@ func (m *ImageManager) EnsureImage(ctx context.Context, image string, sshRunner 
 
 // IsImageCached checks if an image is already cached locally
 func (m *ImageManager) IsImageCached(cacheKey string) bool {
-	imageInfo, _ := m.findImageByName(cacheKey)
+	imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
 	if imageInfo == nil {
 		return false
 	}
@@ -297,14 +273,14 @@ func (m *ImageManager) IsImageCached(cacheKey string) bool {
 	// Check if the file actually exists
 	if _, err := os.Stat(imageInfo.LocalPath); os.IsNotExist(err) {
 		// Remove from index if file doesn't exist
-		m.removeImageByName(cacheKey)
+		m.imageIndex.removeImageByName(cacheKey)
 		m.saveIndex()
 		return false
 	}
 
 	// Update last accessed time
 	imageInfo.LastAccessed = time.Now()
-	m.updateOrAddImage(cacheKey, *imageInfo)
+	m.imageIndex.updateOrAddImage(cacheKey, *imageInfo)
 	m.saveIndex()
 
 	return true
@@ -312,7 +288,7 @@ func (m *ImageManager) IsImageCached(cacheKey string) bool {
 
 // GetLocalImagePath returns the local path of a cached image
 func (m *ImageManager) GetLocalImagePath(cacheKey string) (string, error) {
-	imageInfo, _ := m.findImageByName(cacheKey)
+	imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
 	if imageInfo == nil {
 		return "", fmt.Errorf("image %s not found in cache", cacheKey)
 	}
@@ -321,6 +297,13 @@ func (m *ImageManager) GetLocalImagePath(cacheKey string) (string, error) {
 
 // getNodeArchitecture determines the architecture of a node
 func (m *ImageManager) getNodeArchitecture(ctx context.Context, sshRunner interfaces.SSHRunner, nodeName string) (string, error) {
+	m.lock.RLock()
+	if arch, ok := m.archRecords[nodeName]; ok {
+		m.lock.RUnlock()
+		return arch, nil
+	}
+	m.lock.RUnlock()
+
 	// Execute command to get architecture
 	cmd := "uname -m"
 	output, err := sshRunner.RunCommand(nodeName, cmd)
@@ -333,12 +316,14 @@ func (m *ImageManager) getNodeArchitecture(ctx context.Context, sshRunner interf
 	// Standardize architecture names
 	switch arch {
 	case "x86_64":
-		return "amd64", nil
+		arch = "amd64"
 	case "aarch64":
-		return "arm64", nil
-	default:
-		return arch, nil
+		arch = "arm64"
 	}
+	m.lock.Lock()
+	m.archRecords[nodeName] = arch
+	m.lock.Unlock()
+	return arch, nil
 }
 
 // pullAndCacheImageOnController pulls an image on controller node and downloads it to local cache
@@ -449,7 +434,7 @@ fi
 	// Update the index
 	log.Infof("Updating image index for %s", ref.String())
 	cacheKey := ref.CacheKey()
-	m.updateOrAddImage(cacheKey, ImageInfo{
+	m.imageIndex.updateOrAddImage(cacheKey, ImageInfo{
 		Reference:     ref,
 		LocalPath:     localPath,
 		Size:          fileSize,
@@ -481,7 +466,7 @@ func (m *ImageManager) UploadImageToNode(ctx context.Context, ref ImageReference
 	log.Infof("Uploading image %s (linux/%s) to node %s", ref.String(), ref.Arch, nodeName)
 
 	cacheKey := ref.CacheKey()
-	imageInfo, _ := m.findImageByName(cacheKey)
+	imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
 	if imageInfo == nil {
 		return fmt.Errorf("image %s not found in cache", ref.String())
 	}
@@ -584,7 +569,7 @@ fi
 
 	// Update last accessed time
 	imageInfo.LastAccessed = time.Now()
-	m.updateOrAddImage(cacheKey, *imageInfo)
+	m.imageIndex.updateOrAddImage(cacheKey, *imageInfo)
 	if m.cachedRecorder != nil {
 		m.cachedRecorder.markAsCached(ref.CacheKey(), nodeName)
 	}
@@ -610,7 +595,7 @@ func (m *ImageManager) CleanupOldImages(maxAge time.Duration) error {
 	}
 
 	for _, imageName := range toDelete {
-		imageInfo, _ := m.findImageByName(imageName)
+		imageInfo, _ := m.imageIndex.findImageByName(imageName)
 		if imageInfo != nil {
 			log.Infof("Removing old image: %s", imageInfo.Reference.String())
 
@@ -620,7 +605,7 @@ func (m *ImageManager) CleanupOldImages(maxAge time.Duration) error {
 			}
 
 			// Remove from index
-			m.removeImageByName(imageName)
+			m.imageIndex.removeImageByName(imageName)
 		}
 	}
 
@@ -646,8 +631,15 @@ func (m *ImageManager) GetCacheStats() (int, int64) {
 
 // initializeToolAvailability detects and caches tool availability
 func (m *ImageManager) initializeToolAvailability(ctx context.Context, sshRunner interfaces.SSHRunner, controllerNode string) error {
-	log.Infof("Detecting tool availability...")
+	m.lock.Lock()
+	defer m.lock.Unlock()
 
+	// Check if already initialized
+	if m.availability != nil {
+		return nil
+	}
+
+	log.Debugf("Detecting tool availability...")
 	availability, err := m.toolDetector.DetectToolAvailability(ctx, sshRunner, controllerNode)
 	if err != nil {
 		return fmt.Errorf("failed to detect tool availability: %w", err)
@@ -740,7 +732,7 @@ func (m *ImageManager) pullAndCacheImageLocally(ctx context.Context, ref ImageRe
 	fileSize := fileInfo.Size()
 
 	// Update the index
-	m.updateOrAddImage(ref.CacheKey(), ImageInfo{
+	m.imageIndex.updateOrAddImage(ref.CacheKey(), ImageInfo{
 		Reference:     ref,
 		LocalPath:     outputPath,
 		Size:          fileSize,
@@ -770,10 +762,13 @@ func (m *ImageManager) ReCacheClusterImages(sshRunner SSHRunner) error {
 func (m *ImageManager) CacheClusterImagesForNodes(nodeNames []string, sshRunner SSHRunner) error {
 	controllerNode := m.imageRecorder.GetMasterName()
 	for _, nodeName := range nodeNames {
-		if err := m.cacheClusterImages(controllerNode, nodeName, sshRunner); err != nil {
-			log.Warningf("Failed to preheat cluster images for node %s: %v", nodeName, err)
-			// Continue with other nodes even if one fails
-		}
+		go func(nodeName string) {
+			if err := m.cacheClusterImages(controllerNode, nodeName, sshRunner); err != nil {
+				log.Warningf("Failed to preheat cluster images for node %s: %v", nodeName, err)
+				// Continue with other nodes even if one fails
+			}
+		}(nodeName)
+
 	}
 	return nil
 }
@@ -803,7 +798,7 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 			continue
 		}
 
-		image := m.FindImageByName(imageName)
+		image, _ := m.imageIndex.findImageByName(imageName)
 		if image == nil {
 			log.Warningf("Image %s not found in cache, skipping preheating", imageName)
 			continue

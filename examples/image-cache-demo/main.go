@@ -17,37 +17,31 @@ func main() {
 	// Create image cache manager with different strategies
 	fmt.Println("1. Creating image cache managers with different strategies...")
 
-	// Default auto strategy
-	fmt.Println("   1.1. Auto strategy (detects best approach):")
-	autoImageManager, err := cache.NewImageManager()
+	// Get singleton image manager (recommended)
+	fmt.Println("   1.1. Getting singleton image manager:")
+	imageManager, err := cache.GetImageManager()
 	if err != nil {
-		log.Fatalf("Failed to create auto image manager: %v", err)
+		log.Fatalf("Failed to get image manager: %v", err)
 	}
-	fmt.Println("   ✓ Auto strategy image manager created")
+	fmt.Println("   ✓ Singleton image manager obtained")
 
-	// Local preferred strategy
-	fmt.Println("   1.2. Local preferred strategy:")
-	localConfig := cache.LocalPreferredImageManagementConfig()
-	_, err = cache.NewImageManagerWithConfig(localConfig)
+	// Demonstrate that multiple calls return the same instance
+	fmt.Println("   1.2. Demonstrating singleton behavior:")
+	imageManager2, err := cache.GetImageManager()
 	if err != nil {
-		log.Fatalf("Failed to create local image manager: %v", err)
+		log.Fatalf("Failed to get second image manager: %v", err)
 	}
-	fmt.Println("   ✓ Local preferred image manager created")
-
-	// Controller only strategy
-	fmt.Println("   1.3. Controller only strategy:")
-	controllerConfig := cache.ControllerOnlyImageManagementConfig()
-	_, err = cache.NewImageManagerWithConfig(controllerConfig)
-	if err != nil {
-		log.Fatalf("Failed to create controller image manager: %v", err)
+	if imageManager == imageManager2 {
+		fmt.Println("   ✓ Same instance returned (singleton working)")
+	} else {
+		fmt.Println("   ✗ Different instances returned - singleton not working properly")
 	}
-	fmt.Println("   ✓ Controller only image manager created")
 
-	// Use the auto manager for the rest of the demo
-	imageCacheManager := autoImageManager
+	// Use the singleton manager for the rest of the demo
+	imageCacheManager := imageManager
 
 	// Demonstrate tool detection
-	fmt.Println("   1.4. Tool detection simulation:")
+	fmt.Println("   1.3. Tool detection simulation:")
 	toolDetector := cache.NewToolDetector()
 	fmt.Printf("   Local docker available: %t\n", toolDetector.IsLocalToolAvailable("docker"))
 	fmt.Printf("   Local podman available: %t\n", toolDetector.IsLocalToolAvailable("podman"))
@@ -168,17 +162,11 @@ func main() {
 	fmt.Println("=== Demo completed ===")
 	fmt.Println()
 	fmt.Println("To use the image cache system in your cluster:")
-	fmt.Println("1. Create image manager with desired strategy:")
-	fmt.Println("   // Auto strategy (detects best approach)")
-	fmt.Println("   imageManager, _ := cache.NewImageManager()")
+	fmt.Println("1. Get the singleton image manager (recommended):")
+	fmt.Println("   imageManager, _ := cache.GetImageManager()")
 	fmt.Println()
-	fmt.Println("   // Local preferred strategy (uses local tools when available)")
-	fmt.Println("   config := cache.LocalPreferredImageManagementConfig()")
-	fmt.Println("   imageManager, _ := cache.NewImageManagerWithConfig(config)")
-	fmt.Println()
-	fmt.Println("   // Controller only strategy (always uses controller node)")
-	fmt.Println("   config := cache.ControllerOnlyImageManagementConfig()")
-	fmt.Println("   imageManager, _ := cache.NewImageManagerWithConfig(config)")
+	fmt.Println("   // Alternative: Create new instances (not recommended)")
+	fmt.Println("   imageManager, _ := cache.NewImageManager()  // Creates new instance each time")
 	fmt.Println()
 	fmt.Println("2. The system will automatically:")
 	fmt.Println("   - Detect available tools (docker, podman, nerdctl, helm, kubeadm)")
@@ -188,7 +176,8 @@ func main() {
 	fmt.Println("   - Upload images to target nodes as needed")
 	fmt.Println()
 	fmt.Println("Benefits:")
-	fmt.Println("- Flexible strategy selection (local vs controller vs auto)")
+	fmt.Println("- Singleton pattern prevents creating multiple identical ImageManager instances")
+	fmt.Println("- Shared cache and tool availability detection across all components")
 	fmt.Println("- Efficient tool usage (prefers local when available)")
 	fmt.Println("- No additional compression (images already compressed)")
 	fmt.Println("- Architecture-aware (handles amd64/arm64 automatically)")

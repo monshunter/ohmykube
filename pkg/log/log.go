@@ -35,6 +35,8 @@ var (
 	colorEnabled = true
 	// enable stack trace on fatal errors
 	stackTraceEnabled bool
+	// quiet mode, minimal output
+	quiet bool
 )
 
 // Environment variable for controlling stack trace
@@ -63,12 +65,26 @@ func SetVerbose(v bool) {
 	verbose = v
 	if v {
 		level = DEBUG
+		quiet = false // verbose mode overrides quiet mode
 	}
 }
 
 // IsVerbose return if verbose mode is enabled
 func IsVerbose() bool {
 	return verbose
+}
+
+// SetQuiet set quiet mode, minimal output
+func SetQuiet(q bool) {
+	quiet = q
+	if q {
+		verbose = false // quiet mode overrides verbose mode
+	}
+}
+
+// IsQuiet return if quiet mode is enabled
+func IsQuiet() bool {
+	return quiet
 }
 
 // SetLevel set log level

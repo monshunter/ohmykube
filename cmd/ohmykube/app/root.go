@@ -7,16 +7,33 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	verbose bool
+	quiet   bool
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "ohmykube",
 	Short: "OhMyKube - Tool for quickly setting up real Kubernetes clusters locally",
 	Long: `OhMyKube is a tool based on Lima and kubeadm, designed to quickly set up
-real Kubernetes clusters on developer computers using virtual machines, 
+real Kubernetes clusters on developer computers using virtual machines,
 including Cilium(CNI), Rook(CSI), and MetalLB(LB).`,
 	// If preparation work is needed before execution, PersistentPreRun can be added
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Initialization work
+		// Set log modes based on flags
+		if verbose {
+			log.SetVerbose(true)
+		}
+		if quiet {
+			log.SetQuiet(true)
+		}
 	},
+}
+
+func init() {
+	// Add global flags
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Enable quiet mode (minimal output)")
 }
 
 // Run adds all child commands to the root command and sets flags, this is the entry point called by main.go

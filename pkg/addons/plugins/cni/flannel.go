@@ -122,10 +122,10 @@ helm repo update
 		return fmt.Errorf("failed to add Flannel Helm repository for caching: %w", err)
 	}
 
-	// Create image manager with default configuration
-	imageManager, err := cache.NewImageManager()
+	// Get singleton image manager
+	imageManager, err := cache.GetImageManager()
 	if err != nil {
-		return fmt.Errorf("failed to create image manager: %w", err)
+		return fmt.Errorf("failed to get image manager: %w", err)
 	}
 
 	// Define Flannel Helm chart source (repository already added above)
