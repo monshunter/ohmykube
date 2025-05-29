@@ -214,6 +214,54 @@ func (n *Node) SetOS(os string) {
 	n.Status.OS = os
 }
 
+func (n *Node) SetStatus(status NodeStatus) {
+	n.Status = status
+}
+
+func (n *Node) SetInternalStatus(status NodeInternalStatus) {
+	n.Status.NodeInternalStatus = status
+}
+
+func (n *Node) SetConditions(conditions []Condition) {
+	n.Status.Conditions = conditions
+}
+
+func (n *Node) Arch() string {
+	return n.Status.Arch
+}
+
+func (n *Node) OS() string {
+	return n.Status.OS
+}
+
+func (n *Node) Kernel() string {
+	return n.Status.Kernel
+}
+
+func (n *Node) Release() string {
+	return n.Status.Release
+}
+
+func (n *Node) IPs() []string {
+	return n.Status.IPs
+}
+
+func (n *Node) IP() string {
+	return n.Status.IP
+}
+
+func (n *Node) IPv6() string {
+	return n.Status.IPv6
+}
+
+func (n *Node) Hostname() string {
+	return n.Status.Hostname
+}
+
+func (n *Node) Phase() Phase {
+	return n.Status.Phase
+}
+
 // SetClusterCondition sets or updates a condition in a cluster's status
 func (c *Cluster) SetCondition(conditionType ConditionType, status ConditionStatus, reason, message string) {
 	condition := NewCondition(conditionType, status, reason, message)
@@ -275,14 +323,6 @@ func NewNode(name string, role string, cpu int, memory int, disk int) *Node {
 			Disk:   disk,
 		},
 	}
-}
-
-func (n *Node) SetStatus(status NodeStatus) {
-	n.Status = status
-}
-
-func (n *Node) SetInternalStatus(status NodeInternalStatus) {
-	n.Status.NodeInternalStatus = status
 }
 
 type Auth struct {

@@ -86,18 +86,18 @@ func (c *Client) Connect() error {
 		client, err = ssh.Dial("tcp", addr, config)
 		if err != nil {
 			if i < maxRetries-1 {
-				log.Debugf("ssh connection %s failed: %v, retrying (%d/%d)...", addr, err, i+1, maxRetries)
+				log.Debugf("SSH to  %s failed: %v, retrying (%d/%d)...", addr, err, i+1, maxRetries)
 				time.Sleep(3 * time.Second)
 				continue
 			}
-			return fmt.Errorf("ssh connection failed: %w", err)
+			return fmt.Errorf("SSH to  failed: %w", err)
 		}
 		c.client = client
 		c.connected = true
-		log.Debugf("ssh connection %s successful", addr)
+		log.Debugf("SSH to  %s successful", addr)
 		return nil
 	}
-	return fmt.Errorf("ssh connection failed: %w", err)
+	return fmt.Errorf("SSH to  failed: %w", err)
 }
 
 // testConnection tests if the connection is valid

@@ -588,7 +588,7 @@ func (m *Manager) initializeVM(nodeName string) error {
 		"Initializing", "Initializing node environment")
 
 	// Create and run the initializer
-	initializer, err := initializer.NewInitializerWithOptions(m.sshRunner, nodeName, m.InitOptions)
+	initializer, err := initializer.NewInitializerWithOptions(m.sshRunner, node, m.InitOptions)
 	if err != nil {
 		node.SetCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
 			"InitializationFailed", fmt.Sprintf("Failed to create initializer: %v", err))
@@ -705,6 +705,7 @@ func (m *Manager) AddWorkerNodes(cpu int, memory int, disk int, count int) error
 
 // AddWorkerNode adds a new worker node to the cluster
 func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
+	log.Infof("Create new worker node...")
 	node, err := m.setupVM("", config.RoleWorker, cpu, memory, disk)
 	if err != nil {
 		return err
@@ -712,7 +713,7 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	nodeName := node.Name
 
 	// Use initializer to set environment
-	log.Debugf("Initializing node %s", nodeName)
+	log.Infof("Initializing node %s", nodeName)
 	err = m.initializeVM(nodeName)
 	if err != nil {
 		return err
@@ -733,6 +734,7 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 
 // DeleteNode deletes a node from the cluster
 func (m *Manager) DeleteNode(nodeName string, force bool) error {
+	log.Infof("Deleting node %s...", nodeName)
 	// Check if node exists
 	nodeInfo := m.Cluster.GetNodeByName(nodeName)
 	if nodeInfo == nil {
@@ -742,8 +744,6 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 	if nodeInfo.Spec.Role == config.RoleMaster && len(m.Cluster.Spec.Workers) > 0 {
 		return fmt.Errorf("cannot delete Master node, please delete the entire cluster first")
 	}
-
-	log.Infof("Deleting node %s...", nodeName)
 
 	// Evict node from Kubernetes
 	if !force {
@@ -842,6 +842,7 @@ func (m *Manager) SetKubeadmConfigPath(configPath string) {
 // StartVM starts a virtual machine
 func (m *Manager) StartVM(nodeName string) error {
 	// Check if node exists
+	log.Infof("Starting node %s...", nodeName)
 	nodeInfo := m.Cluster.GetNodeByName(nodeName)
 	if nodeInfo == nil {
 		return fmt.Errorf("node %s does not exist", nodeName)
@@ -863,6 +864,7 @@ func (m *Manager) StartVM(nodeName string) error {
 // StopVM stops a virtual machine
 func (m *Manager) StopVM(nodeName string, force bool) error {
 	// Check if node exists
+	log.Infof("Stopping node %s...", nodeName)
 	nodeInfo := m.Cluster.GetNodeByName(nodeName)
 	if nodeInfo == nil {
 		return fmt.Errorf("node %s does not exist", nodeName)

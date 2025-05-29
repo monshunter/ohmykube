@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/cache"
+	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/config/default/containerd"
 	"github.com/monshunter/ohmykube/pkg/config/default/ipvs"
 	"github.com/monshunter/ohmykube/pkg/envar"
@@ -40,7 +41,7 @@ type Initializer struct {
 }
 
 // NewInitializer creates a new node initializer
-func NewInitializer(sshRunner interfaces.SSHRunner, nodeName string) (*Initializer, error) {
+func NewInitializer(sshRunner interfaces.SSHRunner, node *config.Node) (*Initializer, error) {
 	// Create cache manager
 	packageManager, err := cache.NewPackageManager()
 	if err != nil {
@@ -50,14 +51,14 @@ func NewInitializer(sshRunner interfaces.SSHRunner, nodeName string) (*Initializ
 
 	initializer := &Initializer{
 		sshRunner:      sshRunner,
-		nodeName:       nodeName,
+		nodeName:       node.Name,
 		options:        DefaultInitOptions(),
-		arch:           "arm64",
+		arch:           node.Arch(),
 		packageManager: packageManager,
 	}
 	err = initializer.detectOSType()
 	if err != nil {
-		log.Errorf("Failed to detect OS type on node %s: %v", nodeName, err)
+		log.Errorf("Failed to detect OS type on node %s: %v", node.Name, err)
 		return nil, err
 	}
 	// No need to call detectPackageManagerForRedhat separately as it's now handled in detectOSType
@@ -65,8 +66,8 @@ func NewInitializer(sshRunner interfaces.SSHRunner, nodeName string) (*Initializ
 }
 
 // NewInitializerWithOptions creates a new node initializer with specified options
-func NewInitializerWithOptions(sshRunner interfaces.SSHRunner, nodeName string, options InitOptions) (*Initializer, error) {
-	initializer, err := NewInitializer(sshRunner, nodeName)
+func NewInitializerWithOptions(sshRunner interfaces.SSHRunner, node *config.Node, options InitOptions) (*Initializer, error) {
+	initializer, err := NewInitializer(sshRunner, node)
 	if err != nil {
 		return nil, err
 	}
