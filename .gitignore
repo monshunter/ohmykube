@@ -99,3 +99,4 @@ lerna-debug.log*
 localk8s
 /ohmykube
 /bin
+/debug*

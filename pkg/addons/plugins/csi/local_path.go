@@ -37,7 +37,7 @@ func (l *LocalPathInstaller) Install() error {
 	}
 
 	// Install local-path-provisioner
-	log.Infof("Installing local-path-provisioner version %s...", l.Version)
+	log.Debugf("Installing local-path-provisioner version %s...", l.Version)
 	localPathCmd := fmt.Sprintf("kubectl apply -f %s", l.manifestURL)
 
 	_, err := l.sshRunner.RunCommand(l.controllerNode, localPathCmd)
@@ -46,7 +46,7 @@ func (l *LocalPathInstaller) Install() error {
 	}
 
 	// Set local-path as default storage class
-	log.Info("Setting local-path as default storage class...")
+	log.Debug("Setting local-path as default storage class...")
 	defaultStorageClassCmd := `
 kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 `
@@ -55,7 +55,7 @@ kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storagec
 		return fmt.Errorf("failed to set local-path as default storage class: %w", err)
 	}
 
-	log.Info("Local-path-provisioner installation completed successfully")
+	log.Debug("Local-path-provisioner installation completed successfully")
 	return nil
 }
 

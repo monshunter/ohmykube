@@ -48,15 +48,13 @@ var startCmd = &cobra.Command{
 		defer manager.Close()
 
 		// Start specific VM
-		nodeName := args[0]
-		log.Infof("Starting VM: %s", nodeName)
-		err = manager.StartVM(nodeName)
-		if err != nil {
-			log.Errorf("Failed to start VM %s: %v", nodeName, err)
-			return fmt.Errorf("failed to start VM %s: %w", nodeName, err)
+		for _, nodeName := range args {
+			err = manager.StartVM(nodeName)
+			if err != nil {
+				log.Errorf("Failed to start VM %s: %v", nodeName, err)
+				return fmt.Errorf("failed to start VM %s: %w", nodeName, err)
+			}
 		}
-		log.Infof("VM %s started successfully", nodeName)
-
 		return nil
 	},
 }

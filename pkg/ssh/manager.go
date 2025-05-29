@@ -137,7 +137,7 @@ func (sm *SSHManager) checkAllConnections() {
 		// Check connection
 		err := client.Connect()
 		if err != nil {
-			log.Infof("SSH connection check for node %s failed: %v", name, err)
+			log.Debugf("SSH connection check for node %s failed: %v", name, err)
 			// Remove invalid client
 			sm.mutex.Lock()
 			delete(sm.clients, name)
@@ -146,9 +146,10 @@ func (sm *SSHManager) checkAllConnections() {
 	}
 }
 
-func (sm *SSHManager) GetIP(nodeName string) string {
+func (sm *SSHManager) Address(nodeName string) string {
 	node := sm.cluster.GetNodeByName(nodeName)
 	if node == nil {
+		log.Errorf("Node %s does not exist, cannot get IP address", nodeName)
 		return ""
 	}
 	return node.Status.IP
@@ -161,8 +162,9 @@ func (sm *SSHManager) GetClient(nodeName string) (*Client, bool) {
 	sm.mutex.RUnlock()
 
 	if !exists {
-		ip := sm.GetIP(nodeName)
+		ip := sm.Address(nodeName)
 		if ip == "" {
+			log.Errorf("Node %s does not have an IP address, cannot create SSH client", nodeName)
 			return nil, false
 		}
 
@@ -218,11 +220,6 @@ func (sm *SSHManager) RunCommand(nodeName, command string) (string, error) {
 	return client.RunCommand(command)
 }
 
-// RunSSHCommand implements the SSHCommandRunner interface (for backward compatibility)
-func (sm *SSHManager) RunSSHCommand(nodeName, command string) (string, error) {
-	return sm.RunCommand(nodeName, command)
-}
-
 // UploadFile uploads a local file to a remote node using proper SCP protocol
 func (sm *SSHManager) UploadFile(nodeName, localPath, remotePath string) error {
 	client, exists := sm.GetClient(nodeName)
@@ -269,7 +266,7 @@ func (sm *SSHManager) CloseClient(nodeName string) {
 }
 
 // CloseAllClients closes all SSH clients
-func (sm *SSHManager) CloseAllClients() error {
+func (sm *SSHManager) Close() error {
 	sm.StopHealthCheck()
 
 	sm.mutex.Lock()

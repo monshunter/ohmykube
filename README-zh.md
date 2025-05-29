@@ -47,6 +47,19 @@ kubectl get nodes
 ohmykube down
 ```
 
+### 输出模式
+
+```bash
+# 默认模式：简洁进度显示
+ohmykube up
+
+# 详细模式：显示所有技术细节
+ohmykube up --verbose
+
+# 静默模式：最小输出
+ohmykube up --quiet
+```
+
 ### 创建自定义集群
 
 ```bash

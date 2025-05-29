@@ -9,8 +9,8 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/cache"
 	"github.com/monshunter/ohmykube/pkg/config/default/kubeadm"
+	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
-	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // ImageSource represents a source of container images
@@ -21,7 +21,7 @@ type ImageSource struct {
 
 // Manager stores kubeadm configuration
 type Manager struct {
-	SSHManager        *ssh.SSHManager
+	sshRunner         interfaces.SSHRunner
 	MasterNode        string
 	PodCIDR           string
 	ServiceCIDR       string
@@ -32,10 +32,10 @@ type Manager struct {
 }
 
 // NewManager creates a new kubeadm configuration
-func NewManager(sshManager *ssh.SSHManager, k8sVersion string,
+func NewManager(sshManager interfaces.SSHRunner, k8sVersion string,
 	masterNode string, proxyMode string) *Manager {
 	return &Manager{
-		SSHManager:        sshManager,
+		sshRunner:         sshManager,
 		MasterNode:        masterNode,
 		PodCIDR:           "10.244.0.0/16",
 		ServiceCIDR:       "10.96.0.0/12",
@@ -53,7 +53,7 @@ func (k *Manager) InitMaster() error {
 		// Continue with initialization even if image caching fails
 	}
 
-	masterIP := k.SSHManager.GetIP(k.MasterNode)
+	masterIP := k.sshRunner.Address(k.MasterNode)
 	// Use new configuration generation system
 	configPath, err := kubeadm.GenerateKubeadmConfig(
 		k.KubernetesVersion,
@@ -68,13 +68,13 @@ func (k *Manager) InitMaster() error {
 
 	// Transfer configuration file to the VM
 	remoteConfigPath := "/tmp/kubeadm-config.yaml"
-	if err := k.SSHManager.UploadFile(k.MasterNode, configPath, remoteConfigPath); err != nil {
+	if err := k.sshRunner.UploadFile(k.MasterNode, configPath, remoteConfigPath); err != nil {
 		return fmt.Errorf("failed to transfer kubeadm configuration file to VM: %w", err)
 	}
 
 	// Execute kubeadm init
 	initCmd := fmt.Sprintf("sudo kubeadm init --config %s --upload-certs", remoteConfigPath)
-	_, err = k.SSHManager.RunCommand(k.MasterNode, initCmd)
+	_, err = k.sshRunner.RunCommand(k.MasterNode, initCmd)
 	if err != nil {
 		return fmt.Errorf("failed to execute kubeadm init: %w", err)
 	}
@@ -82,7 +82,7 @@ func (k *Manager) InitMaster() error {
 	configCmd := `mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config`
-	_, err = k.SSHManager.RunCommand(k.MasterNode, configCmd)
+	_, err = k.sshRunner.RunCommand(k.MasterNode, configCmd)
 	if err != nil {
 		return fmt.Errorf("failed to configure kubectl: %w", err)
 	}
@@ -92,7 +92,7 @@ sudo chown $(id -u):$(id -g) $HOME/.kube/config`
 
 func (k *Manager) PrintJoinCommand() (string, error) {
 	joinCmd := `sudo kubeadm token create --print-join-command`
-	output, err := k.SSHManager.RunCommand(k.MasterNode, joinCmd)
+	output, err := k.sshRunner.RunCommand(k.MasterNode, joinCmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to get join command: %w", err)
 	}
@@ -110,11 +110,11 @@ func (k *Manager) JoinNode(nodeName, joinCommand string) error {
 	if !strings.HasPrefix(joinCommand, "sudo ") {
 		joinCommand = "sudo " + joinCommand
 	}
-	_, err := k.SSHManager.RunCommand(nodeName, joinCommand)
+	_, err := k.sshRunner.RunCommand(nodeName, joinCommand)
 	if err != nil {
 		return fmt.Errorf("failed to join node %s to cluster: %w", nodeName, err)
 	}
-	log.Infof("Node %s has been successfully joined to cluster!", nodeName)
+	log.Debugf("Node %s has been successfully joined to cluster!", nodeName)
 	return nil
 
 }
@@ -122,7 +122,7 @@ func (k *Manager) JoinNode(nodeName, joinCommand string) error {
 // GetKubeconfig gets kubeconfig to local
 func (k *Manager) GetKubeconfig() (string, error) {
 	// Get kubeconfig content
-	output, err := k.SSHManager.RunCommand(k.MasterNode, "cat $HOME/.kube/config")
+	output, err := k.sshRunner.RunCommand(k.MasterNode, "cat $HOME/.kube/config")
 	if err != nil {
 		return "", fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
@@ -163,7 +163,7 @@ func (k *Manager) cacheKubeadmImages(nodeName string) error {
 	}
 
 	// Cache images for node - this will automatically record them via the callback
-	return imageManager.EnsureImages(ctx, cacheSource, k.SSHManager, nodeName, k.MasterNode)
+	return imageManager.EnsureImages(ctx, cacheSource, k.sshRunner, nodeName, k.MasterNode)
 }
 
 // cacheClusterImages caches all cluster images to the target node for preheating
@@ -175,7 +175,7 @@ func (k *Manager) cacheClusterImages(nodeName string) error {
 	}
 
 	// Cache all cluster images for the node
-	return imageManager.CacheClusterImagesForNodes([]string{nodeName}, k.SSHManager)
+	return imageManager.CacheClusterImagesForNodes([]string{nodeName}, k.sshRunner)
 }
 
 // DownloadToLocal downloads kubeconfig from remote host to local
@@ -190,7 +190,7 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 
 	// Get kubeconfig content
 	cmd := fmt.Sprintf("cat %s", remotePath)
-	kubeconfigContent, err := k.SSHManager.RunCommand(k.MasterNode, cmd)
+	kubeconfigContent, err := k.sshRunner.RunCommand(k.MasterNode, cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to get kubeconfig content: %w", err)
 	}

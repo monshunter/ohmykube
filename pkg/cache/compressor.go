@@ -52,7 +52,7 @@ func (c *Compressor) Close() {
 
 // CompressFile compresses a single file to a tar.zst archive
 func (c *Compressor) CompressFile(srcPath, destPath string) error {
-	log.Infof("Compressing %s to %s", srcPath, destPath)
+	log.Debugf("Compressing %s to %s", srcPath, destPath)
 
 	// Create destination directory if it doesn't exist
 	destDir := filepath.Dir(destPath)
@@ -104,13 +104,13 @@ func (c *Compressor) CompressFile(srcPath, destPath string) error {
 		return fmt.Errorf("failed to write file to tar: %w", err)
 	}
 
-	log.Infof("Successfully compressed %s to %s", srcPath, destPath)
+	log.Debugf("Successfully compressed %s to %s", srcPath, destPath)
 	return nil
 }
 
 // CompressDirectory compresses a directory to a tar.zst archive
 func (c *Compressor) CompressDirectory(srcDir, destPath string) error {
-	log.Infof("Compressing directory %s to %s", srcDir, destPath)
+	log.Debugf("Compressing directory %s to %s", srcDir, destPath)
 
 	// Create destination directory if it doesn't exist
 	destDir := filepath.Dir(destPath)
@@ -183,13 +183,13 @@ func (c *Compressor) CompressDirectory(srcDir, destPath string) error {
 		return fmt.Errorf("failed to compress directory: %w", err)
 	}
 
-	log.Infof("Successfully compressed directory %s to %s", srcDir, destPath)
+	log.Debugf("Successfully compressed directory %s to %s", srcDir, destPath)
 	return nil
 }
 
 // DecompressFile decompresses a tar.zst archive to a destination directory
 func (c *Compressor) DecompressFile(srcPath, destDir string) error {
-	log.Infof("Decompressing %s to %s", srcPath, destDir)
+	log.Debugf("Decompressing %s to %s", srcPath, destDir)
 
 	// Create destination directory if it doesn't exist
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -247,13 +247,13 @@ func (c *Compressor) DecompressFile(srcPath, destDir string) error {
 		}
 	}
 
-	log.Infof("Successfully decompressed %s to %s", srcPath, destDir)
+	log.Debugf("Successfully decompressed %s to %s", srcPath, destDir)
 	return nil
 }
 
 // NormalizeToTarZst normalizes any file format to tar.zst format
 func (c *Compressor) NormalizeToTarZst(srcPath, destPath string, format FileFormat) error {
-	log.Infof("Normalizing %s (%s) to %s", srcPath, format, destPath)
+	log.Debugf("Normalizing %s (%s) to %s", srcPath, format, destPath)
 
 	// Create destination directory if it doesn't exist
 	destDir := filepath.Dir(destPath)
@@ -289,7 +289,7 @@ func (c *Compressor) NormalizeToTarZst(srcPath, destPath string, format FileForm
 
 // compressTarWithZstd compresses a .tar file directly with zstd
 func (c *Compressor) compressTarWithZstd(srcPath, destPath string) error {
-	log.Infof("Compressing tar file %s with zstd to %s", srcPath, destPath)
+	log.Debugf("Compressing tar file %s with zstd to %s", srcPath, destPath)
 
 	// Open source tar file
 	srcFile, err := os.Open(srcPath)
@@ -315,13 +315,13 @@ func (c *Compressor) compressTarWithZstd(srcPath, destPath string) error {
 		return fmt.Errorf("failed to compress tar file: %w", err)
 	}
 
-	log.Infof("Successfully compressed tar file to %s", destPath)
+	log.Debugf("Successfully compressed tar file to %s", destPath)
 	return nil
 }
 
 // decompressAndRecompress decompresses a compressed tar file and recompresses with zstd
 func (c *Compressor) decompressAndRecompress(srcPath, destPath, compressionType string) error {
-	log.Infof("Decompressing %s (%s) and recompressing with zstd to %s", srcPath, compressionType, destPath)
+	log.Debugf("Decompressing %s (%s) and recompressing with zstd to %s", srcPath, compressionType, destPath)
 
 	// Open source file
 	srcFile, err := os.Open(srcPath)
@@ -371,13 +371,13 @@ func (c *Compressor) decompressAndRecompress(srcPath, destPath, compressionType 
 		return fmt.Errorf("failed to recompress with zstd: %w", err)
 	}
 
-	log.Infof("Successfully decompressed and recompressed to %s", destPath)
+	log.Debugf("Successfully decompressed and recompressed to %s", destPath)
 	return nil
 }
 
 // createTarAndCompress creates a tar archive from a binary file and compresses with zstd
 func (c *Compressor) createTarAndCompress(srcPath, destPath string) error {
-	log.Infof("Creating tar archive from binary %s and compressing to %s", srcPath, destPath)
+	log.Debugf("Creating tar archive from binary %s and compressing to %s", srcPath, destPath)
 
 	// Open source file
 	srcFile, err := os.Open(srcPath)
@@ -423,6 +423,6 @@ func (c *Compressor) createTarAndCompress(srcPath, destPath string) error {
 		return fmt.Errorf("failed to write file to tar: %w", err)
 	}
 
-	log.Infof("Successfully created tar archive and compressed to %s", destPath)
+	log.Debugf("Successfully created tar archive and compressed to %s", destPath)
 	return nil
 }

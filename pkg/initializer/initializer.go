@@ -77,7 +77,7 @@ func NewInitializerWithOptions(sshRunner interfaces.SSHRunner, nodeName string, 
 // DoSystemUpdate updates the system package repositories based on OS type
 func (i *Initializer) DoSystemUpdate() error {
 	if !i.options.UpdateSystem {
-		log.Infof("Skipping system update on node %s", i.nodeName)
+		log.Debugf("Skipping system update on node %s", i.nodeName)
 		return nil
 	}
 	// Call appropriate update function based on OS type
@@ -87,7 +87,7 @@ func (i *Initializer) DoSystemUpdate() error {
 	case osTypeRedhat:
 		return i.doSystemUpdateOnRedhat()
 	default:
-		log.Infof("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		log.Warningf("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
 		return fmt.Errorf("unsupported OS type: %s", i.osType)
 	}
 }
@@ -129,36 +129,36 @@ echo "DNF_PATH=${DNF_PATH}"
 	}
 
 	// Log the results
-	log.Infof("OS detection results for node %s: %v", i.nodeName, results)
+	log.Debugf("OS detection results for node %s: %v", i.nodeName, results)
 
 	// Check for DNF availability for RedHat systems
 	if results["DNF_PATH"] != "" {
-		log.Infof("Detected dnf package manager on node %s", i.nodeName)
+		log.Debugf("Detected dnf package manager on node %s", i.nodeName)
 		i.useDnf = true
 	}
 
 	// Determine OS type based on the results
 	if results["DEBIAN_VERSION"] == "true" {
-		log.Infof("Detected Debian-based system on node %s", i.nodeName)
+		log.Debugf("Detected Debian-based system on node %s", i.nodeName)
 		i.osType = osTypeDebian
 		return nil
 	}
 
 	if results["REDHAT_RELEASE"] == "true" {
-		log.Infof("Detected RedHat-based system on node %s", i.nodeName)
+		log.Debugf("Detected RedHat-based system on node %s", i.nodeName)
 		i.osType = osTypeRedhat
 		return nil
 	}
 
 	// If we can't determine the OS type by files, check for package managers
 	if results["APT_GET_PATH"] != "" {
-		log.Infof("Detected apt-get on node %s, assuming Debian-based system", i.nodeName)
+		log.Debugf("Detected apt-get on node %s, assuming Debian-based system", i.nodeName)
 		i.osType = osTypeDebian
 		return nil
 	}
 
 	if results["YUM_PATH"] != "" || results["DNF_PATH"] != "" {
-		log.Infof("Detected yum/dnf on node %s, assuming RedHat-based system", i.nodeName)
+		log.Debugf("Detected yum/dnf on node %s, assuming RedHat-based system", i.nodeName)
 		i.osType = osTypeRedhat
 		return nil
 	}
@@ -173,7 +173,7 @@ func (i *Initializer) doSystemUpdateOnDebian() error {
 	if err != nil {
 		return fmt.Errorf("failed to via apt-get to update system on node %s: %w", i.nodeName, err)
 	}
-	log.Infof("Successfully via apt-get updated system on node %s", i.nodeName)
+	log.Debugf("Successfully via apt-get updated system on node %s", i.nodeName)
 	return nil
 }
 
@@ -181,11 +181,11 @@ func (i *Initializer) doSystemUpdateOnRedhat() error {
 	var cmd string
 	if i.useDnf {
 		// Use dnf if available
-		log.Infof("Using dnf for system update on node %s", i.nodeName)
+		log.Debugf("Using dnf for system update on node %s", i.nodeName)
 		cmd = "sudo dnf update -y"
 	} else {
 		// Fall back to yum
-		log.Infof("dnf not found, using yum for system update on node %s", i.nodeName)
+		log.Debugf("dnf not found, using yum for system update on node %s", i.nodeName)
 		cmd = "sudo yum update -y"
 	}
 
@@ -193,7 +193,7 @@ func (i *Initializer) doSystemUpdateOnRedhat() error {
 	if err != nil {
 		return fmt.Errorf("failed to via yum/dnf to update system on node %s: %w", i.nodeName, err)
 	}
-	log.Infof("Successfully via yum/dnf updated system on node %s", i.nodeName)
+	log.Debugf("Successfully via yum/dnf updated system on node %s", i.nodeName)
 	return nil
 }
 
@@ -206,7 +206,7 @@ func (i *Initializer) AptUpdateForFixMissing() error {
 	case osTypeRedhat:
 		return i.doYumUpdateForFixMissing()
 	default:
-		log.Infof("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		log.Warningf("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
 		return fmt.Errorf("unsupported OS type: %s", i.osType)
 	}
 }
@@ -227,11 +227,11 @@ func (i *Initializer) doYumUpdateForFixMissing() error {
 	var cmd string
 	if i.useDnf {
 		// Use dnf if available
-		log.Infof("Using dnf for fix-missing update on node %s", i.nodeName)
+		log.Debugf("Using dnf for fix-missing update on node %s", i.nodeName)
 		cmd = "sudo dnf clean all && sudo dnf update -y"
 	} else {
 		// Fall back to yum
-		log.Infof("dnf not found, using yum for fix-missing update on node %s", i.nodeName)
+		log.Debugf("dnf not found, using yum for fix-missing update on node %s", i.nodeName)
 		cmd = "sudo yum clean all && sudo yum update -y"
 	}
 
@@ -368,7 +368,7 @@ exit 0
 `, ipvs.K8S_MODULES_CONFIG, pkgInstallCmd, pkgInstallCmd, ipvs.K8S_SYSCTL_CONFIG)
 
 	// Execute the script in a single SSH connection
-	log.Infof("Enabling IPVS on node %s with OS type %s", i.nodeName, i.osType)
+	log.Debugf("Enabling IPVS on node %s with OS type %s", i.nodeName, i.osType)
 	output, err := i.sshRunner.RunCommand(i.nodeName, script)
 	if err != nil {
 		log.Errorf("Failed to enable IPVS on node %s: %v", i.nodeName, err)
@@ -383,7 +383,7 @@ exit 0
 			if len(parts) == 2 {
 				step := parts[0]
 				status := parts[1]
-				log.Infof("IPVS setup step %s: %s on node %s", step, status, i.nodeName)
+				log.Debugf("IPVS setup step %s: %s on node %s", step, status, i.nodeName)
 
 				if status == "failure" {
 					return fmt.Errorf("failed to complete IPVS setup step %s on node %s", step, i.nodeName)
@@ -391,11 +391,11 @@ exit 0
 			}
 		} else if strings.HasPrefix(line, "Detected OS:") || strings.HasPrefix(line, "Package manager:") {
 			// Log OS detection information
-			log.Infof("%s on node %s", line, i.nodeName)
+			log.Debugf("%s on node %s", line, i.nodeName)
 		}
 	}
 
-	log.Infof("Successfully enabled IPVS on node %s", i.nodeName)
+	log.Debugf("Successfully enabled IPVS on node %s", i.nodeName)
 	return nil
 }
 
@@ -479,7 +479,7 @@ exit 0
 			if len(parts) == 2 {
 				step := parts[0]
 				status := parts[1]
-				log.Infof("Network bridge setup step %s: %s on node %s", step, status, i.nodeName)
+				log.Debugf("Network bridge setup step %s: %s on node %s", step, status, i.nodeName)
 
 				if status == "failure" {
 					return fmt.Errorf("failed to complete network bridge setup step %s on node %s", step, i.nodeName)
@@ -488,28 +488,28 @@ exit 0
 		}
 	}
 
-	log.Infof("Successfully enabled network bridge on node %s", i.nodeName)
+	log.Debugf("Successfully enabled network bridge on node %s", i.nodeName)
 	return nil
 }
 
 // InstallContainerd installs and configures containerd using cached packages
 func (i *Initializer) InstallContainerd() error {
-	log.Infof("Installing containerd using cache on node %s", i.nodeName)
+	log.Debugf("Installing containerd using cache on node %s", i.nodeName)
 
 	ctx := context.Background()
 
 	// Ensure containerd package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "containerd", i.options.ContainerdVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "containerd", i.options.ContainerdVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure containerd package: %w", err)
 	}
 
 	// Ensure runc package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "runc", i.options.RuncVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "runc", i.options.RuncVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure runc package: %w", err)
 	}
 
 	// Ensure CNI plugins package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "cni-plugins", i.options.CNIPluginsVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "cni-plugins", i.options.CNIPluginsVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure cni-plugins package: %w", err)
 	}
 
@@ -707,7 +707,7 @@ exit 0
 			if len(parts) == 2 {
 				step := parts[0]
 				status := parts[1]
-				log.Infof("Containerd cache installation step %s: %s on node %s", step, status, i.nodeName)
+				log.Debugf("Containerd cache installation step %s: %s on node %s", step, status, i.nodeName)
 
 				if status == "failure" {
 					return fmt.Errorf("failed to complete containerd cache installation step %s on node %s", step, i.nodeName)
@@ -722,23 +722,23 @@ exit 0
 		// Continue even if crictl and nerdctl installation fails
 	}
 
-	log.Infof("Successfully installed containerd from cache on node %s", i.nodeName)
+	log.Debugf("Successfully installed containerd from cache on node %s", i.nodeName)
 	return nil
 }
 
 // InstallCrictlAndNerdctl installs crictl and nerdctl tools for container management using cached packages
 func (i *Initializer) InstallCrictlAndNerdctl() error {
-	log.Infof("Installing crictl and nerdctl using cache on node %s", i.nodeName)
+	log.Debugf("Installing crictl and nerdctl using cache on node %s", i.nodeName)
 
 	ctx := context.Background()
 
 	// Ensure crictl package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "crictl", i.options.CriCtlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "crictl", i.options.CriCtlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure crictl package: %w", err)
 	}
 
 	// Ensure nerdctl package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "nerdctl", i.options.NerdctlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "nerdctl", i.options.NerdctlVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure nerdctl package: %w", err)
 	}
 
@@ -834,7 +834,7 @@ exit 0
 `, i.options.CriCtlVersion, i.arch, i.options.NerdctlVersion, i.arch)
 
 	// Execute the script in a single SSH connection
-	log.Infof("Installing crictl and nerdctl on node %s", i.nodeName)
+	log.Debugf("Installing crictl and nerdctl on node %s", i.nodeName)
 
 	// Set up retry logic
 	maxRetries := 3
@@ -855,25 +855,25 @@ exit 0
 				if len(parts) == 2 {
 					step := parts[0]
 					status := parts[1]
-					log.Infof("Container tools installation step %s: %s on node %s", step, status, i.nodeName)
+					log.Debugf("Container tools installation step %s: %s on node %s", step, status, i.nodeName)
 
 					// Check if tools are already installed
 					if step == "CRICTL_CHECK" && status == "already_installed" {
 						crictlAlreadyInstalled = true
-						log.Infof("crictl already installed on node %s", i.nodeName)
+						log.Debugf("crictl already installed on node %s", i.nodeName)
 					}
 					if step == "NERDCTL_CHECK" && status == "already_installed" {
 						nerdctlAlreadyInstalled = true
-						log.Infof("nerdctl already installed on node %s", i.nodeName)
+						log.Debugf("nerdctl already installed on node %s", i.nodeName)
 					}
 
 					// If any step failed, log it but continue with retry logic
 					if status == "failure" && retry < maxRetries-1 {
-						log.Infof("Container tools installation step %s failed on node %s, will retry", step, i.nodeName)
+						log.Debugf("Container tools installation step %s failed on node %s, will retry", step, i.nodeName)
 					}
 				}
 			} else if strings.Contains(line, "already installed") {
-				log.Infof("%s on node %s", line, i.nodeName)
+				log.Debugf("%s on node %s", line, i.nodeName)
 			}
 		}
 
@@ -882,13 +882,13 @@ exit 0
 			for _, line := range lines {
 				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
 					if crictlAlreadyInstalled && nerdctlAlreadyInstalled {
-						log.Infof("crictl and nerdctl already installed on node %s", i.nodeName)
+						log.Debugf("crictl and nerdctl already installed on node %s", i.nodeName)
 					} else if crictlAlreadyInstalled {
-						log.Infof("crictl already installed, successfully installed nerdctl on node %s", i.nodeName)
+						log.Debugf("crictl already installed, successfully installed nerdctl on node %s", i.nodeName)
 					} else if nerdctlAlreadyInstalled {
-						log.Infof("nerdctl already installed, successfully installed crictl on node %s", i.nodeName)
+						log.Debugf("nerdctl already installed, successfully installed crictl on node %s", i.nodeName)
 					} else {
-						log.Infof("Successfully installed crictl and nerdctl on node %s", i.nodeName)
+						log.Debugf("Successfully installed crictl and nerdctl on node %s", i.nodeName)
 					}
 					return nil
 				}
@@ -896,7 +896,7 @@ exit 0
 		}
 
 		if retry < maxRetries-1 {
-			log.Infof("Failed to install container tools on node %s, retrying in %v (%d/%d)...",
+			log.Debugf("Failed to install container tools on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
@@ -930,22 +930,22 @@ EOF
 
 // InstallK8sComponents installs kubeadm, kubectl, kubelet using cached packages
 func (i *Initializer) InstallK8sComponents() error {
-	log.Infof("Installing Kubernetes components using cache on node %s", i.nodeName)
+	log.Debugf("Installing Kubernetes components using cache on node %s", i.nodeName)
 
 	ctx := context.Background()
 
 	// Ensure kubectl package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "kubectl", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "kubectl", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure kubectl package: %w", err)
 	}
 
 	// Ensure kubeadm package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "kubeadm", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "kubeadm", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure kubeadm package: %w", err)
 	}
 
 	// Ensure kubelet package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "kubelet", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "kubelet", i.options.K8SVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure kubelet package: %w", err)
 	}
 
@@ -1109,7 +1109,7 @@ exit 0
 `, i.options.K8SVersion, i.arch, i.options.K8SVersion, i.arch, i.options.K8SVersion, i.arch)
 
 	// Execute the script in a single SSH connection
-	log.Infof("Installing Kubernetes components on node %s", i.nodeName)
+	log.Debugf("Installing Kubernetes components on node %s", i.nodeName)
 
 	// Set up retry logic
 	maxRetries := 3
@@ -1128,21 +1128,21 @@ exit 0
 				if len(parts) == 2 {
 					step := parts[0]
 					status := parts[1]
-					log.Infof("K8s installation step %s: %s on node %s", step, status, i.nodeName)
+					log.Debugf("K8s installation step %s: %s on node %s", step, status, i.nodeName)
 
 					// If components are already installed, return success
 					if step == "K8S_CHECK" && status == "already_installed" {
-						log.Infof("Kubernetes components already installed on node %s, skipping", i.nodeName)
+						log.Debugf("Kubernetes components already installed on node %s, skipping", i.nodeName)
 						return nil
 					}
 
 					// If any step failed, log it but continue with retry logic
 					if status == "failure" && retry < maxRetries-1 {
-						log.Infof("K8s installation step %s failed on node %s, will retry", step, i.nodeName)
+						log.Debugf("K8s installation step %s failed on node %s, will retry", step, i.nodeName)
 					}
 				}
 			} else if strings.Contains(line, "already installed") {
-				log.Infof("%s on node %s", line, i.nodeName)
+				log.Debugf("%s on node %s", line, i.nodeName)
 			}
 		}
 
@@ -1150,14 +1150,14 @@ exit 0
 			// Check if overall process was successful
 			for _, line := range lines {
 				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
-					log.Infof("Successfully installed Kubernetes components on node %s", i.nodeName)
+					log.Debugf("Successfully installed Kubernetes components on node %s", i.nodeName)
 					return nil
 				}
 			}
 		}
 
 		if retry < maxRetries-1 {
-			log.Infof("Failed to install Kubernetes components on node %s, retrying in %v (%d/%d)...",
+			log.Debugf("Failed to install Kubernetes components on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
@@ -1172,12 +1172,12 @@ exit 0
 
 // InstallHelm installs Helm using cached packages
 func (i *Initializer) InstallHelm() error {
-	log.Infof("Installing Helm using cache on node %s", i.nodeName)
+	log.Debugf("Installing Helm using cache on node %s", i.nodeName)
 
 	ctx := context.Background()
 
 	// Ensure Helm package is cached and uploaded using SCP
-	if err := i.packageManager.EnsurePackageWithSCP(ctx, "helm", i.options.HelmVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
+	if err := i.packageManager.EnsurePackage(ctx, "helm", i.options.HelmVersion, i.arch, i.sshRunner, i.nodeName); err != nil {
 		return fmt.Errorf("failed to ensure helm package: %w", err)
 	}
 
@@ -1232,7 +1232,7 @@ exit 0
 `, i.options.HelmVersion, i.arch, i.arch)
 
 	// Execute the script in a single SSH connection
-	log.Infof("Installing Helm on node %s", i.nodeName)
+	log.Debugf("Installing Helm on node %s", i.nodeName)
 
 	// Set up retry logic
 	maxRetries := 3
@@ -1251,21 +1251,21 @@ exit 0
 				if len(parts) == 2 {
 					step := parts[0]
 					status := parts[1]
-					log.Infof("Helm installation step %s: %s on node %s", step, status, i.nodeName)
+					log.Debugf("Helm installation step %s: %s on node %s", step, status, i.nodeName)
 
 					// If Helm is already installed, return success
 					if step == "HELM_CHECK" && status == "already_installed" {
-						log.Infof("Helm already installed on node %s, skipping", i.nodeName)
+						log.Debugf("Helm already installed on node %s, skipping", i.nodeName)
 						return nil
 					}
 
 					// If any step failed, log it but continue with retry logic
 					if status == "failure" && retry < maxRetries-1 {
-						log.Infof("Helm installation step %s failed on node %s, will retry", step, i.nodeName)
+						log.Debugf("Helm installation step %s failed on node %s, will retry", step, i.nodeName)
 					}
 				}
 			} else if strings.Contains(line, "already installed") {
-				log.Infof("%s on node %s", line, i.nodeName)
+				log.Debugf("%s on node %s", line, i.nodeName)
 			}
 		}
 
@@ -1273,14 +1273,14 @@ exit 0
 			// Check if overall process was successful
 			for _, line := range lines {
 				if strings.HasPrefix(line, "STEP_STATUS: OVERALL=success") {
-					log.Infof("Successfully installed Helm on node %s", i.nodeName)
+					log.Debugf("Successfully installed Helm on node %s", i.nodeName)
 					return nil
 				}
 			}
 		}
 
 		if retry < maxRetries-1 {
-			log.Infof("Failed to install Helm on node %s, retrying in %v (%d/%d)...",
+			log.Errorf("Failed to install Helm on node %s, retrying in %v (%d/%d)...",
 				i.nodeName, retryDelay, retry+1, maxRetries)
 			time.Sleep(retryDelay)
 		}
@@ -1295,7 +1295,7 @@ exit 0
 
 // SetupDNSResolution sets up custom DNS resolution to prevent CoreDNS loop detection issues
 func (i *Initializer) SetupDNSResolution() error {
-	log.Infof("Setting up DNS resolution configuration on node %s", i.nodeName)
+	log.Debugf("Setting up DNS resolution configuration on node %s", i.nodeName)
 
 	// Create a script that sets up the custom DNS resolution based on OS type
 	script := `#!/bin/bash
@@ -1398,7 +1398,7 @@ exit 0
 			if len(parts) == 2 {
 				step := parts[0]
 				status := parts[1]
-				log.Infof("DNS resolution setup step %s: %s on node %s", step, status, i.nodeName)
+				log.Debugf("DNS resolution setup step %s: %s on node %s", step, status, i.nodeName)
 
 				if status == "failure" {
 					return fmt.Errorf("failed to complete DNS resolution setup step %s on node %s", step, i.nodeName)
@@ -1406,11 +1406,11 @@ exit 0
 			}
 		} else if strings.Contains(line, "Detected") || strings.Contains(line, "Successfully created") || strings.Contains(line, "Points to:") || strings.Contains(line, "Custom resolv.conf:") {
 			// Log important information about the DNS setup
-			log.Infof("%s on node %s", line, i.nodeName)
+			log.Debugf("%s on node %s", line, i.nodeName)
 		}
 	}
 
-	log.Infof("Successfully setup DNS resolution on node %s", i.nodeName)
+	log.Debugf("Successfully setup DNS resolution on node %s", i.nodeName)
 	return nil
 }
 
@@ -1423,7 +1423,7 @@ func (i *Initializer) InstallZstd() error {
 	case osTypeRedhat:
 		return i.installZstdOnRedhat()
 	default:
-		log.Infof("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		log.Debugf("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
 		return fmt.Errorf("unsupported OS type: %s", i.osType)
 	}
 }
@@ -1435,7 +1435,7 @@ func (i *Initializer) installZstdOnDebian() error {
 	if err != nil {
 		return fmt.Errorf("failed to install zstd on node %s: %w", i.nodeName, err)
 	}
-	log.Infof("Successfully installed zstd on node %s", i.nodeName)
+	log.Debugf("Successfully installed zstd on node %s", i.nodeName)
 	return nil
 }
 
@@ -1444,11 +1444,11 @@ func (i *Initializer) installZstdOnRedhat() error {
 	var cmd string
 	if i.useDnf {
 		// Use dnf if available
-		log.Infof("Using dnf to install zstd on node %s", i.nodeName)
+		log.Debugf("Using dnf to install zstd on node %s", i.nodeName)
 		cmd = "sudo dnf install -y zstd"
 	} else {
 		// Fall back to yum
-		log.Infof("dnf not found, using yum to install zstd on node %s", i.nodeName)
+		log.Debugf("dnf not found, using yum to install zstd on node %s", i.nodeName)
 		cmd = "sudo yum install -y zstd"
 	}
 
@@ -1456,7 +1456,7 @@ func (i *Initializer) installZstdOnRedhat() error {
 	if err != nil {
 		return fmt.Errorf("failed to install zstd on node %s: %w", i.nodeName, err)
 	}
-	log.Infof("Successfully installed zstd on node %s", i.nodeName)
+	log.Debugf("Successfully installed zstd on node %s", i.nodeName)
 	return nil
 }
 

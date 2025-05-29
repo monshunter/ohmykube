@@ -2,6 +2,8 @@ package interfaces
 
 // SSHRunner defines the comprehensive SSH interface with three essential methods
 type SSHRunner interface {
+	Close() error
+	Address(host string) string
 	SSHCommandRunner
 	SSHFileTransfer
 }

@@ -86,7 +86,7 @@ func (c *Client) Connect() error {
 		client, err = ssh.Dial("tcp", addr, config)
 		if err != nil {
 			if i < maxRetries-1 {
-				log.Infof("ssh connection %s failed: %v, retrying (%d/%d)...", addr, err, i+1, maxRetries)
+				log.Debugf("ssh connection %s failed: %v, retrying (%d/%d)...", addr, err, i+1, maxRetries)
 				time.Sleep(3 * time.Second)
 				continue
 			}
@@ -94,7 +94,7 @@ func (c *Client) Connect() error {
 		}
 		c.client = client
 		c.connected = true
-		log.Infof("ssh connection %s successful", addr)
+		log.Debugf("ssh connection %s successful", addr)
 		return nil
 	}
 	return fmt.Errorf("ssh connection failed: %w", err)
@@ -187,13 +187,13 @@ func (c *Client) RunCommand(command string) (string, error) {
 
 // UploadFile uploads a local file to the remote server using SFTP protocol
 func (c *Client) UploadFile(localPath, remotePath string) error {
-	log.Infof("Starting SFTP upload: %s -> %s", localPath, remotePath)
+	log.Debugf("Starting SFTP upload: %s -> %s", localPath, remotePath)
 	maxRetries := 3
 	var lastErr error
 
 	for i := 0; i < maxRetries; i++ {
 		if i > 0 {
-			log.Infof("Retrying SFTP upload (attempt %d/%d)", i+1, maxRetries)
+			log.Debugf("Retrying SFTP upload (attempt %d/%d)", i+1, maxRetries)
 		}
 
 		// Ensure connection
@@ -210,14 +210,14 @@ func (c *Client) UploadFile(localPath, remotePath string) error {
 		if err := c.sftpUpload(localPath, remotePath); err != nil {
 			lastErr = fmt.Errorf("failed to upload file via SFTP: %w", err)
 			if i < maxRetries-1 {
-				log.Infof("SFTP upload failed, retrying: %v", err)
+				log.Debugf("SFTP upload failed, retrying: %v", err)
 				time.Sleep(2 * time.Second)
 				continue
 			}
 			return lastErr
 		}
 
-		log.Infof("SFTP upload completed successfully")
+		log.Debugf("SFTP upload completed successfully")
 		return nil
 	}
 
@@ -260,7 +260,7 @@ func (c *Client) sftpUpload(localPath, remotePath string) error {
 	defer remoteFile.Close()
 
 	// Copy file using io.Copy (much faster and simpler)
-	log.Infof("Uploading file: %s", utils.FormatSize(localInfo.Size()))
+	log.Debugf("Uploading file: name=%s,size=%s", localInfo.Name(), utils.FormatSize(localInfo.Size()))
 	_, err = io.Copy(remoteFile, localFile)
 	if err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
@@ -276,13 +276,13 @@ func (c *Client) sftpUpload(localPath, remotePath string) error {
 
 // DownloadFile downloads a file from the remote server using SFTP protocol
 func (c *Client) DownloadFile(remotePath, localPath string) error {
-	log.Infof("Starting SFTP download: %s -> %s", remotePath, localPath)
+	log.Debugf("Starting SFTP download: %s -> %s", remotePath, localPath)
 	maxRetries := 3
 	var lastErr error
 
-	for i := 0; i < maxRetries; i++ {
+	for i := range maxRetries {
 		if i > 0 {
-			log.Infof("Retrying SFTP download (attempt %d/%d)", i+1, maxRetries)
+			log.Debugf("Retrying SFTP download (attempt %d/%d)", i+1, maxRetries)
 		}
 
 		// Ensure connection
@@ -299,14 +299,14 @@ func (c *Client) DownloadFile(remotePath, localPath string) error {
 		if err := c.sftpDownload(remotePath, localPath); err != nil {
 			lastErr = fmt.Errorf("failed to download file via SFTP: %w", err)
 			if i < maxRetries-1 {
-				log.Infof("SFTP download failed, retrying: %v", err)
+				log.Debugf("SFTP download failed, retrying: %v", err)
 				time.Sleep(2 * time.Second)
 				continue
 			}
 			return lastErr
 		}
 
-		log.Infof("SFTP download completed successfully")
+		log.Debugf("SFTP download completed successfully")
 		return nil
 	}
 
@@ -349,7 +349,7 @@ func (c *Client) sftpDownload(remotePath, localPath string) error {
 	defer localFile.Close()
 
 	// Copy file using io.Copy (much faster and simpler)
-	log.Infof("Downloading file: %s", utils.FormatSize(remoteInfo.Size()))
+	log.Debugf("Downloading file: %s", utils.FormatSize(remoteInfo.Size()))
 	_, err = io.Copy(localFile, remoteFile)
 	if err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)

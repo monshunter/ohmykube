@@ -2,20 +2,21 @@ package log
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
 
 // ProgressBar represents a progress bar for long-running operations
 type ProgressBar struct {
-	title       string
-	total       int
-	current     int
-	width       int
-	startTime   time.Time
-	lastUpdate  time.Time
-	completed   bool
-	showTime    bool
+	title      string
+	total      int
+	current    int
+	width      int
+	startTime  time.Time
+	lastUpdate time.Time
+	completed  bool
+	showTime   bool
 }
 
 // NewProgressBar creates a new progress bar
@@ -34,7 +35,7 @@ func (pb *ProgressBar) Update(current int) {
 	if quiet {
 		return // Don't show progress in quiet mode
 	}
-	
+
 	pb.current = current
 	pb.lastUpdate = time.Now()
 	pb.render()
@@ -61,24 +62,31 @@ func (pb *ProgressBar) render() {
 
 	percentage := float64(pb.current) / float64(pb.total) * 100
 	filled := int(float64(pb.width) * float64(pb.current) / float64(pb.total))
-	
+
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", pb.width-filled)
-	
+
 	timeStr := ""
 	if pb.showTime && pb.completed {
 		elapsed := time.Since(pb.startTime)
 		timeStr = fmt.Sprintf(" (%s)", formatDuration(elapsed))
 	}
-	
+
 	status := "100%"
 	if !pb.completed {
 		status = fmt.Sprintf("%.0f%%", percentage)
 	}
-	
-	fmt.Printf("\r%s [%s] %s%s", pb.title, bar, status, timeStr)
-	
+
+	progressMsg := fmt.Sprintf("%s [%s] %s%s", pb.title, bar, status, timeStr)
 	if pb.completed {
-		fmt.Print(" ✅")
+		progressMsg += " ✅"
+	}
+
+	// Use log.Info for consistent styling with verbose mode
+	if pb.completed {
+		Info(progressMsg)
+	} else {
+		// For non-completed progress, use fmt.Printf with \r for real-time updates
+		fmt.Printf("\r%s", progressMsg)
 	}
 }
 
@@ -129,21 +137,24 @@ func (msp *MultiStepProgress) AddStep(name, description string) {
 
 // StartStep starts the specified step
 func (msp *MultiStepProgress) StartStep(stepIndex int) {
-	if quiet {
-		return
-	}
-	
 	if stepIndex >= len(msp.steps) {
 		return
 	}
-	
+
 	msp.currentStep = stepIndex
 	step := msp.steps[stepIndex]
 	step.StartTime = time.Now()
-	
-	// Show step start
-	icon := getStepIcon(stepIndex)
-	fmt.Printf("\n%s %s", icon, step.Description)
+
+	if !quiet {
+		icon := getStepIcon(stepIndex)
+		if verbose {
+			// Verbose mode: show detailed start message
+			Info(fmt.Sprintf("%s %s (starting...)", icon, step.Description))
+		} else {
+			// Default mode: show start message with consistent INFO styling
+			progressStart(fmt.Sprintf("%s %s... ", icon, step.Description))
+		}
+	}
 }
 
 // CompleteStep completes the current step
@@ -151,14 +162,21 @@ func (msp *MultiStepProgress) CompleteStep(stepIndex int) {
 	if stepIndex >= len(msp.steps) {
 		return
 	}
-	
+
 	step := msp.steps[stepIndex]
 	step.EndTime = time.Now()
 	step.Completed = true
-	
+
 	if !quiet {
 		elapsed := step.EndTime.Sub(step.StartTime)
-		fmt.Printf(" ✅ (%s)\n", formatDuration(elapsed))
+		icon := getStepIcon(stepIndex)
+		if verbose {
+			// Verbose mode: show complete log entry
+			Info(fmt.Sprintf("%s %s ✅ (%s)", icon, step.Description, formatDuration(elapsed)))
+		} else {
+			// Default mode: complete the same line with consistent styling
+			progressComplete(fmt.Sprintf("✅ (%s)", formatDuration(elapsed)))
+		}
 	}
 }
 
@@ -167,13 +185,20 @@ func (msp *MultiStepProgress) FailStep(stepIndex int, err error) {
 	if stepIndex >= len(msp.steps) {
 		return
 	}
-	
+
 	step := msp.steps[stepIndex]
 	step.EndTime = time.Now()
 	step.Error = err
-	
+
 	if !quiet {
-		fmt.Printf(" ❌ Failed: %v\n", err)
+		icon := getStepIcon(stepIndex)
+		if verbose {
+			// Verbose mode: show complete log entry
+			Error(fmt.Sprintf("%s %s ❌ Failed: %v", icon, step.Description, err))
+		} else {
+			// Default mode: complete the same line with failure styling
+			progressFail(fmt.Sprintf("❌ Failed: %v", err))
+		}
 	}
 }
 
@@ -182,20 +207,21 @@ func (msp *MultiStepProgress) Complete() {
 	if quiet {
 		return
 	}
-	
+
 	totalTime := time.Duration(0)
 	for _, step := range msp.steps {
 		if step.Completed {
 			totalTime += step.EndTime.Sub(step.StartTime)
 		}
 	}
-	
-	fmt.Printf("\n✅ %s completed in %s!\n", msp.title, formatDuration(totalTime))
+
+	Info(fmt.Sprintf("✅ %s completed in %s!", msp.title, formatDuration(totalTime)))
 }
 
 // getStepIcon returns an icon for the step based on its index
 func getStepIcon(stepIndex int) string {
-	icons := []string{"📦", "🔧", "🔗", "🌐", "💾", "⚙️", "🚀"}
+	// Icons corresponding to: VMs, Environment, Master, Workers, CNI, CSI, LoadBalancer, Kubeconfig
+	icons := []string{"📦", "⚙️ ", "🔧", "🔗", "🌐", "💾", "⚖️ ", "📋"}
 	if stepIndex < len(icons) {
 		return icons[stepIndex]
 	}
@@ -230,4 +256,35 @@ func QuietInfof(format string, args ...any) {
 	if verbose {
 		Infof(format, args...)
 	}
+}
+
+// pProgressStart shows progress start message with consistent INFO styling but without newline
+func progressStart(args ...any) {
+	if quiet {
+		return
+	}
+
+	timeStr := time.Now().Format(timeFormat)
+	coloredPrefix := getLevelPrefix("INFO", INFO)
+	fmt.Fprintf(os.Stdout, "[%s] %s: %s", timeStr, coloredPrefix, fmt.Sprint(args...))
+}
+
+// progressComplete completes the progress line with consistent styling
+func progressComplete(args ...any) {
+	if quiet {
+		return
+	}
+
+	message := fmt.Sprint(args...)
+	fmt.Printf("%s\n", message)
+}
+
+// ProgressFail completes the progress line with failure message
+func progressFail(args ...any) {
+	if quiet {
+		return
+	}
+
+	message := fmt.Sprint(args...)
+	fmt.Printf("%s\n", message)
 }

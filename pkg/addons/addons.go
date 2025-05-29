@@ -41,7 +41,7 @@ func NewManager(cluster *config.Cluster, sshRunner interfaces.SSHRunner,
 func (m *Manager) InstallCNI() error {
 	// Check if CNI is already installed
 	if m.Cluster.HasCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue) {
-		log.Infof("CNI %s already installed, skipping installation", m.CNIType)
+		log.Debugf("CNI %s already installed, skipping installation", m.CNIType)
 		return nil
 	}
 
@@ -87,7 +87,7 @@ func (m *Manager) InstallCNI() error {
 func (m *Manager) InstallCSI() error {
 	// Check if CSI is already installed
 	if m.Cluster.HasCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusTrue) {
-		log.Infof("%s CSI already installed, skipping installation", m.CSIType)
+		log.Debugf("%s CSI already installed, skipping installation", m.CSIType)
 		return nil
 	}
 

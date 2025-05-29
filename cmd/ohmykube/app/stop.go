@@ -52,14 +52,13 @@ var stopCmd = &cobra.Command{
 		}
 		defer manager.Close()
 		// Stop specific VM
-		nodeName := args[0]
-		log.Infof("Stopping VM: %s", nodeName)
-		err = manager.StopVM(nodeName, forceStop)
-		if err != nil {
-			log.Errorf("Failed to stop VM %s: %v", nodeName, err)
-			return fmt.Errorf("failed to stop VM %s: %w", nodeName, err)
+		for _, nodeName := range args {
+			err = manager.StopVM(nodeName, forceStop)
+			if err != nil {
+				log.Errorf("Failed to stop VM %s: %v", nodeName, err)
+				return fmt.Errorf("failed to stop VM %s: %w", nodeName, err)
+			}
 		}
-		log.Infof("VM %s stopped successfully", nodeName)
 
 		return nil
 	},

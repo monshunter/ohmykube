@@ -30,7 +30,7 @@ func NewDownloader() *Downloader {
 
 // DownloadFile downloads a file from the given URL to the specified destination
 func (d *Downloader) DownloadFile(ctx context.Context, url, destPath string) error {
-	log.Infof("Downloading %s to %s", url, destPath)
+	log.Debugf("Downloading %s to %s", url, destPath)
 
 	// Create the destination directory if it doesn't exist
 	destDir := filepath.Dir(destPath)
@@ -74,7 +74,7 @@ func (d *Downloader) DownloadFile(ctx context.Context, url, destPath string) err
 		return fmt.Errorf("failed to write to destination file: %w", err)
 	}
 
-	log.Infof("Successfully downloaded %s (%s) to %s", url, utils.FormatSize(written), destPath)
+	log.Debugf("Successfully downloaded %s (%s) to %s", url, utils.FormatSize(written), destPath)
 	return nil
 }
 
@@ -108,9 +108,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 		if now.Sub(pr.lastLogTime) >= pr.logInterval {
 			if pr.totalSize > 0 {
 				progress := float64(pr.written) / float64(pr.totalSize) * 100
-				log.Infof("Download progress for %s: %.1f%% (%d/%d bytes)", pr.url, progress, pr.written, pr.totalSize)
+				log.Debugf("Download progress for %s: %.1f%% (%d/%d bytes)", pr.url, progress, pr.written, pr.totalSize)
 			} else {
-				log.Infof("Download progress for %s: %d bytes", pr.url, pr.written)
+				log.Debugf("Download progress for %s: %d bytes", pr.url, pr.written)
 			}
 			pr.lastLogTime = now
 		}
@@ -154,7 +154,7 @@ func (d *Downloader) DownloadWithRetry(ctx context.Context, url, destPath string
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		log.Infof("Download attempt %d/%d for %s", attempt, maxRetries, url)
+		log.Debugf("Download attempt %d/%d for %s", attempt, maxRetries, url)
 
 		err := d.DownloadFile(ctx, url, destPath)
 		if err == nil {
@@ -167,7 +167,7 @@ func (d *Downloader) DownloadWithRetry(ctx context.Context, url, destPath string
 		if attempt < maxRetries {
 			// Wait before retrying (exponential backoff)
 			waitTime := time.Duration(attempt) * 5 * time.Second
-			log.Infof("Waiting %v before retry...", waitTime)
+			log.Debugf("Waiting %v before retry...", waitTime)
 
 			select {
 			case <-ctx.Done():

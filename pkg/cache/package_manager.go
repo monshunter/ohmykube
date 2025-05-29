@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,11 +88,7 @@ func (m *PackageManager) loadIndex() error {
 	// Try to parse as new array format first
 	m.index = &PackageIndex{}
 	if err := yaml.Unmarshal(data, m.index); err != nil {
-		// If that fails, try to parse as old map format and migrate
-		log.Infof("Migrating old index format to new array format")
-		if err := m.migrateOldIndex(data); err != nil {
-			return fmt.Errorf("failed to migrate old index format: %w", err)
-		}
+		return fmt.Errorf("failed to parse package index: %w", err)
 	}
 
 	// Initialize packages slice if nil
@@ -127,29 +122,6 @@ type OldPackageIndex struct {
 	UpdatedAt time.Time              `yaml:"updated_at"`
 }
 
-// migrateOldIndex migrates from the old map-based format to the new array-based format
-func (m *PackageManager) migrateOldIndex(data []byte) error {
-	oldIndex := &OldPackageIndex{}
-	if err := yaml.Unmarshal(data, oldIndex); err != nil {
-		return fmt.Errorf("failed to parse old index format: %w", err)
-	}
-
-	// Convert map to array
-	m.index = &PackageIndex{
-		Version:   oldIndex.Version,
-		Packages:  make([]PackageInfo, 0, len(oldIndex.Packages)),
-		UpdatedAt: oldIndex.UpdatedAt,
-	}
-
-	for _, pkg := range oldIndex.Packages {
-		m.index.Packages = append(m.index.Packages, pkg)
-	}
-
-	// Save the migrated index
-	log.Infof("Migrated %d packages from old format", len(m.index.Packages))
-	return m.saveIndex()
-}
-
 // findPackage finds a package in the index by name, version, and architecture
 func (m *PackageManager) findPackage(name, version, arch string) (*PackageInfo, int) {
 	for i, pkg := range m.index.Packages {
@@ -180,12 +152,12 @@ func (m *PackageManager) removePackage(index int) {
 }
 
 // EnsurePackage ensures the specified package is available both locally and on target nodes
-func (m *PackageManager) EnsurePackage(ctx context.Context, packageName, version, arch string, sshRunner interfaces.SSHCommandRunner, nodeName string) error {
-	log.Infof("Ensuring package %s-%s-%s is available", packageName, version, arch)
+func (m *PackageManager) EnsurePackage(ctx context.Context, packageName, version, arch string, sshRunner interfaces.SSHRunner, nodeName string) error {
+	log.Debugf("Ensuring package %s-%s-%s is available", packageName, version, arch)
 
 	// Check if package is already cached locally
 	if m.IsPackageCached(packageName, version, arch) {
-		log.Infof("Package %s-%s-%s is already cached locally", packageName, version, arch)
+		log.Debugf("Package %s-%s-%s is already cached locally", packageName, version, arch)
 	} else {
 		// Download and cache the package
 		if err := m.downloadAndCachePackage(ctx, packageName, version, arch); err != nil {
@@ -193,25 +165,16 @@ func (m *PackageManager) EnsurePackage(ctx context.Context, packageName, version
 		}
 	}
 
-	// Try to use the new SSH interface if available, otherwise fall back to old method
-	if newSSHRunner, ok := sshRunner.(interfaces.SSHRunner); ok {
-		// Use the new optimized upload method with SCP
-		if err := m.UploadPackageWithSCP(ctx, packageName, version, arch, newSSHRunner, nodeName); err != nil {
-			return fmt.Errorf("failed to upload package to node via SCP: %w", err)
-		}
-	} else {
-		// Fall back to the old method
-		if err := m.UploadPackageToNode(ctx, packageName, version, arch, sshRunner, nodeName); err != nil {
-			return fmt.Errorf("failed to upload package to node: %w", err)
-		}
+	if err := m.uploadPackage(ctx, packageName, version, arch, sshRunner, nodeName); err != nil {
+		return fmt.Errorf("failed to upload package to node via SCP: %w", err)
 	}
 
 	return nil
 }
 
-// UploadPackageWithSCP uploads a cached package to a target node using SCP protocol
-func (m *PackageManager) UploadPackageWithSCP(ctx context.Context, packageName, version, arch string, sshRunner interfaces.SSHRunner, nodeName string) error {
-	log.Infof("Uploading package %s-%s-%s to node %s using SCP protocol", packageName, version, arch, nodeName)
+// UploadPackage uploads a cached package to a target node
+func (m *PackageManager) uploadPackage(ctx context.Context, packageName, version, arch string, sshRunner interfaces.SSHRunner, nodeName string) error {
+	log.Debugf("Uploading package %s-%s-%s to node %s ", packageName, version, arch, nodeName)
 
 	// Get package info
 	packageInfo, _ := m.findPackage(packageName, version, arch)
@@ -233,7 +196,7 @@ func (m *PackageManager) UploadPackageWithSCP(ctx context.Context, packageName, 
 	}
 
 	if strings.TrimSpace(output) == "exists" {
-		log.Infof("Package %s-%s-%s already exists on node %s", packageName, version, arch, nodeName)
+		log.Debugf("Package %s-%s-%s already exists on node %s", packageName, version, arch, nodeName)
 		return nil
 	}
 
@@ -242,41 +205,8 @@ func (m *PackageManager) UploadPackageWithSCP(ctx context.Context, packageName, 
 		return fmt.Errorf("failed to upload package file via SCP: %w", err)
 	}
 
-	log.Infof("Successfully uploaded package %s-%s-%s to node %s using SCP", packageName, version, arch, nodeName)
+	log.Debugf("Successfully uploaded package %s-%s-%s to node %s using SCP", packageName, version, arch, nodeName)
 	return nil
-}
-
-// EnsurePackageWithSCP ensures the specified package is available both locally and on target nodes using SCP
-func (m *PackageManager) EnsurePackageWithSCP(ctx context.Context, packageName, version, arch string, sshRunner interfaces.SSHRunner, nodeName string) error {
-	log.Infof("Ensuring package %s-%s-%s is available using SCP", packageName, version, arch)
-
-	// Check if package is already cached locally
-	if m.IsPackageCached(packageName, version, arch) {
-		log.Infof("Package %s-%s-%s is already cached locally", packageName, version, arch)
-	} else {
-		// Download and cache the package
-		if err := m.downloadAndCachePackage(ctx, packageName, version, arch); err != nil {
-			return fmt.Errorf("failed to download and cache package: %w", err)
-		}
-	}
-
-	// Upload package to target node using SCP
-	if err := m.UploadPackageWithSCP(ctx, packageName, version, arch, sshRunner, nodeName); err != nil {
-		return fmt.Errorf("failed to upload package to node via SCP: %w", err)
-	}
-
-	return nil
-}
-
-// GetLocalPackagePath returns the local path of a cached package
-func (m *PackageManager) GetLocalPackagePath(packageName, version, arch string) (string, error) {
-	packageInfo, _ := m.findPackage(packageName, version, arch)
-	if packageInfo == nil {
-		key := PackageKey(packageName, version, arch)
-		return "", fmt.Errorf("package %s not found in cache", key)
-	}
-
-	return packageInfo.LocalPath, nil
 }
 
 // IsPackageCached checks if a package is already cached locally
@@ -304,7 +234,7 @@ func (m *PackageManager) IsPackageCached(packageName, version, arch string) bool
 
 // downloadAndCachePackage downloads a package and caches it locally
 func (m *PackageManager) downloadAndCachePackage(ctx context.Context, packageName, version, arch string) error {
-	log.Infof("Downloading and caching package %s-%s-%s", packageName, version, arch)
+	log.Debugf("Downloading and caching package %s-%s-%s", packageName, version, arch)
 
 	// Get package definition
 	definition, exists := m.definitions[packageName]
@@ -383,128 +313,15 @@ func (m *PackageManager) downloadAndCachePackage(ctx context.Context, packageNam
 		return fmt.Errorf("failed to save index: %w", err)
 	}
 
-	log.Infof("Successfully cached package %s-%s-%s (compressed: %d bytes, original: %d bytes)",
+	log.Debugf("Successfully cached package %s-%s-%s (compressed: %d bytes, original: %d bytes)",
 		packageName, version, arch, compressedSize, originalSize)
-
-	return nil
-}
-
-// UploadPackageToNode uploads a cached package to a target node (for backward compatibility)
-func (m *PackageManager) UploadPackageToNode(ctx context.Context, packageName, version, arch string, sshRunner interfaces.SSHCommandRunner, nodeName string) error {
-	log.Infof("Uploading package %s-%s-%s to node %s", packageName, version, arch, nodeName)
-
-	// Get package info
-	packageInfo, _ := m.findPackage(packageName, version, arch)
-	if packageInfo == nil {
-		key := PackageKey(packageName, version, arch)
-		return fmt.Errorf("package %s not found in cache", key)
-	}
-
-	// Check if local file exists
-	if _, err := os.Stat(packageInfo.LocalPath); os.IsNotExist(err) {
-		return fmt.Errorf("local package file not found: %s", packageInfo.LocalPath)
-	}
-
-	// Create remote directory
-	remoteDir := filepath.Dir(packageInfo.GetRemotePath())
-	createDirCmd := fmt.Sprintf("sudo mkdir -p %s", remoteDir)
-	if _, err := sshRunner.RunCommand(nodeName, createDirCmd); err != nil {
-		return fmt.Errorf("failed to create remote directory: %w", err)
-	}
-
-	// Check if package already exists on remote node
-	checkCmd := fmt.Sprintf("test -f %s && echo 'exists' || echo 'not_exists'", packageInfo.GetRemotePath())
-	output, err := sshRunner.RunCommand(nodeName, checkCmd)
-	if err != nil {
-		return fmt.Errorf("failed to check if package exists on remote node: %w", err)
-	}
-
-	if strings.TrimSpace(output) == "exists" {
-		log.Infof("Package %s-%s-%s already exists on node %s", packageName, version, arch, nodeName)
-		return nil
-	}
-
-	// Try to use proper file transfer if available, otherwise fall back to SSH command
-	if fileTransfer, ok := sshRunner.(interfaces.SSHRunner); ok {
-		log.Infof("Uploading package %s-%s-%s to node %s using SCP protocol", packageName, version, arch, nodeName)
-		if err := fileTransfer.UploadFile(nodeName, packageInfo.LocalPath, packageInfo.GetRemotePath()); err != nil {
-			return fmt.Errorf("failed to upload package file via SCP: %w", err)
-		}
-	} else if fileTransfer, ok := sshRunner.(interfaces.SSHFileTransfer); ok {
-		log.Infof("Uploading package %s-%s-%s to node %s using file transfer", packageName, version, arch, nodeName)
-		if err := fileTransfer.UploadFile(nodeName, packageInfo.LocalPath, packageInfo.GetRemotePath()); err != nil {
-			return fmt.Errorf("failed to upload package file: %w", err)
-		}
-	} else {
-		// Fall back to the old base64 method for compatibility
-		log.Infof("Uploading package %s-%s-%s to node %s using SSH command (fallback)", packageName, version, arch, nodeName)
-		if err := m.uploadFileViaSSH(packageInfo.LocalPath, packageInfo.GetRemotePath(), sshRunner, nodeName); err != nil {
-			return fmt.Errorf("failed to upload package file: %w", err)
-		}
-	}
-
-	log.Infof("Successfully uploaded package %s-%s-%s to node %s", packageName, version, arch, nodeName)
-	return nil
-}
-
-// uploadFileViaSSH uploads a file to a remote node via SSH using base64 encoding
-func (m *PackageManager) uploadFileViaSSH(localPath, remotePath string, sshRunner interfaces.SSHCommandRunner, nodeName string) error {
-	// Read local file
-	data, err := os.ReadFile(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to read local file: %w", err)
-	}
-
-	// Encode to base64
-	encoded := base64.StdEncoding.EncodeToString(data)
-
-	// Use smaller chunks to avoid command line length limits and shell issues
-	chunkSize := 64 * 1024 // 64KB chunks to be safe with command line limits
-	totalChunks := (len(encoded) + chunkSize - 1) / chunkSize
-
-	log.Infof("Uploading file %s to %s in %d chunks", localPath, remotePath, totalChunks)
-
-	// First, ensure the remote directory exists
-	remoteDir := filepath.Dir(remotePath)
-	createDirCmd := fmt.Sprintf("sudo mkdir -p %s", remoteDir)
-	if _, err := sshRunner.RunCommand(nodeName, createDirCmd); err != nil {
-		return fmt.Errorf("failed to create remote directory %s: %w", remoteDir, err)
-	}
-
-	// Create the remote file and upload in chunks
-	for i := 0; i < totalChunks; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-
-		chunk := encoded[start:end]
-		var cmd string
-
-		if i == 0 {
-			// First chunk - create file using here-document to avoid quote issues
-			cmd = fmt.Sprintf("base64 -d <<'EOF' | sudo tee %s > /dev/null\n%s\nEOF", remotePath, chunk)
-		} else {
-			// Subsequent chunks - append to file using here-document to avoid quote issues
-			cmd = fmt.Sprintf("base64 -d <<'EOF' | sudo tee -a %s > /dev/null\n%s\nEOF", remotePath, chunk)
-		}
-
-		if _, err := sshRunner.RunCommand(nodeName, cmd); err != nil {
-			return fmt.Errorf("failed to upload chunk %d: %w", i+1, err)
-		}
-
-		if totalChunks > 1 {
-			log.Infof("Uploaded chunk %d/%d", i+1, totalChunks)
-		}
-	}
 
 	return nil
 }
 
 // CleanupOldPackages removes old cached packages to free up space
 func (m *PackageManager) CleanupOldPackages(maxAge time.Duration) error {
-	log.Infof("Cleaning up packages older than %v", maxAge)
+	log.Debugf("Cleaning up packages older than %v", maxAge)
 
 	cutoff := time.Now().Add(-maxAge)
 	var toDelete []int
@@ -516,7 +333,7 @@ func (m *PackageManager) CleanupOldPackages(maxAge time.Duration) error {
 				log.Errorf("Failed to remove package file %s: %v", packageInfo.LocalPath, err)
 			} else {
 				key := PackageKey(packageInfo.Name, packageInfo.Version, packageInfo.Architecture)
-				log.Infof("Removed old package: %s", key)
+				log.Debugf("Removed old package: %s", key)
 				toDelete = append(toDelete, i)
 			}
 		}
@@ -533,7 +350,7 @@ func (m *PackageManager) CleanupOldPackages(maxAge time.Duration) error {
 		}
 	}
 
-	log.Infof("Cleanup completed, removed %d packages", len(toDelete))
+	log.Debugf("Cleanup completed, removed %d packages", len(toDelete))
 	return nil
 }
 

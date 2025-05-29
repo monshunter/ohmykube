@@ -60,7 +60,7 @@ func checkSocketVmnetDaemon() error {
 	// socket_vmnet is primarily needed on macOS for Lima shared networking
 	// On other platforms, this check may not be as critical
 	if runtime.GOOS != "darwin" {
-		log.Infof("socket_vmnet check skipped on %s (primarily needed on macOS)", runtime.GOOS)
+		log.Debugf("socket_vmnet check skipped on %s (primarily needed on macOS)", runtime.GOOS)
 		return nil
 	}
 
@@ -71,8 +71,8 @@ func checkSocketVmnetDaemon() error {
 	}
 
 	if !isRunning {
-		log.Errorf(`Daemon check failed: socket_vmnet daemon is not running. 
-			Lima shared network requires socket_vmnet daemon to be running. 
+		log.Errorf(`Daemon check failed: socket_vmnet daemon is not running.
+			Lima shared network requires socket_vmnet daemon to be running.
 			Please install and start socket_vmnet:
 			Refer to https://lima-vm.io/docs/config/network/vmnet/ for more information.`)
 		return fmt.Errorf("socket_vmnet daemon is not running")

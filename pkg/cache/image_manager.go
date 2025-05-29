@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -176,22 +175,22 @@ func (m *ImageManager) EnsureImages(ctx context.Context, source ImageSource, ssh
 
 	// Determine optimal strategy using consistent tool preference (local → controller → target)
 	strategy := m.toolDetector.DetermineOptimalStrategy(m.availability, m.config)
-	log.Infof("Using %s strategy for image management", strategy.String())
+	log.Debugf("Using %s strategy for image management", strategy.String())
 
 	// Check if the selected strategy can handle this specific source, if not, find a fallback
 	if !m.toolDetector.CanStrategyHandleSource(strategy, source, m.availability) {
-		log.Infof("Primary strategy %s cannot handle %s source, finding fallback...", strategy.String(), source.Type)
+		log.Debugf("Primary strategy %s cannot handle %s source, finding fallback...", strategy.String(), source.Type)
 		strategy = m.toolDetector.DetermineOptimalStrategyForSource(source, m.availability, m.config)
-		log.Infof("Using fallback strategy %s for %s source", strategy.String(), source.Type)
+		log.Debugf("Using fallback strategy %s for %s source", strategy.String(), source.Type)
 	}
 
 	// Discover required images for this architecture
-	images, err := m.discoverImages(ctx, source, arch, strategy, sshRunner, controllerNode)
+	images, err := m.discoverImages(ctx, source, strategy, sshRunner, controllerNode)
 	if err != nil {
 		return fmt.Errorf("failed to discover required images: %w", err)
 	}
 
-	log.Infof("Discovered %d required images for %s on %s", len(images), source.Type, arch)
+	log.Debugf("Discovered %d required images for %s on %s", len(images), source.Type, arch)
 
 	// Ensure each image is cached and available
 	for _, image := range images {
@@ -219,7 +218,7 @@ func (m *ImageManager) EnsureImage(ctx context.Context, image string, sshRunner 
 
 	// Parse image reference
 	ref := ParseImageReference(image, arch)
-	log.Infof("Ensuring image %s is available for architecture %s on node %s", ref.String(), arch, nodeName)
+	log.Debugf("Ensuring image %s is available for architecture %s on node %s", ref.String(), arch, nodeName)
 
 	// Check if image is already cached for this specific architecture
 	cacheKey := ref.CacheKey()
@@ -227,9 +226,9 @@ func (m *ImageManager) EnsureImage(ctx context.Context, image string, sshRunner 
 		// Verify the cached image is for the correct architecture
 		imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
 		if imageInfo != nil && imageInfo.Reference.Arch == arch {
-			log.Infof("Image %s is already cached locally for architecture %s", ref.String(), arch)
+			log.Debugf("Image %s is already cached locally for architecture %s", ref.String(), arch)
 		} else {
-			log.Infof("Image %s cached for different architecture (%s), need to cache for %s", ref.String(), imageInfo.Reference.Arch, arch)
+			log.Debugf("Image %s cached for different architecture (%s), need to cache for %s", ref.String(), imageInfo.Reference.Arch, arch)
 			// Remove the incorrectly cached image and re-cache for correct architecture
 			m.imageIndex.removeImageByName(cacheKey)
 			m.saveIndex()
@@ -286,15 +285,6 @@ func (m *ImageManager) IsImageCached(cacheKey string) bool {
 	return true
 }
 
-// GetLocalImagePath returns the local path of a cached image
-func (m *ImageManager) GetLocalImagePath(cacheKey string) (string, error) {
-	imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
-	if imageInfo == nil {
-		return "", fmt.Errorf("image %s not found in cache", cacheKey)
-	}
-	return imageInfo.LocalPath, nil
-}
-
 // getNodeArchitecture determines the architecture of a node
 func (m *ImageManager) getNodeArchitecture(ctx context.Context, sshRunner interfaces.SSHRunner, nodeName string) (string, error) {
 	m.lock.RLock()
@@ -328,7 +318,7 @@ func (m *ImageManager) getNodeArchitecture(ctx context.Context, sshRunner interf
 
 // pullAndCacheImageOnController pulls an image on controller node and downloads it to local cache
 func (m *ImageManager) pullAndCacheImageOnController(ctx context.Context, ref ImageReference, sshRunner interfaces.SSHRunner, controllerNode string) error {
-	log.Infof("Pulling and caching image: %s for %s on controller node", ref.String(), ref.Arch)
+	log.Debugf("Pulling and caching image: %s for %s on controller node", ref.String(), ref.Arch)
 
 	// Normalized filename for cache storage
 	normalizedName := ref.NormalizedName()
@@ -389,27 +379,27 @@ fi
 `, ref.String(), ref.Arch, remotePath)
 
 	// Execute script on controller node
-	log.Infof("Executing image pull and save script on controller node...")
+	log.Debugf("Executing image pull and save script on controller node...")
 	if _, err := sshRunner.RunCommand(controllerNode, script); err != nil {
 		return fmt.Errorf("failed to pull and save image on controller node: %w", err)
 	}
-	log.Infof("Image pull and save completed on controller node")
+	log.Debugf("Image pull and save completed on controller node")
 
 	// Verify the remote file exists and get its size before downloading
-	log.Infof("Verifying remote file exists: %s", remotePath)
+	log.Debugf("Verifying remote file exists: %s", remotePath)
 	checkCmd := fmt.Sprintf("ls -la %s && stat -c%%s %s", remotePath, remotePath)
 	output, err := sshRunner.RunCommand(controllerNode, checkCmd)
 	if err != nil {
 		return fmt.Errorf("failed to verify remote file exists: %w", err)
 	}
-	log.Infof("Remote file verification: %s", strings.TrimSpace(output))
+	log.Debugf("Remote file verification: %s", strings.TrimSpace(output))
 
 	// Download the image file from controller node to local cache
-	log.Infof("Downloading image file from controller node: %s -> %s", remotePath, localPath)
+	log.Debugf("Downloading image file from controller node: %s -> %s", remotePath, localPath)
 	if err := sshRunner.DownloadFile(controllerNode, remotePath, localPath); err != nil {
 		return fmt.Errorf("failed to download image from controller node: %w", err)
 	}
-	log.Infof("Image file download completed")
+	log.Debugf("Image file download completed")
 
 	// Clean up remote file
 	cleanupCmd := fmt.Sprintf("rm -f %s", remotePath)
@@ -418,13 +408,13 @@ fi
 	}
 
 	// Get file size and verify download
-	log.Infof("Verifying downloaded file: %s", localPath)
+	log.Debugf("Verifying downloaded file: %s", localPath)
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
 		return fmt.Errorf("failed to get image file size: %w", err)
 	}
 	fileSize := fileInfo.Size()
-	log.Infof("Downloaded file size: %s", utils.FormatSize(fileSize))
+	log.Debugf("Downloaded file: name=%s, size=%s", fileInfo.Name(), utils.FormatSize(fileSize))
 
 	// Warn if file size seems too small
 	if fileSize < 100*1024 {
@@ -432,7 +422,7 @@ fi
 	}
 
 	// Update the index
-	log.Infof("Updating image index for %s", ref.String())
+	log.Debugf("Updating image index for %s", ref.String())
 	cacheKey := ref.CacheKey()
 	m.imageIndex.updateOrAddImage(cacheKey, ImageInfo{
 		Reference:     ref,
@@ -445,12 +435,12 @@ fi
 	})
 
 	// Save the updated index
-	log.Infof("Saving updated image index...")
+	log.Debugf("Saving updated image index...")
 	if err := m.saveIndex(); err != nil {
 		return fmt.Errorf("failed to save image index: %w", err)
 	}
-	log.Infof("Image index saved successfully")
-	log.Infof("Successfully cached image %s for %s (%s)", ref.String(), ref.Arch, utils.FormatSize(fileSize))
+	log.Debugf("Image index saved successfully")
+	log.Debugf("Successfully cached image %s for %s (%s)", ref.String(), ref.Arch, utils.FormatSize(fileSize))
 	return nil
 }
 
@@ -458,12 +448,12 @@ fi
 func (m *ImageManager) UploadImageToNode(ctx context.Context, ref ImageReference, sshRunner interfaces.SSHRunner, nodeName string) error {
 	if m.cachedRecorder != nil {
 		if m.cachedRecorder.isMarkedCached(ref.CacheKey(), nodeName) {
-			log.Infof("Image %s already cached on node %s, skipping upload", ref.String(), nodeName)
+			log.Debugf("Image %s already cached on node %s, skipping upload", ref.String(), nodeName)
 			return nil
 		}
 	}
 
-	log.Infof("Uploading image %s (linux/%s) to node %s", ref.String(), ref.Arch, nodeName)
+	log.Debugf("Uploading image %s (linux/%s) to node %s", ref.String(), ref.Arch, nodeName)
 
 	cacheKey := ref.CacheKey()
 	imageInfo, _ := m.imageIndex.findImageByName(cacheKey)
@@ -496,7 +486,7 @@ func (m *ImageManager) UploadImageToNode(ctx context.Context, ref ImageReference
 	checkImageCmd := fmt.Sprintf("sudo ctr -n=k8s.io images ls name==%s | grep 'linux/%s' || true", ref.String(), ref.Arch)
 	output, err := sshRunner.RunCommand(nodeName, checkImageCmd)
 	if err == nil && strings.Contains(output, ref.String()) && strings.Contains(output, fmt.Sprintf("linux/%s", ref.Arch)) {
-		log.Infof("Image %s (linux/%s) already loaded on node %s", ref.String(), ref.Arch, nodeName)
+		log.Debugf("Image %s (linux/%s) already loaded on node %s", ref.String(), ref.Arch, nodeName)
 		return nil
 	}
 
@@ -577,56 +567,8 @@ fi
 		log.Warningf("Failed to update image index: %v", err)
 	}
 
-	log.Infof("Successfully uploaded and loaded image %s on node %s", ref.String(), nodeName)
+	log.Debugf("Successfully uploaded and loaded image %s on node %s", ref.String(), nodeName)
 	return nil
-}
-
-// CleanupOldImages removes images older than the specified duration
-func (m *ImageManager) CleanupOldImages(maxAge time.Duration) error {
-	log.Infof("Cleaning up images older than %v", maxAge)
-
-	cutoff := time.Now().Add(-maxAge)
-	var toDelete []string
-
-	for _, imageInfo := range m.imageIndex.Images {
-		if imageInfo.LastAccessed.Before(cutoff) {
-			toDelete = append(toDelete, imageInfo.Name)
-		}
-	}
-
-	for _, imageName := range toDelete {
-		imageInfo, _ := m.imageIndex.findImageByName(imageName)
-		if imageInfo != nil {
-			log.Infof("Removing old image: %s", imageInfo.Reference.String())
-
-			// Remove file
-			if err := os.Remove(imageInfo.LocalPath); err != nil && !os.IsNotExist(err) {
-				log.Warningf("Failed to remove image file %s: %v", imageInfo.LocalPath, err)
-			}
-
-			// Remove from index
-			m.imageIndex.removeImageByName(imageName)
-		}
-	}
-
-	if len(toDelete) > 0 {
-		log.Infof("Cleaned up %d old images", len(toDelete))
-		return m.saveIndex()
-	}
-
-	return nil
-}
-
-// GetCacheStats returns statistics about the image cache
-func (m *ImageManager) GetCacheStats() (int, int64) {
-	var totalSize int64
-	count := len(m.imageIndex.Images)
-
-	for _, imageInfo := range m.imageIndex.Images {
-		totalSize += imageInfo.Size
-	}
-
-	return count, totalSize
 }
 
 // initializeToolAvailability detects and caches tool availability
@@ -652,33 +594,21 @@ func (m *ImageManager) initializeToolAvailability(ctx context.Context, sshRunner
 }
 
 // discoverImages discovers required images using the appropriate strategy
-func (m *ImageManager) discoverImages(ctx context.Context, source ImageSource, arch string, strategy ImageManagementStrategy, sshRunner interfaces.SSHRunner, controllerNode string) ([]string, error) {
+func (m *ImageManager) discoverImages(ctx context.Context, source ImageSource, strategy ImageManagementStrategy, sshRunner interfaces.SSHRunner, controllerNode string) ([]string, error) {
 	switch strategy {
-	case ImageManagementLocal:
-		// Use local tools for discovery
-		return m.discoverImagesLocally(ctx, source, arch)
 	case ImageManagementController, ImageManagementTarget:
 		// Use controller node for discovery
-		return m.imageDiscovery.GetRequiredImagesForArch(ctx, source, arch, sshRunner, controllerNode)
+		return m.imageDiscovery.GetRequiredImages(ctx, source, sshRunner, controllerNode)
 	default:
 		return nil, fmt.Errorf("unsupported image management strategy: %s", strategy.String())
 	}
 }
 
-// discoverImagesLocally discovers images using local tools
-func (m *ImageManager) discoverImagesLocally(ctx context.Context, source ImageSource, arch string) ([]string, error) {
-	// Create a local image discovery instance that uses local tools
-	localDiscovery := NewLocalImageDiscovery()
-	return localDiscovery.GetRequiredImagesForArch(ctx, source, arch)
-}
-
 // pullAndCacheImageWithStrategy pulls and caches an image using the specified strategy
 func (m *ImageManager) pullAndCacheImageWithStrategy(ctx context.Context, ref ImageReference, strategy ImageManagementStrategy, sshRunner interfaces.SSHRunner, controllerNode string) error {
-	log.Infof("Pulling and caching image %s using %s strategy", ref.String(), strategy.String())
+	log.Debugf("Pulling and caching image %s using %s strategy", ref.String(), strategy.String())
 
 	switch strategy {
-	case ImageManagementLocal:
-		return m.pullAndCacheImageLocally(ctx, ref)
 	case ImageManagementController:
 		return m.pullAndCacheImageOnController(ctx, ref, sshRunner, controllerNode)
 	case ImageManagementTarget:
@@ -688,67 +618,6 @@ func (m *ImageManager) pullAndCacheImageWithStrategy(ctx context.Context, ref Im
 	default:
 		return fmt.Errorf("unsupported image management strategy: %s", strategy.String())
 	}
-}
-
-// pullAndCacheImageLocally pulls an image locally and caches it
-func (m *ImageManager) pullAndCacheImageLocally(ctx context.Context, ref ImageReference) error {
-	log.Infof("Pulling and caching image locally: %s for %s", ref.String(), ref.Arch)
-
-	// Normalized filename for cache storage
-	normalizedName := ref.NormalizedName()
-	outputPath := filepath.Join(m.cacheDir, normalizedName+".tar")
-
-	// Use nerdctl for reliable container operations
-	platform := fmt.Sprintf("linux/%s", ref.Arch)
-
-	// Check if nerdctl is available
-	if _, err := exec.LookPath("nerdctl"); err != nil {
-		return fmt.Errorf("nerdctl not found. nerdctl is required for reliable multi-architecture image handling: %w", err)
-	}
-
-	// Build nerdctl pull command
-	pullCmd := exec.CommandContext(ctx, "nerdctl", "--namespace=k8s.io", "pull", "--platform", platform, ref.String())
-
-	pullCmd.Stdout = os.Stdout
-	pullCmd.Stderr = os.Stderr
-	if err := pullCmd.Run(); err != nil {
-		return fmt.Errorf("failed to pull image locally using nerdctl: %w", err)
-	}
-
-	// Build nerdctl save command
-	saveCmd := exec.CommandContext(ctx, "nerdctl", "--namespace=k8s.io", "save", "--platform", platform, "-o", outputPath, ref.String())
-
-	saveCmd.Stdout = os.Stdout
-	saveCmd.Stderr = os.Stderr
-	if err := saveCmd.Run(); err != nil {
-		return fmt.Errorf("failed to save image locally using nerdctl: %w", err)
-	}
-
-	// Get file size
-	fileInfo, err := os.Stat(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to get image file size: %w", err)
-	}
-	fileSize := fileInfo.Size()
-
-	// Update the index
-	m.imageIndex.updateOrAddImage(ref.CacheKey(), ImageInfo{
-		Reference:     ref,
-		LocalPath:     outputPath,
-		Size:          fileSize,
-		LastAccessed:  time.Now(),
-		LastUpdated:   time.Now(),
-		OriginalSize:  fileSize, // Same as size since no additional compression
-		Architectures: []string{ref.Arch},
-	})
-
-	// Save the updated index
-	if err := m.saveIndex(); err != nil {
-		return fmt.Errorf("failed to save image index: %w", err)
-	}
-
-	log.Infof("Successfully cached image locally %s for %s (%s)", ref.String(), ref.Arch, utils.FormatSize(fileSize))
-	return nil
 }
 
 // ReCacheClusterImages caches all cluster images to the target node for preheating
@@ -783,11 +652,11 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 
 	imageNames := m.imageRecorder.GetImageNames()
 	if len(imageNames) == 0 {
-		log.Info("No cluster images to preheat")
+		log.Debug("No cluster images to preheat")
 		return nil
 	}
 
-	log.Infof("Preheating %d cluster images to node %s", len(imageNames), nodeName)
+	log.Debugf("Preheating %d cluster images to node %s", len(imageNames), nodeName)
 
 	// Create image manager for caching
 	ctx := context.Background()
@@ -804,13 +673,13 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 			continue
 		}
 		imageName = image.Reference.Original
-		log.Infof("Preheating image: %s", imageName)
+		log.Debugf("Preheating image: %s", imageName)
 		if err := m.EnsureImage(ctx, imageName, sshRunner, nodeName, controllerNode); err != nil {
 			log.Warningf("Failed to preheat image %s: %v", imageName, err)
 			// Continue with other images even if one fails
 		}
 	}
 
-	log.Infof("Completed cluster image preheating for node %s", nodeName)
+	log.Debugf("Completed cluster image preheating for node %s", nodeName)
 	return nil
 }

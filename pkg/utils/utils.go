@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/monshunter/ohmykube/pkg/log"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,7 +69,6 @@ func ExtractImagesWithParser(yamlContent string) ([]string, error) {
 		result = append(result, img)
 	}
 
-	log.Infof("Successfully extracted %d unique images from %d valid YAML documents", len(result), validDocCount)
 	return result, nil
 }
 

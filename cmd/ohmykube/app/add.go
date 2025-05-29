@@ -67,15 +67,13 @@ var addCmd = &cobra.Command{
 		defer manager.Close()
 		// Set environment initialization options
 		manager.SetInitOptions(initOptions)
-		for range count {
-			// Add node (InitOptions is already initialized in NewManager with DefaultInitOptions)
-			if err := manager.AddWorkerNode(addNodeCPU, addNodeMemory, addNodeDisk); err != nil {
-				log.Errorf("Failed to add node: %v", err)
-				log.Errorf(`A failure has occurred.
+		// Add node (InitOptions is already initialized in NewManager with DefaultInitOptions)
+		if err := manager.AddWorkerNodes(addNodeCPU, addNodeMemory, addNodeDisk, count); err != nil {
+			log.Errorf("Failed to add node: %v", err)
+			log.Errorf(`A failure has occurred.
 			 You can either re-execute "ohmykube up" after the problem is fixed or directly. 
 			 The process will resume from where it failed.`)
-				return fmt.Errorf("failed to add node: %w", err)
-			}
+			return fmt.Errorf("failed to add node: %w", err)
 		}
 		return nil
 	},

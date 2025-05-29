@@ -51,11 +51,11 @@ echo "br_netfilter" | sudo tee /etc/modules-load.d/br_netfilter.conf
 	podCIDR, err := clusterInfo.GetPodCIDR()
 	if err == nil && podCIDR != "" {
 		f.PodCIDR = podCIDR
-		log.Infof("Retrieved cluster Pod CIDR: %s", f.PodCIDR)
+		log.Debugf("Retrieved cluster Pod CIDR: %s", f.PodCIDR)
 	}
 
 	// Add official Flannel Helm repository
-	log.Info("Adding official Flannel Helm repository...")
+	log.Debug("Adding official Flannel Helm repository...")
 	addRepoCmd := `
 helm repo add flannel https://flannel-io.github.io/flannel/
 helm repo update
@@ -66,7 +66,7 @@ helm repo update
 	}
 
 	// Install Flannel using Helm with minimal configuration
-	log.Info("Installing Flannel using Helm...")
+	log.Debug("Installing Flannel using Helm...")
 	installCmd := fmt.Sprintf(`
 # Needs manual creation of namespace to avoid helm error
 kubectl create ns kube-flannel
@@ -86,14 +86,14 @@ helm install flannel flannel/flannel \
 	}
 
 	// Wait for Flannel to be ready
-	log.Info("Waiting for Flannel to become ready...")
+	log.Debug("Waiting for Flannel to become ready...")
 	waitCmd := `kubectl -n kube-flannel wait --for=condition=ready pod -l app=flannel --timeout=300s`
 	_, err = f.sshRunner.RunCommand(f.controllerNode, waitCmd)
 	if err != nil {
 		log.Warningf("Timed out waiting for Flannel to be ready, but will continue: %v", err)
 	}
 
-	log.Info("Flannel installation completed successfully")
+	log.Debug("Flannel installation completed successfully")
 	return nil
 }
 
@@ -112,7 +112,7 @@ func (f *FlannelInstaller) cacheImages() error {
 	ctx := context.Background()
 
 	// First, ensure the Helm repository is added with the correct name
-	log.Info("Adding Flannel Helm repository for image caching...")
+	log.Debug("Adding Flannel Helm repository for image caching...")
 	addRepoCmd := `
 helm repo add flannel https://flannel-io.github.io/flannel/ || true
 helm repo update

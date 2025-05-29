@@ -423,9 +423,6 @@ const (
 	// ImageManagementAuto automatically detects the best strategy based on available tools
 	ImageManagementAuto ImageManagementStrategy = iota
 
-	// ImageManagementLocal prefers local machine operations (requires nerdctl locally)
-	ImageManagementLocal
-
 	// ImageManagementController prefers controller node operations (uses tools on controller)
 	ImageManagementController
 
@@ -438,8 +435,6 @@ func (s ImageManagementStrategy) String() string {
 	switch s {
 	case ImageManagementAuto:
 		return "auto"
-	case ImageManagementLocal:
-		return "local"
 	case ImageManagementController:
 		return "controller"
 	case ImageManagementTarget:
@@ -451,51 +446,42 @@ func (s ImageManagementStrategy) String() string {
 
 // ImageManagementConfig configures the image management strategy
 type ImageManagementConfig struct {
-	Strategy        ImageManagementStrategy   // Primary strategy
-	FallbackOrder   []ImageManagementStrategy // Ordered list of fallback strategies
-	LocalToolsCheck bool                      // Whether to check for local tools availability
-	ForceStrategy   bool                      // Whether to force the strategy without fallbacks
+	Strategy      ImageManagementStrategy   // Primary strategy
+	FallbackOrder []ImageManagementStrategy // Ordered list of fallback strategies
+	ForceStrategy bool                      // Whether to force the strategy without fallbacks
 }
 
 // DefaultImageManagementConfig returns the default image management configuration
 func DefaultImageManagementConfig() ImageManagementConfig {
 	return ImageManagementConfig{
-		Strategy:        ImageManagementAuto,
-		FallbackOrder:   []ImageManagementStrategy{ImageManagementLocal, ImageManagementController, ImageManagementTarget},
-		LocalToolsCheck: true,
-		ForceStrategy:   false,
+		Strategy:      ImageManagementAuto,
+		FallbackOrder: []ImageManagementStrategy{ImageManagementController, ImageManagementTarget},
+		ForceStrategy: false,
 	}
 }
 
 // LocalPreferredImageManagementConfig returns a configuration that prefers local operations
 func LocalPreferredImageManagementConfig() ImageManagementConfig {
 	return ImageManagementConfig{
-		Strategy:        ImageManagementLocal,
-		FallbackOrder:   []ImageManagementStrategy{ImageManagementController, ImageManagementTarget},
-		LocalToolsCheck: true,
-		ForceStrategy:   false,
+		Strategy:      ImageManagementController,
+		FallbackOrder: []ImageManagementStrategy{ImageManagementController, ImageManagementTarget},
+		ForceStrategy: false,
 	}
 }
 
 // ControllerOnlyImageManagementConfig returns a configuration that only uses controller node
 func ControllerOnlyImageManagementConfig() ImageManagementConfig {
 	return ImageManagementConfig{
-		Strategy:        ImageManagementController,
-		FallbackOrder:   []ImageManagementStrategy{},
-		LocalToolsCheck: false,
-		ForceStrategy:   true,
+		Strategy:      ImageManagementController,
+		FallbackOrder: []ImageManagementStrategy{},
+		ForceStrategy: true,
 	}
 }
 
 // ToolAvailability tracks which tools are available where
 type ToolAvailability struct {
-	LocalNerdctl bool // nerdctl available locally
-	LocalHelm    bool // helm available locally
-	LocalKubeadm bool // kubeadm available locally
-	LocalCurl    bool // curl available locally
-
-	ControllerNerdctl bool // nerdctl available on controller
-	ControllerHelm    bool // helm available on controller
-	ControllerKubeadm bool // kubeadm available on controller
-	ControllerCurl    bool // curl available on controller
+	Nerdctl bool // nerdctl available on controller
+	Helm    bool // helm available on controller
+	Kubeadm bool // kubeadm available on controller
+	Curl    bool // curl available on controller
 }

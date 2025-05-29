@@ -36,7 +36,7 @@ func (r *RookInstaller) Install() error {
 	}
 
 	// Use Helm to install Rook-Ceph
-	log.Infof("Installing Rook-Ceph with Rook version %s and Ceph version %s...", r.RookVersion, r.CephVersion)
+	log.Debugf("Installing Rook-Ceph with Rook version %s and Ceph version %s...", r.RookVersion, r.CephVersion)
 	helmInstallCmd := `
 # Add Rook Helm repository
 helm repo add rook-release https://charts.rook.io/release
@@ -58,7 +58,7 @@ helm install --create-namespace --namespace rook-ceph rook-ceph-cluster \
 		return fmt.Errorf("failed to install Rook-Ceph CSI: %w", err)
 	}
 
-	log.Info("Rook-Ceph installation completed successfully")
+	log.Debugf("Rook-Ceph installation completed successfully")
 	return nil
 }
 

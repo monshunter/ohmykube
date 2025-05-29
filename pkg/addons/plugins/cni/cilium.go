@@ -92,7 +92,7 @@ helm repo update
 	}
 
 	// Install Cilium
-	log.Info("Installing Cilium...")
+	log.Debug("Installing Cilium...")
 	installCmd := fmt.Sprintf(`
 helm install cilium cilium/cilium --version %s \
   --namespace kube-system \
@@ -110,7 +110,7 @@ helm install cilium cilium/cilium --version %s \
 	}
 
 	// Wait for Cilium to be ready
-	log.Info("Waiting for Cilium to become ready...")
+	log.Debug("Waiting for Cilium to become ready...")
 	_, err = c.sshRunner.RunCommand(c.controllerNode, `
 kubectl -n kube-system wait --for=condition=ready pod -l k8s-app=cilium --timeout=5m
 `)
@@ -118,7 +118,7 @@ kubectl -n kube-system wait --for=condition=ready pod -l k8s-app=cilium --timeou
 		return fmt.Errorf("timed out waiting for Cilium to be ready: %w", err)
 	}
 
-	log.Info("Cilium installation completed successfully")
+	log.Debug("Cilium installation completed successfully")
 	return nil
 }
 

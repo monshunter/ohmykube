@@ -19,6 +19,7 @@ type Phase string
 const (
 	PhasePending Phase = "Pending"
 	PhaseRunning Phase = "Running"
+	PhaseStopped Phase = "Stopped"
 	PhaseFailed  Phase = "Failed"
 	PhaseUnknown Phase = "Unknown"
 )
@@ -177,6 +178,42 @@ func (n *Node) HasCondition(conditionType ConditionType, status ConditionStatus)
 	return false
 }
 
+func (n *Node) SetPhase(phase Phase) {
+	n.Status.Phase = phase
+}
+
+func (n *Node) SetIP(ip string) {
+	n.Status.IP = ip
+}
+
+func (n *Node) SetIPv6(ipv6 string) {
+	n.Status.IPv6 = ipv6
+}
+
+func (n *Node) SetIPs(ips []string) {
+	n.Status.IPs = ips
+}
+
+func (n *Node) SetHostname(hostname string) {
+	n.Status.Hostname = hostname
+}
+
+func (n *Node) SetRelease(release string) {
+	n.Status.Release = release
+}
+
+func (n *Node) SetKernel(kernel string) {
+	n.Status.Kernel = kernel
+}
+
+func (n *Node) SetArch(arch string) {
+	n.Status.Arch = arch
+}
+
+func (n *Node) SetOS(os string) {
+	n.Status.OS = os
+}
+
 // SetClusterCondition sets or updates a condition in a cluster's status
 func (c *Cluster) SetCondition(conditionType ConditionType, status ConditionStatus, reason, message string) {
 	condition := NewCondition(conditionType, status, reason, message)
@@ -308,8 +345,7 @@ func NewCluster(config *Config) *Cluster {
 			K8sVersion: config.KubernetesVersion,
 			Launcher:   config.LauncherType,
 			ProxyMode:  config.ProxyMode,
-			Master:     nil,
-			Workers:    make([]*Node, len(config.Workers)),
+			Workers:    make([]*Node, 0),
 			CNI:        config.CNI,
 			CSI:        config.CSI,
 			LB:         config.LB,
@@ -318,20 +354,26 @@ func NewCluster(config *Config) *Cluster {
 			Phase: ClusterPhasePending,
 		},
 	}
-	cls.Spec.Master = NewNode(cls.GenMasterName(), RoleMaster, config.Master.CPU,
-		config.Master.Memory, config.Master.Disk)
-	for i := range config.Workers {
-		cls.Spec.Workers[i] = NewNode(cls.GenWorkerName(), RoleWorker, config.Workers[i].CPU,
-			config.Workers[i].Memory, config.Workers[i].Disk)
+	cls.Spec.Master = NewNode(cls.GenNodeName(RoleMaster), RoleMaster,
+		config.Master.CPU, config.Master.Memory, config.Master.Disk)
+	for _, worker := range config.Workers {
+		cls.Spec.Workers = append(cls.Spec.Workers, NewNode(cls.GenNodeName(RoleWorker),
+			RoleWorker, worker.CPU, worker.Memory, worker.Disk))
 	}
 	return cls
 }
 
 func (c *Cluster) GetMasterIP() string {
+	if c.Spec.Master == nil {
+		return ""
+	}
 	return c.Spec.Master.Status.IP
 }
 
 func (c *Cluster) GetMasterName() string {
+	if c.Spec.Master == nil {
+		return ""
+	}
 	return c.Spec.Master.Name
 }
 
@@ -373,6 +415,22 @@ func (c *Cluster) GetNodeByName(name string) *Node {
 	return nil
 }
 
+func (c *Cluster) GetNodeOrNew(name string, role string, cpu int, memory int, disk int) *Node {
+	node := c.GetNodeByName(name)
+	if node == nil {
+		if name == "" {
+			name = c.GenNodeName(role)
+		}
+		node = NewNode(name, role, cpu, memory, disk)
+		if role == RoleMaster {
+			c.SetMaster(node)
+		} else {
+			c.AddNode(node)
+		}
+	}
+	return node
+}
+
 func (c *Cluster) RemoveNode(name string) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -397,25 +455,25 @@ func (c *Cluster) SetMaster(node *Node) {
 	c.Spec.Master = node
 }
 
-func (c *Cluster) GenMasterName() string {
-	var nodeName string
-	for {
-		nodeName = fmt.Sprintf("%s-master-%s", c.Name, GetRandomString(6))
-		if c.GetNodeByName(nodeName) == nil {
-			break
-		}
+func (c *Cluster) SetPhase(phase ClusterPhase) {
+	c.Status.Phase = phase
+}
+
+func (c *Cluster) SetPhaseForNode(nodeName string, phase Phase) {
+	node := c.GetNodeByName(nodeName)
+	if node != nil {
+		node.SetPhase(phase)
 	}
-	return nodeName
 }
 
 func (c *Cluster) Prefix() string {
 	return fmt.Sprintf("%s-", c.Name)
 }
 
-func (c *Cluster) GenWorkerName() string {
+func (c *Cluster) GenNodeName(role string) string {
 	var nodeName string
 	for {
-		nodeName = fmt.Sprintf("%s-worker-%s", c.Name, GetRandomString(6))
+		nodeName = fmt.Sprintf("%s-%s-%s", c.Name, role, GetRandomString(6))
 		if c.GetNodeByName(nodeName) == nil {
 			break
 		}
