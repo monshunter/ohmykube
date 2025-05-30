@@ -6,8 +6,8 @@ import (
 	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/controller"
 	"github.com/monshunter/ohmykube/pkg/initializer"
-	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
 	"github.com/monshunter/ohmykube/pkg/log"
+	myProvider "github.com/monshunter/ohmykube/pkg/provider"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
@@ -45,10 +45,24 @@ var upCmd = &cobra.Command{
 				log.Errorf("Failed to load cluster information: %v", err)
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}
-			launcher = cls.Spec.Launcher
-			proxyMode = cls.Spec.ProxyMode
-			k8sVersion = cls.Spec.K8sVersion
-			lb = cls.Spec.LB
+
+			// Validate the loaded cluster configuration
+			if !isValidClusterConfig(cls) {
+				log.Warningf("Found invalid cluster configuration for '%s', removing corrupted configuration...", clusterName)
+				if removeErr := config.RemoveCluster(clusterName); removeErr != nil {
+					log.Errorf("Failed to remove corrupted cluster configuration: %v", removeErr)
+				} else {
+					log.Infof("Corrupted cluster configuration removed. Starting fresh cluster creation.")
+				}
+				cls = nil // Reset to create a new cluster
+			} else {
+				// Use valid stored configuration
+				provider = cls.Spec.Provider
+				proxyMode = cls.Spec.ProxyMode
+				k8sVersion = cls.Spec.K8sVersion
+				lb = cls.Spec.LB
+				log.Debugf("Using existing valid cluster configuration")
+			}
 		}
 
 		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
@@ -56,9 +70,9 @@ var upCmd = &cobra.Command{
 			return err
 		}
 
-		launcherType := myLauncher.LauncherType(launcher)
-		if !launcherType.IsValid() {
-			return fmt.Errorf("invalid launcher type: %s, currently only 'limactl' is supported", launcherType)
+		providerType := myProvider.ProviderType(provider)
+		if !providerType.IsValid() {
+			return fmt.Errorf("invalid provider type: %s, currently only 'lima' is supported", providerType)
 		}
 		// Create environment initialization options
 		// Create cluster configuration
@@ -76,8 +90,8 @@ var upCmd = &cobra.Command{
 				Disk:   workerDisk,
 			})
 		cfg.SetKubernetesVersion(k8sVersion)
-		cfg.SetLauncherType(launcherType.String())
-		cfg.SetTemplate(limaTemplate)
+		cfg.SetProvider(providerType.String())
+		cfg.SetTemplate(template)
 		cfg.SetCNIType(cni)
 		cfg.SetUpdateSystem(updateSystem)
 		cfg.SetLBType(lb)
@@ -116,6 +130,39 @@ var upCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// isValidClusterConfig validates that a cluster configuration is complete and valid
+func isValidClusterConfig(cls *config.Cluster) bool {
+	if cls == nil {
+		return false
+	}
+
+	// Check essential fields that must not be empty
+	if cls.Spec.K8sVersion == "" {
+		log.Debugf("Invalid cluster config: K8sVersion is empty")
+		return false
+	}
+
+	if cls.Spec.Provider == "" {
+		log.Debugf("Invalid cluster config: Provider is empty")
+		return false
+	}
+
+	if cls.Name == "" {
+		log.Debugf("Invalid cluster config: Name is empty")
+		return false
+	}
+
+	// Check if provider type is valid
+	providerType := myProvider.ProviderType(cls.Spec.Provider)
+	if !providerType.IsValid() {
+		log.Debugf("Invalid cluster config: Provider type is invalid: %s", cls.Spec.Provider)
+		return false
+	}
+
+	log.Debugf("Cluster configuration is valid")
+	return true
 }
 
 func init() {

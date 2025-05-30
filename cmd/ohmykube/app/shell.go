@@ -38,7 +38,7 @@ var shellCmd = &cobra.Command{
 			Master: config.Resource{},
 		}
 		config.SetParallel(parallel)
-		config.SetLauncherType(cls.Spec.Launcher)
+		config.SetProvider(cls.Spec.Provider)
 
 		// Create cluster manager
 		manager, err := controller.NewManager(config, sshConfig, cls, nil)

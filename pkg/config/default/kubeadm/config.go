@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,7 +42,7 @@ type Config struct {
 // NewConfig creates a new configuration instance with default values
 func NewConfig(version string, proxyMode string, advertiseAddress string) *Config {
 	return &Config{
-		InitConfig:      loadInitConfig(advertiseAddress),
+		InitConfig:      loadInitConfig(advertiseAddress, version),
 		ClusterConfig:   loadClusterConfig(version),
 		KubeletConfig:   loadKubeletConfig(),
 		KubeProxyConfig: loadKubeProxyConfig(proxyMode),
@@ -276,4 +277,132 @@ func mergeMaps(base, overlay YAMLDocument) {
 		// Otherwise, just set the value
 		base[k] = v
 	}
+}
+
+// loadInitConfig loads the default InitConfiguration configuration
+func loadInitConfig(advertiseAddress string, k8sVersion string) YAMLDocument {
+	if k8sVersion == "" {
+		k8sVersion = "v1.33.0"
+	}
+	template := INIT_CONFIG_V1_BETA_4
+
+	if strings.TrimLeft(k8sVersion, "v") < "1.31.0" {
+		template = INIT_CONFIG_V1_BETA_3
+	}
+
+	yamlStr := fmt.Sprintf(template, advertiseAddress)
+	var doc YAMLDocument
+	yaml.Unmarshal([]byte(yamlStr), &doc)
+	return doc
+}
+
+// loadClusterConfig loads the default ClusterConfiguration configuration
+func loadClusterConfig(k8sVersion string) YAMLDocument {
+	if k8sVersion == "" {
+		k8sVersion = "v1.33.0"
+	}
+	template := CLUSTER_CONFIG_V1_BETA_4
+	ver := strings.TrimLeft(k8sVersion, "v")
+	if ver < "1.31.0" {
+		template = CLUSTER_CONFIG_V1_BETA_3
+	}
+	if ver < "1.25.0" {
+		template = CLUSTER_CONFIG_V1_BETA_3_124
+	}
+
+	yamlStr := fmt.Sprintf(template, k8sVersion)
+	var doc YAMLDocument
+	yaml.Unmarshal([]byte(yamlStr), &doc)
+	return doc
+}
+
+// loadKubeletConfig loads the default KubeletConfiguration configuration
+func loadKubeletConfig() YAMLDocument {
+	yamlStr := KUBELET_CONFIG_V1_BETA_1
+	var doc YAMLDocument
+	yaml.Unmarshal([]byte(yamlStr), &doc)
+	return doc
+}
+
+// loadKubeProxyConfig loads the default KubeProxyConfiguration configuration
+func loadKubeProxyConfig(proxyMode string) YAMLDocument {
+	template := KUBE_PROXY_CONFIG_V1_ALPHA_1
+	if proxyMode == "" {
+		proxyMode = "iptables"
+	}
+	yamlStr := fmt.Sprintf(template, proxyMode == "ipvs", proxyMode)
+	var doc YAMLDocument
+	yaml.Unmarshal([]byte(yamlStr), &doc)
+	return doc
+}
+
+// GenerateKubeadmConfig generates kubeadm config and saves it to a temporary file
+func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode string, advertiseAddress string) (string, error) {
+	// Create base config
+	config := NewConfig(k8sVersion, proxyMode, advertiseAddress)
+
+	// If custom config exists, load and merge it
+	if customConfigPath != "" {
+		customConfig, err := LoadFromFile(customConfigPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to load custom config: %w", err)
+		}
+
+		config = config.MergeWith(customConfig)
+	}
+
+	// Create temporary file
+	tmpfile, err := os.CreateTemp("", "kubeadm-config-*.yaml")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary config file: %w", err)
+	}
+
+	// Convert config to YAML and write to temporary file
+	yamlData, err := config.ToYAML()
+	if err != nil {
+		os.Remove(tmpfile.Name())
+		return "", fmt.Errorf("failed to generate YAML config: %w", err)
+	}
+
+	if _, err := tmpfile.Write(yamlData); err != nil {
+		os.Remove(tmpfile.Name())
+		return "", fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	if err := tmpfile.Close(); err != nil {
+		os.Remove(tmpfile.Name())
+		return "", fmt.Errorf("failed to close config file: %w", err)
+	}
+
+	return tmpfile.Name(), nil
+}
+
+// LoadAndMergeConfigs loads and merges multiple config files
+func LoadAndMergeConfigs(configPaths []string) (*Config, error) {
+	if len(configPaths) == 0 {
+		return NewConfig("", "", ""), nil
+	}
+
+	// Load first config as base
+	baseConfig, err := LoadFromFile(configPaths[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to load base config file %s: %w", configPaths[0], err)
+	}
+
+	// Merge remaining configs
+	for i := 1; i < len(configPaths); i++ {
+		overlayConfig, err := LoadFromFile(configPaths[i])
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config file %s: %w", configPaths[i], err)
+		}
+
+		baseConfig = baseConfig.MergeWith(overlayConfig)
+	}
+
+	return baseConfig, nil
+}
+
+// GetDefaultConfig gets the default kubeadm config
+func GetDefaultConfig() *Config {
+	return NewConfig("", "", "")
 }

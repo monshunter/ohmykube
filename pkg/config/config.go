@@ -14,12 +14,12 @@ type Resource struct {
 // Config stores cluster configuration
 type Config struct {
 	Parallel          int
-	LauncherType      string
-	Template          string
+	Provider          string // lima, alicloud, gke, aws, tke
+	Template          string // template or file
 	Name              string
 	Master            Resource
 	Workers           []Resource
-	KubernetesVersion string
+	KubernetesVersion string // k8s version
 	ProxyMode         string
 	CNI               string
 	CSI               string
@@ -48,8 +48,8 @@ func (c *Config) SetParallel(parallel int) {
 	c.Parallel = parallel
 }
 
-func (c *Config) SetLauncherType(launcherType string) {
-	c.LauncherType = launcherType
+func (c *Config) SetProvider(provider string) {
+	c.Provider = provider
 }
 
 func (c *Config) SetKubernetesVersion(k8sVersion string) {

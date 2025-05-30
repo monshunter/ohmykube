@@ -343,7 +343,7 @@ type Cluster struct {
 
 type ClusterSpec struct {
 	K8sVersion string  `yaml:"k8sVersion,omitempty"`
-	Launcher   string  `yaml:"launcher,omitempty"`
+	Provider   string  `yaml:"provider,omitempty"`
 	ProxyMode  string  `yaml:"proxyMode,omitempty"`
 	Master     *Node   `yaml:"master,omitempty"`
 	Workers    []*Node `yaml:"workers,omitempty"`
@@ -383,7 +383,7 @@ func NewCluster(config *Config) *Cluster {
 		},
 		Spec: ClusterSpec{
 			K8sVersion: config.KubernetesVersion,
-			Launcher:   config.LauncherType,
+			Provider:   config.Provider,
 			ProxyMode:  config.ProxyMode,
 			Workers:    make([]*Node, 0),
 			CNI:        config.CNI,

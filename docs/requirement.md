@@ -339,8 +339,8 @@ ohmykube registry [subcommand] [flags]
 - Component coordination
 - State management
 
-##### 3. Launcher Abstraction
-**Location**: `pkg/launcher/`
+##### 3. Provider Abstraction
+**Location**: `pkg/provider/`
 **Current**: Lima support
 **Future**: Multi-platform virtualization support
 **Responsibilities**:
@@ -386,7 +386,7 @@ ohmykube registry [subcommand] [flags]
 
 #### Cluster Creation Flow
 1. **Configuration Parsing**: CLI parses user input and creates cluster configuration
-2. **VM Provisioning**: Launcher creates VMs based on specifications
+2. **VM Provisioning**: Provider creates VMs based on specifications
 3. **Node Initialization**: Initializer sets up each node with required packages
 4. **Kubernetes Bootstrap**: kubeadm initializes the cluster
 5. **Add-on Installation**: CNI, CSI, and LB components are deployed

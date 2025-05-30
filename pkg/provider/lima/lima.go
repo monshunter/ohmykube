@@ -1,4 +1,4 @@
-package limactl
+package lima
 
 import (
 	"bytes"
@@ -12,20 +12,20 @@ import (
 	"time"
 
 	"github.com/monshunter/ohmykube/pkg/envar"
-	"github.com/monshunter/ohmykube/pkg/launcher/options"
 	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/provider/options"
 	"github.com/monshunter/ohmykube/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
 
-// LimactlLauncher implements the launcher.Launcher interface for Lima
-type LimactlLauncher struct {
+// LimaProvider implements the provider.Provider interface for Lima
+type LimaProvider struct {
 	// Configuration options
 	option *options.Options
 }
 
-// NewLimactlLauncher creates a new LimactlLauncher
-func NewLimactlLauncher(opt *options.Options) (*LimactlLauncher, error) {
+// NewLimaProvider creates a new LimaProvider
+func NewLimaProvider(opt *options.Options) (*LimaProvider, error) {
 	// Ensure limactl is installed
 	if err := checkLimactlInstalled(); err != nil {
 		return nil, err
@@ -37,11 +37,16 @@ func NewLimactlLauncher(opt *options.Options) (*LimactlLauncher, error) {
 		return nil, err
 	}
 
-	if !(strings.HasSuffix(opt.Template, ".yaml") || strings.HasPrefix(opt.Template, ".yml")) {
+	if opt.Template == "" {
+		opt.Template = "template://ubuntu-24.04"
+	}
+
+	if !(strings.HasSuffix(opt.Template, ".yaml") || strings.HasSuffix(opt.Template, ".yml")) &&
+		!strings.HasPrefix(opt.Template, "template://") {
 		opt.Template = "template://" + opt.Template
 	}
 
-	return &LimactlLauncher{
+	return &LimaProvider{
 		option: opt,
 	}, nil
 }
@@ -81,7 +86,7 @@ func checkSocketVmnetDaemon() error {
 }
 
 // createLimactlCommand creates a limactl command with the proper LIMA_HOME environment variable
-func (c *LimactlLauncher) createLimactlCommand(args ...string) *exec.Cmd {
+func (c *LimaProvider) createLimactlCommand(args ...string) *exec.Cmd {
 	cmd := exec.Command("limactl", args...)
 	// Always use OhMyKube's dedicated Lima home to avoid conflicts with global Lima
 	limaHome := envar.OhMyKubeLimaHome()
@@ -91,12 +96,17 @@ func (c *LimactlLauncher) createLimactlCommand(args ...string) *exec.Cmd {
 	return cmd
 }
 
-func (c *LimactlLauncher) Name() string {
-	return "limactl"
+// Name returns the provider name
+func (c *LimaProvider) Name() string {
+	return "lima"
+}
+
+func (c *LimaProvider) Template() string {
+	return c.option.Template
 }
 
 // Info gets information about a VM
-func (c *LimactlLauncher) Info(name string) error {
+func (c *LimaProvider) Info(name string) error {
 	cmd := c.createLimactlCommand("list", name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -107,7 +117,7 @@ func (c *LimactlLauncher) Info(name string) error {
 }
 
 // Create creates a new virtual machine
-func (c *LimactlLauncher) Create(name string, args ...any) error {
+func (c *LimaProvider) Create(name string, args ...any) error {
 	if len(args) != 3 {
 		return fmt.Errorf("invalid arguments, expected 3 arguments: cpus, memory, disk")
 	}
@@ -155,7 +165,7 @@ func (c *LimactlLauncher) Create(name string, args ...any) error {
 }
 
 // InitAuth initializes authentication for the VM
-func (c *LimactlLauncher) initAuth(name string) error {
+func (c *LimaProvider) initAuth(name string) error {
 	// Set host name
 	hostNameCmd := fmt.Sprintf("sudo hostnamectl set-hostname %s && sudo systemctl restart systemd-hostnamed", name)
 	if _, err := c.Exec(name, hostNameCmd); err != nil {
@@ -200,7 +210,7 @@ func (c *LimactlLauncher) initAuth(name string) error {
 }
 
 // Delete deletes a virtual machine
-func (c *LimactlLauncher) Delete(name string) error {
+func (c *LimaProvider) Delete(name string) error {
 	// Stop the VM
 	cmd := c.createLimactlCommand("stop", name)
 	var stderr bytes.Buffer
@@ -220,7 +230,7 @@ func (c *LimactlLauncher) Delete(name string) error {
 }
 
 // Exec executes a command on the specified virtual machine
-func (c *LimactlLauncher) Exec(vmName, command string) (string, error) {
+func (c *LimaProvider) Exec(vmName, command string) (string, error) {
 	// Use limactl shell to execute commands in the VM
 	cmd := c.createLimactlCommand("shell", vmName, "bash", "-c", command)
 	var stdout, stderr bytes.Buffer
@@ -235,14 +245,14 @@ func (c *LimactlLauncher) Exec(vmName, command string) (string, error) {
 }
 
 // List lists all virtual machines
-func (c *LimactlLauncher) List() ([]string, error) {
+func (c *LimaProvider) List() ([]string, error) {
 	if c.option.OutputFormat != "" {
 		return c.listWithFormat()
 	}
 	return c.quietList()
 }
 
-func (c *LimactlLauncher) listWithFormat() ([]string, error) {
+func (c *LimaProvider) listWithFormat() ([]string, error) {
 	prefix := c.option.Prefix
 	cmd := c.createLimactlCommand("list", "--format", c.option.OutputFormat, "--log-level", "error")
 	var stdout, stderr bytes.Buffer
@@ -325,7 +335,7 @@ func (c *LimactlLauncher) listWithFormat() ([]string, error) {
 	return virtualMachines, nil
 }
 
-func (c *LimactlLauncher) quietList() ([]string, error) {
+func (c *LimaProvider) quietList() ([]string, error) {
 	prefix := c.option.Prefix
 	cmd := c.createLimactlCommand("list", "--quiet", "--log-level", "error")
 	var stdout, stderr bytes.Buffer
@@ -357,7 +367,7 @@ func (c *LimactlLauncher) quietList() ([]string, error) {
 }
 
 // GetAddress gets the IP address of a node
-func (c *LimactlLauncher) GetAddress(name string) (string, error) {
+func (c *LimaProvider) GetAddress(name string) (string, error) {
 	// Retry a few times, as the node may need some time to fully start
 	var err error
 	maxRetries := 5
@@ -383,7 +393,7 @@ func (c *LimactlLauncher) GetAddress(name string) (string, error) {
 }
 
 // Start starts a virtual machine
-func (c *LimactlLauncher) Start(name string) error {
+func (c *LimaProvider) Start(name string) error {
 	cmd := c.createLimactlCommand("start", name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -396,7 +406,7 @@ func (c *LimactlLauncher) Start(name string) error {
 }
 
 // Stop stops a virtual machine
-func (c *LimactlLauncher) Stop(name string) error {
+func (c *LimaProvider) Stop(name string) error {
 	cmd := c.createLimactlCommand("stop", name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -409,7 +419,7 @@ func (c *LimactlLauncher) Stop(name string) error {
 }
 
 // Shell opens an interactive shell to the virtual machine
-func (c *LimactlLauncher) Shell(name string) error {
+func (c *LimaProvider) Shell(name string) error {
 	cmd := c.createLimactlCommand("shell", name)
 
 	// For interactive shell, we need to connect stdin/stdout/stderr

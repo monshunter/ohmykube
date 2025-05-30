@@ -42,9 +42,10 @@ var addCmd = &cobra.Command{
 			Name:   cls.Name,
 			Master: config.Resource{},
 		}
+
 		cfg.SetKubernetesVersion(cls.Spec.K8sVersion)
-		cfg.SetLauncherType(cls.Spec.Launcher)
-		cfg.SetTemplate(limaTemplate)
+		cfg.SetProvider(cls.Spec.Provider)
+		cfg.SetTemplate(template)
 		cfg.SetParallel(parallel)
 		cfg.SetCNIType(cls.Spec.CNI)
 		cfg.SetCSIType(cls.Spec.CSI)

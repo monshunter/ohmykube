@@ -8,7 +8,7 @@ This document provides detailed technical specifications for the OhMyKube projec
 ### Component Interaction Diagram
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   CLI Layer     │    │  Controller     │    │   Launcher      │
+│   CLI Layer     │    │  Controller     │    │   provider      │
 │  (cmd/ohmykube) │◄──►│   Manager       │◄──►│  (Lima/VM)      │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
@@ -38,7 +38,7 @@ This document provides detailed technical specifications for the OhMyKube projec
    - Create VM specifications
    - Prepare initialization scripts
 
-3. **VM Provisioning** (Launcher)
+3. **VM Provisioning** (provider)
    - Create Lima VM instances
    - Configure networking and storage
    - Start VM instances
@@ -67,9 +67,9 @@ This document provides detailed technical specifications for the OhMyKube projec
 
 ### Core Interfaces
 
-#### Launcher Interface
+#### provider Interface
 ```go
-type Launcher interface {
+type provider interface {
     // CreateVM creates a new virtual machine
     CreateVM(ctx context.Context, spec VMSpec) (*VM, error)
     
@@ -132,7 +132,7 @@ metadata:
   namespace: string
 spec:
   version: string
-  launcher: string
+  provider: string
   template: string
   networking:
     cni: string

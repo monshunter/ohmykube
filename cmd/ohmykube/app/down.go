@@ -5,7 +5,7 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/controller"
-	myLauncher "github.com/monshunter/ohmykube/pkg/launcher"
+	myProvider "github.com/monshunter/ohmykube/pkg/provider"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
 )
@@ -20,24 +20,24 @@ var downCmd = &cobra.Command{
 			return err
 		}
 
-		if launcher == "" && config.CheckExists(clusterName) {
+		if provider == "" && config.CheckExists(clusterName) {
 			clusterInfo, err := config.Load(clusterName)
 			if err != nil {
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}
-			launcher = clusterInfo.Spec.Launcher
+			provider = clusterInfo.Spec.Provider
 		}
-		launcherType := myLauncher.LauncherType(launcher)
-		if !launcherType.IsValid() {
-			return fmt.Errorf("invalid launcher type: %s, currently only 'limactl' is supported", launcher)
+		providerType := myProvider.ProviderType(provider)
+		if !providerType.IsValid() {
+			return fmt.Errorf("invalid provider type: %s, currently only 'lima' is supported", provider)
 		}
 
 		// Create cluster configuration
 		config := config.NewConfig(clusterName, workersCount, "iptables",
 			config.Resource{}, config.Resource{})
 		config.SetKubernetesVersion("")
-		config.SetLauncherType(launcherType.String())
-		config.SetTemplate(limaTemplate)
+		config.SetProvider(providerType.String())
+		config.SetTemplate(template)
 
 		// Create cluster manager
 		manager, err := controller.NewManager(config, sshConfig, nil, nil)

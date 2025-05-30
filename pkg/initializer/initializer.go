@@ -1461,6 +1461,52 @@ func (i *Initializer) installZstdOnRedhat() error {
 	return nil
 }
 
+// InstallRequiredSystemPackages installs system packages required by Kubernetes
+func (i *Initializer) InstallRequiredSystemPackages() error {
+	// Call appropriate install function based on OS type
+	switch i.osType {
+	case osTypeDebian:
+		return i.installRequiredSystemPackagesOnDebian()
+	case osTypeRedhat:
+		return i.installRequiredSystemPackagesOnRedhat()
+	default:
+		log.Debugf("Unknown OS type %s on node %s, defaulting to Debian", i.osType, i.nodeName)
+		return fmt.Errorf("unsupported OS type: %s", i.osType)
+	}
+}
+
+// installRequiredSystemPackagesOnDebian installs required packages on Debian-based systems
+func (i *Initializer) installRequiredSystemPackagesOnDebian() error {
+	cmd := "sudo apt-get install -y conntrack socat"
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to install required system packages on node %s: %w", i.nodeName, err)
+	}
+	log.Debugf("Successfully installed required system packages (conntrack, socat) on node %s", i.nodeName)
+	return nil
+}
+
+// installRequiredSystemPackagesOnRedhat installs required packages on RedHat-based systems
+func (i *Initializer) installRequiredSystemPackagesOnRedhat() error {
+	var cmd string
+	if i.useDnf {
+		// Use dnf if available
+		log.Debugf("Using dnf to install required system packages on node %s", i.nodeName)
+		cmd = "sudo dnf install -y conntrack-tools socat"
+	} else {
+		// Fall back to yum
+		log.Debugf("dnf not found, using yum to install required system packages on node %s", i.nodeName)
+		cmd = "sudo yum install -y conntrack-tools socat"
+	}
+
+	_, err := i.sshRunner.RunCommand(i.nodeName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to install required system packages on node %s: %w", i.nodeName, err)
+	}
+	log.Debugf("Successfully installed required system packages (conntrack-tools, socat) on node %s", i.nodeName)
+	return nil
+}
+
 // Initialize executes all initialization steps
 func (i *Initializer) Initialize() error {
 	if err := i.DoSystemUpdate(); err != nil {
@@ -1469,6 +1515,11 @@ func (i *Initializer) Initialize() error {
 
 	// Install zstd immediately after system update
 	if err := i.InstallZstd(); err != nil {
+		return err
+	}
+
+	// Install required system packages for Kubernetes
+	if err := i.InstallRequiredSystemPackages(); err != nil {
 		return err
 	}
 

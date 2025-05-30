@@ -1,6 +1,6 @@
 package options
 
-// Config contains common configuration options for launchers
+// Config contains common configuration options for providers
 type Options struct {
 	Prefix       string
 	Template     string

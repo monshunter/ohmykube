@@ -48,11 +48,11 @@ var (
 	defaultSSHKeyFile    string
 	defaultSSHPubKeyFile string
 	clusterName          string
-	launcher             string
-	parallel             int
-	limaTemplate         string
+	provider             string
+	template             string
 	proxyMode            string
 	updateSystem         bool
+	parallel             int
 )
 
 func init() {
@@ -68,11 +68,10 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&sshKeyFile, "ssh-key", defaultSSHKeyFile, "ssh private key file")
 	rootCmd.PersistentFlags().StringVar(&sshPubKeyFile, "ssh-pub-key", defaultSSHPubKeyFile, "ssh public key file")
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")
-	rootCmd.PersistentFlags().StringVar(&launcher, "launcher", "limactl",
-		"Launcher to use (currently only limactl is supported)")
 	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
-	rootCmd.PersistentFlags().StringVar(&limaTemplate, "lima-template", "ubuntu-24.04",
-		`Lima file or template,please use "limactl create --list-templates" to see what templates are available`)
+	rootCmd.PersistentFlags().StringVar(&provider, "provider", "lima", "Provider to use (currently only lima is supported)")
+	rootCmd.PersistentFlags().StringVar(&template, "template", "",
+		`template or file, for example: "ubuntu-24.04" or "/path/to/file", default "ubuntu-24.04" in lima`)
 	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
 	rootCmd.PersistentFlags().BoolVar(&updateSystem, "update-system", false,
 		"Update system packages before installation")

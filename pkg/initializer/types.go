@@ -21,8 +21,6 @@ type InitOptions struct {
 	K8SVersion        string
 	CriCtlVersion     string // crictl version for CRI debugging
 	NerdctlVersion    string // nerdctl version for Docker-compatible CLI
-	UsePackageCache   bool   // Whether to use package cache system
-	UseImageCache     bool   // Whether to use image cache system
 	UpdateSystem      bool   // Whether to update system packages before installation
 }
 
@@ -36,11 +34,9 @@ func DefaultInitOptions() InitOptions {
 		ContainerdVersion: "2.1.0",
 		RuncVersion:       "v1.3.0",
 		CNIPluginsVersion: "v1.7.1",
-		K8SVersion:        "v1.33.1",
+		K8SVersion:        "v1.33.0",
 		CriCtlVersion:     "v1.33.0", // Latest stable version of crictl
 		NerdctlVersion:    "2.1.2",   // Latest stable version of nerdctl
-		UsePackageCache:   false,     // Default to not use package cache
-		UseImageCache:     false,     // Default to not use image cache
 		UpdateSystem:      false,     // Default to not update system packages
 	}
 }

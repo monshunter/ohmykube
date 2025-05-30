@@ -1,4 +1,4 @@
-package limactl
+package lima
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/monshunter/ohmykube/pkg/envar"
-	"github.com/monshunter/ohmykube/pkg/launcher/options"
+	"github.com/monshunter/ohmykube/pkg/provider/options"
 )
 
 func TestCreateLimactlCommand(t *testing.T) {
@@ -18,14 +18,14 @@ func TestCreateLimactlCommand(t *testing.T) {
 		SSHPubKey: "",
 		Parallel:  1,
 	}
-	// Create a launcher instance
-	launcher, err := NewLimactlLauncher(opt)
+	// Create a provider instance
+	provider, err := NewLimaProvider(opt)
 	if err != nil {
-		t.Fatalf("Failed to create launcher: %v", err)
+		t.Fatalf("Failed to create provider: %v", err)
 	}
 
 	// Create a command
-	cmd := launcher.createLimactlCommand("list")
+	cmd := provider.createLimactlCommand("list")
 
 	// Check that the command is correct (path might be full path to limactl)
 	if !strings.HasSuffix(cmd.Path, "limactl") {

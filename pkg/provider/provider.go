@@ -1,8 +1,11 @@
-package launcher
+package provider
 
-// Launcher defines the interface for virtual machine launcher implementations
-type Launcher interface {
+// Provider defines the interface for virtual machine provider implementations
+type Provider interface {
 	Name() string
+
+	// Template returns the template name or file path
+	Template() string
 
 	// Create creates a new virtual machine
 	Create(name string, args ...any) error

@@ -14,17 +14,16 @@ import (
 	"github.com/monshunter/ohmykube/pkg/initializer"
 	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/kube"
-	"github.com/monshunter/ohmykube/pkg/launcher"
-	"github.com/monshunter/ohmykube/pkg/launcher/options"
 	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/provider"
+	"github.com/monshunter/ohmykube/pkg/provider/options"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 )
 
 // Manager cluster manager
 type Manager struct {
 	Config       *config.Config
-	VMProvider   launcher.Launcher
-	LauncherType launcher.LauncherType
+	VMProvider   provider.Provider
 	KubeManager  *kube.Manager
 	sshRunner    interfaces.SSHRunner
 	AddonManager addons.AddonManager
@@ -34,12 +33,12 @@ type Manager struct {
 
 // NewManager creates a new cluster manager
 func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluster, addonManager addons.AddonManager) (*Manager, error) {
-	// Get default launcher type for platform
-	launcherType := launcher.LauncherType(cfg.LauncherType)
+	// Get default provider type for platform
+	providerType := provider.ProviderType(cfg.Provider)
 
-	// Create the VM launcher
-	vmLauncher, err := launcher.NewLauncher(
-		launcherType,
+	// Create the VM provider
+	vmProvider, err := provider.NewProvider(
+		providerType,
 		&options.Options{
 			Template:     cfg.Template,
 			Password:     sshConfig.Password,
@@ -52,7 +51,7 @@ func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluste
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create VM launcher: %w", err)
+		return nil, fmt.Errorf("failed to create VM provider: %w", err)
 	}
 
 	// Create cluster information object
@@ -70,8 +69,7 @@ func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluste
 
 	manager := &Manager{
 		Config:       cfg,
-		VMProvider:   vmLauncher,
-		LauncherType: launcherType,
+		VMProvider:   vmProvider,
 		sshRunner:    sshRunner,
 		AddonManager: addonManager,
 		Cluster:      cls,
