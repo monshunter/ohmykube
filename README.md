@@ -47,19 +47,6 @@ kubectl get nodes
 ohmykube down
 ```
 
-### Output Modes
-
-```bash
-# Default mode: Clean progress display
-ohmykube up
-
-# Verbose mode: Show all technical details
-ohmykube up --verbose
-
-# Quiet mode: Minimal output
-ohmykube up --quiet
-```
-
 ### Creating Custom Clusters
 
 ```bash
