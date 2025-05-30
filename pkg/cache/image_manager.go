@@ -630,15 +630,18 @@ func (m *ImageManager) ReCacheClusterImages(sshRunner SSHRunner) error {
 // CacheClusterImagesForNodes caches all cluster images to the target node for preheating
 func (m *ImageManager) CacheClusterImagesForNodes(nodeNames []string, sshRunner SSHRunner) error {
 	controllerNode := m.imageRecorder.GetMasterName()
+	var wg sync.WaitGroup
+	wg.Add(len(nodeNames))
 	for _, nodeName := range nodeNames {
 		go func(nodeName string) {
+			defer wg.Done()
 			if err := m.cacheClusterImages(controllerNode, nodeName, sshRunner); err != nil {
 				log.Warningf("Failed to preheat cluster images for node %s: %v", nodeName, err)
 				// Continue with other nodes even if one fails
 			}
 		}(nodeName)
-
 	}
+	wg.Wait()
 	return nil
 }
 
