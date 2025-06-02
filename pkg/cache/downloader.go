@@ -29,7 +29,27 @@ func NewDownloader() *Downloader {
 }
 
 // DownloadFile downloads a file from the given URL to the specified destination
+// This method is thread-safe and ensures that the same (url, destPath) combination
+// can only be downloaded once at a time. If multiple goroutines try to download
+// the same file, only one will proceed while others wait.
 func (d *Downloader) DownloadFile(ctx context.Context, url, destPath string) error {
+	// Create a unique key for this download task
+	downloadKey := fmt.Sprintf("download|%s|%s", url, destPath)
+
+	// Acquire semaphore for this download key
+	if err := utils.AcquireKey(ctx, downloadKey); err != nil {
+		return err
+	}
+
+	// Ensure semaphore is released when function exits
+	defer utils.ReleaseKey(downloadKey)
+
+	// Check if file already exists and is complete (another goroutine might have downloaded it)
+	if _, err := os.Stat(destPath); err == nil {
+		log.Debugf("File %s already exists, skipping download", destPath)
+		return nil
+	}
+
 	log.Debugf("Downloading %s to %s", url, destPath)
 
 	// Create the destination directory if it doesn't exist

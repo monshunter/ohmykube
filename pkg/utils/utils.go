@@ -3,6 +3,7 @@ package utils // FormatFileSize formats a file size in bytes to a human-readable
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -138,4 +139,46 @@ func IsProcessRunning(processName string) (bool, error) {
 	default:
 		return false, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
+}
+
+// NormalizeK8sVersion normalizes a Kubernetes version string to the standard format
+// It adds 'v' prefix if missing and completes version to x.x.0 format if needed
+// Examples:
+//   - "1.24" -> "v1.24.0"
+//   - "1.24.1" -> "v1.24.1"
+//   - "v1.24" -> "v1.24.0"
+//   - "v1.24.1" -> "v1.24.1"
+func NormalizeK8sVersion(version string) (string, error) {
+	if version == "" {
+		return "", fmt.Errorf("version cannot be empty")
+	}
+
+	// Remove any whitespace
+	version = strings.TrimSpace(version)
+
+	// Add 'v' prefix if missing
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	// Regular expression to match semantic version pattern
+	// Matches: v1.24, v1.24.0, v1.24.1, etc.
+	versionRegex := regexp.MustCompile(`^v(\d+)\.(\d+)(?:\.(\d+))?$`)
+	matches := versionRegex.FindStringSubmatch(version)
+
+	if matches == nil {
+		return "", fmt.Errorf("invalid version format: %s (expected format: v1.24.0 or 1.24.0)", version)
+	}
+
+	major := matches[1]
+	minor := matches[2]
+	patch := matches[3]
+
+	// If patch version is missing, default to 0
+	if patch == "" {
+		patch = "0"
+	}
+
+	normalizedVersion := fmt.Sprintf("v%s.%s.%s", major, minor, patch)
+	return normalizedVersion, nil
 }

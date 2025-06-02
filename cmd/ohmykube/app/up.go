@@ -9,6 +9,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/log"
 	myProvider "github.com/monshunter/ohmykube/pkg/provider"
 	"github.com/monshunter/ohmykube/pkg/ssh"
+	"github.com/monshunter/ohmykube/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -37,8 +38,16 @@ var upCmd = &cobra.Command{
 - Optional CSI: local-path-provisioner(default) or rook-ceph
 - MetalLB as LoadBalancer implementation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Normalize and validate k8sVersion first
+		normalizedVersion, err := utils.NormalizeK8sVersion(k8sVersion)
+		if err != nil {
+			log.Errorf("Invalid Kubernetes version '%s': %v", k8sVersion, err)
+			return fmt.Errorf("invalid Kubernetes version '%s': %w", k8sVersion, err)
+		}
+		k8sVersion = normalizedVersion
+		log.Debugf("Normalized Kubernetes version: %s", k8sVersion)
+
 		var cls *config.Cluster
-		var err error
 		if config.CheckExists(clusterName) {
 			cls, err = config.Load(clusterName)
 			if err != nil {
@@ -59,7 +68,14 @@ var upCmd = &cobra.Command{
 				// Use valid stored configuration
 				provider = cls.Spec.Provider
 				proxyMode = cls.Spec.ProxyMode
-				k8sVersion = cls.Spec.K8sVersion
+				// Normalize the stored k8sVersion as well
+				storedVersion, versionErr := utils.NormalizeK8sVersion(cls.Spec.K8sVersion)
+				if versionErr != nil {
+					return fmt.Errorf("invalid stored Kubernetes version '%s': %w", cls.Spec.K8sVersion, versionErr)
+				} else {
+					k8sVersion = storedVersion
+					log.Debugf("Using stored Kubernetes version: %s", k8sVersion)
+				}
 				if cls.Spec.LB != "" {
 					lb = cls.Spec.LB
 				} else if lb != "" {
@@ -70,7 +86,7 @@ var upCmd = &cobra.Command{
 			}
 		}
 
-		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
+		sshConfig, err := ssh.NewSSHConfig(password, clusterName)
 		if err != nil {
 			return err
 		}

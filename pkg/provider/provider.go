@@ -1,5 +1,7 @@
 package provider
 
+import "github.com/monshunter/ohmykube/pkg/provider/types"
+
 // Provider defines the interface for virtual machine provider implementations
 type Provider interface {
 	Name() string
@@ -33,4 +35,6 @@ type Provider interface {
 
 	// GetAddress gets the IP address of a node
 	GetAddress(name string) (string, error)
+
+	Status(vmName string) (types.Status, error)
 }

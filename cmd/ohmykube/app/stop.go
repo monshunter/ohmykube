@@ -29,7 +29,7 @@ var stopCmd = &cobra.Command{
 		}
 
 		// Read SSH configuration
-		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
+		sshConfig, err := ssh.NewSSHConfig(password, clusterName)
 		if err != nil {
 			log.Errorf("Failed to create SSH configuration: %v", err)
 			return fmt.Errorf("failed to create SSH configuration: %w", err)

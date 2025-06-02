@@ -262,6 +262,10 @@ func (n *Node) Phase() Phase {
 	return n.Status.Phase
 }
 
+func (n *Node) IsRunning() bool {
+	return n.Status.Phase == PhaseRunning
+}
+
 // SetClusterCondition sets or updates a condition in a cluster's status
 func (c *Cluster) SetCondition(conditionType ConditionType, status ConditionStatus, reason, message string) {
 	condition := NewCondition(conditionType, status, reason, message)

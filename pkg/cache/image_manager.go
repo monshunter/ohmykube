@@ -317,13 +317,32 @@ func (m *ImageManager) getNodeArchitecture(ctx context.Context, sshRunner interf
 }
 
 // pullAndCacheImageOnController pulls an image on controller node and downloads it to local cache
+// This method is thread-safe and ensures that the same image can only be pulled once at a time
 func (m *ImageManager) pullAndCacheImageOnController(ctx context.Context, ref ImageReference, sshRunner interfaces.SSHRunner, controllerNode string) error {
+	// Create a unique key for this image pull task
+	imageKey := fmt.Sprintf("image-pull|%s|%s|%s", controllerNode, ref.String(), ref.Arch)
+
+	// Acquire semaphore for this image pull key
+	if err := utils.AcquireKey(ctx, imageKey); err != nil {
+		return err
+	}
+
+	// Ensure semaphore is released when function exits
+	defer utils.ReleaseKey(imageKey)
+
 	log.Debugf("Pulling and caching image: %s for %s on controller node", ref.String(), ref.Arch)
 
 	// Normalized filename for cache storage
 	normalizedName := ref.NormalizedName()
 	localPath := filepath.Join(m.cacheDir, normalizedName+".tar")
 	remotePath := fmt.Sprintf("/tmp/%s.tar", normalizedName)
+
+	// Check if image is already cached locally (another goroutine might have completed it)
+	cacheKey := ref.CacheKey()
+	if m.IsImageCached(cacheKey) {
+		log.Debugf("Image %s already cached locally, skipping pull", ref.String())
+		return nil
+	}
 
 	// Build script to pull and save image on controller node
 	script := fmt.Sprintf(`#!/bin/bash
@@ -423,7 +442,6 @@ fi
 
 	// Update the index
 	log.Debugf("Updating image index for %s", ref.String())
-	cacheKey := ref.CacheKey()
 	m.imageIndex.updateOrAddImage(cacheKey, ImageInfo{
 		Reference:     ref,
 		LocalPath:     localPath,
@@ -682,7 +700,7 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 		}
 
 		wg.Add(1)
-		go func(imgName string) {
+		go func(image *ImageInfo) {
 			defer func() {
 				wg.Done()
 				<-semaphore
@@ -696,7 +714,7 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 				log.Warningf("Failed to preheat image %s: %v", originalName, err)
 				// Continue with other images even if one fails
 			}
-		}(imageName)
+		}(image)
 	}
 
 	wg.Wait()

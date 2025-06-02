@@ -14,6 +14,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/envar"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/monshunter/ohmykube/pkg/provider/options"
+	"github.com/monshunter/ohmykube/pkg/provider/types"
 	"github.com/monshunter/ohmykube/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
@@ -118,6 +119,31 @@ func (c *LimaProvider) Info(name string) error {
 
 // Create creates a new virtual machine
 func (c *LimaProvider) Create(name string, args ...any) error {
+	// Check if VM already exists
+	status, err := c.Status(name)
+	if err == nil {
+		if status.IsRunning() {
+			log.Debugf("VM %s already created and running, skipping creation", name)
+			return nil
+		} else if status.IsStopped() {
+			log.Debugf("VM %s already created and stopped, starting it", name)
+			err := c.Start(name)
+			if err != nil {
+				return err
+			}
+			return c.initAuth(name)
+		} else if status.IsUnknown() {
+			log.Debugf("VM %s already created and unknown status, starting it", name)
+			err := c.Start(name)
+			if err != nil {
+				return err
+			}
+			return c.initAuth(name)
+		} else {
+			return fmt.Errorf("VM %s already created and unknown status, cannot start it", name)
+		}
+	}
+
 	if len(args) != 3 {
 		return fmt.Errorf("invalid arguments, expected 3 arguments: cpus, memory, disk")
 	}
@@ -211,16 +237,25 @@ func (c *LimaProvider) initAuth(name string) error {
 
 // Delete deletes a virtual machine
 func (c *LimaProvider) Delete(name string) error {
-	// Stop the VM
-	cmd := c.createLimactlCommand("stop", name)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop VM: %w, error message: %s", err, stderr.String())
+	status, err := c.Status(name)
+	if err != nil {
+		return err
+	}
+
+	if status.IsRunning() {
+		// Stop the VM
+		var stderr bytes.Buffer
+
+		cmd := c.createLimactlCommand("stop", name)
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to stop VM: %w, error message: %s", err, stderr.String())
+		}
 	}
 
 	// Delete the VM
-	cmd = c.createLimactlCommand("delete", name, "--force")
+	cmd := c.createLimactlCommand("delete", name, "--force")
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to delete VM: %w, error message: %s", err, stderr.String())
@@ -407,6 +442,15 @@ func (c *LimaProvider) Start(name string) error {
 
 // Stop stops a virtual machine
 func (c *LimaProvider) Stop(name string) error {
+	status, err := c.Status(name)
+	if err != nil {
+		return err
+	}
+	if status.IsStopped() {
+		log.Debugf("VM %s is already stopped", name)
+		return nil
+	}
+
 	cmd := c.createLimactlCommand("stop", name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -432,4 +476,38 @@ func (c *LimaProvider) Shell(name string) error {
 	}
 
 	return nil
+}
+
+// Status gets the status of a virtual machine
+func (c *LimaProvider) Status(name string) (types.Status, error) {
+	cmd := c.createLimactlCommand("list", name, "--format", "json")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return types.StatusUnknown, fmt.Errorf("failed to get status of VM %s: %w, error message: %s", name, err, stderr.String())
+	}
+
+	var vm struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+
+	if err := json.Unmarshal(stdout.Bytes(), &vm); err != nil {
+		return types.StatusUnknown, fmt.Errorf("failed to parse JSON output: %w", err)
+	}
+
+	if vm.Name != name {
+		return types.StatusUnknown, fmt.Errorf("VM with name %s not found", name)
+	}
+
+	switch vm.Status {
+	case "Running":
+		return types.StatusRunning, nil
+	case "Stopped":
+		return types.StatusStopped, nil
+	default:
+		return types.StatusUnknown, nil
+	}
 }

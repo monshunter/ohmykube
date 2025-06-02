@@ -1,8 +1,6 @@
 package app
 
 import (
-	"os"
-
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/spf13/cobra"
 )
@@ -42,31 +40,18 @@ func Run() error {
 }
 
 var (
-	password             string
-	sshKeyFile           string
-	sshPubKeyFile        string
-	defaultSSHKeyFile    string
-	defaultSSHPubKeyFile string
-	clusterName          string
-	provider             string
-	template             string
-	proxyMode            string
-	updateSystem         bool
-	parallel             int
+	password     string
+	clusterName  string
+	provider     string
+	template     string
+	proxyMode    string
+	updateSystem bool
+	parallel     int
 )
 
 func init() {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatalf("Failed to get user home directory: %v", err)
-	}
-	defaultSSHKeyFile = homeDir + "/.ssh/id_rsa"
-	defaultSSHPubKeyFile = homeDir + "/.ssh/id_rsa.pub"
 	// Global flags can be added here
-
 	rootCmd.PersistentFlags().StringVar(&password, "password", "ohmykube123", "root password")
-	rootCmd.PersistentFlags().StringVar(&sshKeyFile, "ssh-key", defaultSSHKeyFile, "ssh private key file")
-	rootCmd.PersistentFlags().StringVar(&sshPubKeyFile, "ssh-pub-key", defaultSSHPubKeyFile, "ssh public key file")
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")
 	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
 	rootCmd.PersistentFlags().StringVar(&provider, "provider", "lima", "Provider to use (currently only lima is supported)")

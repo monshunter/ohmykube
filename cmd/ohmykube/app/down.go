@@ -5,6 +5,7 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/controller"
+	"github.com/monshunter/ohmykube/pkg/log"
 	myProvider "github.com/monshunter/ohmykube/pkg/provider"
 	"github.com/monshunter/ohmykube/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -15,7 +16,7 @@ var downCmd = &cobra.Command{
 	Short: "Delete a k8s cluster",
 	Long:  `Delete the created Kubernetes cluster and all related virtual machine resources`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		sshConfig, err := ssh.NewSSHConfig(password, sshKeyFile, sshPubKeyFile)
+		sshConfig, err := ssh.NewSSHConfig(password, clusterName)
 		if err != nil {
 			return err
 		}
@@ -46,7 +47,17 @@ var downCmd = &cobra.Command{
 		}
 		defer manager.Close()
 		// Delete cluster
-		return manager.DeleteCluster()
+		err = manager.DeleteCluster()
+		if err != nil {
+			return err
+		}
+
+		// Clean up SSH keys for the cluster
+		if err := ssh.CleanupSSHKeys(clusterName); err != nil {
+			log.Warningf("Failed to clean up SSH keys: %v", err)
+		}
+
+		return nil
 	},
 }
 

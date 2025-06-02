@@ -733,7 +733,7 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 	}
 
 	// Evict node from Kubernetes
-	if !force {
+	if !force && nodeInfo.IsRunning() {
 		err := m.drainAndDeleteNode(nodeName)
 		if err != nil {
 			return err
@@ -858,7 +858,7 @@ func (m *Manager) StopVM(nodeName string, force bool) error {
 	}
 
 	// Evict node from Kubernetes
-	if !force {
+	if !force && nodeInfo.IsRunning() {
 		err := m.drainAndDeleteNode(nodeName)
 		if err != nil {
 			return err

@@ -1,6 +1,10 @@
 package ssh
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"maps"
 	"os"
@@ -10,6 +14,7 @@ import (
 
 	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/log"
+	"golang.org/x/crypto/ssh"
 )
 
 type SSHConfig struct {
@@ -20,7 +25,28 @@ type SSHConfig struct {
 	sshPubKey     string
 }
 
-func NewSSHConfig(password string, sshKeyFile string, sshPubKeyFile string) (*SSHConfig, error) {
+// NewSSHConfig creates a new SSH configuration with auto-generated keys for the cluster
+func NewSSHConfig(password string, clusterName string) (*SSHConfig, error) {
+	// Ensure SSH keys exist for the cluster
+	privateKeyPath, publicKeyPath, err := ensureSSHKeys(clusterName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure SSH keys: %w", err)
+	}
+
+	sshConfig := &SSHConfig{
+		Password:      password,
+		SSHKeyFile:    privateKeyPath,
+		SSHPubKeyFile: publicKeyPath,
+	}
+	err = sshConfig.init()
+	if err != nil {
+		return nil, err
+	}
+	return sshConfig, nil
+}
+
+// NewSSHConfigWithKeys creates SSH configuration with provided key file paths (for backward compatibility)
+func NewSSHConfigWithKeys(password string, sshKeyFile string, sshPubKeyFile string) (*SSHConfig, error) {
 	sshConfig := &SSHConfig{
 		Password:      password,
 		SSHKeyFile:    sshKeyFile,
@@ -53,6 +79,106 @@ func (c *SSHConfig) GetSSHKey() string {
 
 func (c *SSHConfig) GetSSHPubKey() string {
 	return c.sshPubKey
+}
+
+// generateSSHKeyPair generates a new RSA 4096-bit SSH key pair
+func generateSSHKeyPair() (privateKey, publicKey string, err error) {
+	// Generate RSA private key
+	privKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate RSA key: %w", err)
+	}
+
+	// Encode private key to PEM format
+	privKeyPEM := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+	}
+	privateKeyBytes := pem.EncodeToMemory(privKeyPEM)
+
+	// Generate public key in SSH format
+	pubKey, err := ssh.NewPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate SSH public key: %w", err)
+	}
+	publicKeyBytes := ssh.MarshalAuthorizedKey(pubKey)
+
+	return string(privateKeyBytes), string(publicKeyBytes), nil
+}
+
+// getSSHKeyPath returns the SSH key directory path for a cluster
+func getSSHKeyPath(clusterName string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	sshDir := filepath.Join(homeDir, ".ohmykube", clusterName, ".ssh")
+	return sshDir, nil
+}
+
+// ensureSSHKeys ensures SSH keys exist for the cluster, generating them if necessary
+func ensureSSHKeys(clusterName string) (privateKeyPath, publicKeyPath string, err error) {
+	sshDir, err := getSSHKeyPath(clusterName)
+	if err != nil {
+		return "", "", err
+	}
+
+	privateKeyPath = filepath.Join(sshDir, "id_rsa")
+	publicKeyPath = filepath.Join(sshDir, "id_rsa.pub")
+
+	// Check if keys already exist
+	if _, err := os.Stat(privateKeyPath); err == nil {
+		if _, err := os.Stat(publicKeyPath); err == nil {
+			log.Debugf("SSH keys already exist for cluster %s", clusterName)
+			return privateKeyPath, publicKeyPath, nil
+		}
+	}
+
+	// Create SSH directory if it doesn't exist
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return "", "", fmt.Errorf("failed to create SSH directory: %w", err)
+	}
+
+	// Generate new key pair
+	log.Debugf("Generating SSH keys for cluster %s", clusterName)
+	privateKey, publicKey, err := generateSSHKeyPair()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate SSH key pair: %w", err)
+	}
+
+	// Write private key
+	if err := os.WriteFile(privateKeyPath, []byte(privateKey), 0600); err != nil {
+		return "", "", fmt.Errorf("failed to write private key: %w", err)
+	}
+
+	// Write public key
+	if err := os.WriteFile(publicKeyPath, []byte(publicKey), 0644); err != nil {
+		return "", "", fmt.Errorf("failed to write public key: %w", err)
+	}
+
+	log.Debugf("SSH keys generated successfully for cluster %s", clusterName)
+	return privateKeyPath, publicKeyPath, nil
+}
+
+// CleanupSSHKeys removes SSH keys for a cluster
+func CleanupSSHKeys(clusterName string) error {
+	sshDir, err := getSSHKeyPath(clusterName)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(sshDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	// Remove the entire SSH directory for the cluster
+	if err := os.RemoveAll(sshDir); err != nil {
+		return fmt.Errorf("failed to remove SSH directory: %w", err)
+	}
+
+	log.Debugf("SSH keys cleaned up for cluster %s", clusterName)
+	return nil
 }
 
 // SSHManager manages SSH clients and their lifecycle
