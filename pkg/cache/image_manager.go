@@ -173,7 +173,7 @@ func (m *ImageManager) EnsureImages(ctx context.Context, source ImageSource, ssh
 		return fmt.Errorf("failed to determine node architecture: %w", err)
 	}
 
-	// Determine optimal strategy using consistent tool preference (local → controller → target)
+	// Determine optimal strategy using consistent tool preference (controller → target)
 	strategy := m.toolDetector.DetermineOptimalStrategy(m.availability, m.config)
 	log.Debugf("Using %s strategy for image management", strategy.String())
 
@@ -664,7 +664,12 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 	// Create image manager for caching
 	ctx := context.Background()
 
-	// Cache each cluster image
+	// Cache each cluster image with concurrent processing
+	// Use a semaphore to limit concurrent uploads per node to avoid overwhelming the network
+	maxConcurrentUploads := 3
+	semaphore := make(chan struct{}, maxConcurrentUploads)
+	var wg sync.WaitGroup
+
 	for _, imageName := range imageNames {
 		if len(imageName) == 0 {
 			continue
@@ -675,13 +680,26 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 			log.Warningf("Image %s not found in cache, skipping preheating", imageName)
 			continue
 		}
-		imageName = image.Reference.Original
-		log.Debugf("Preheating image: %s", imageName)
-		if err := m.EnsureImage(ctx, imageName, sshRunner, nodeName, controllerNode); err != nil {
-			log.Warningf("Failed to preheat image %s: %v", imageName, err)
-			// Continue with other images even if one fails
-		}
+
+		wg.Add(1)
+		go func(imgName string) {
+			defer func() {
+				wg.Done()
+				<-semaphore
+			}()
+			// Acquire semaphore
+			semaphore <- struct{}{}
+
+			originalName := image.Reference.Original
+			log.Debugf("Preheating image: %s", originalName)
+			if err := m.EnsureImage(ctx, originalName, sshRunner, nodeName, controllerNode); err != nil {
+				log.Warningf("Failed to preheat image %s: %v", originalName, err)
+				// Continue with other images even if one fails
+			}
+		}(imageName)
 	}
+
+	wg.Wait()
 
 	log.Debugf("Completed cluster image preheating for node %s", nodeName)
 	return nil

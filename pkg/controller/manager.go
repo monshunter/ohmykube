@@ -299,6 +299,7 @@ func (m *Manager) CreateCluster() error {
 
 	// 5. Install CNI if not already done
 	stepIndex++
+
 	if m.Config.CNI != "none" && !m.Cluster.HasCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue) {
 		progress.StartStep(stepIndex)
 		log.Debugf("Installing %s CNI...", m.Config.CNI)
@@ -351,8 +352,9 @@ func (m *Manager) CreateCluster() error {
 
 	// 7. Install MetalLB if not already done
 	if m.Config.LB == "metallb" && m.InitOptions.EnableIPVS() {
-		stepIndex++
 		if !m.Cluster.HasCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue) {
+			stepIndex++
+			progress.AddStep("lb-install", "Installing LoadBalancer")
 			progress.StartStep(stepIndex)
 			log.Debugf("Installing MetalLB LoadBalancer...")
 			err := m.AddonManager.InstallLB()
@@ -409,24 +411,13 @@ func (m *Manager) CreateCluster() error {
 
 // CreateClusterVMs creates all cluster VMs in parallel (master and workers)
 func (m *Manager) CreateClusterVMs() error {
-	var err error
-	err = m.createMasterVM()
-	if err != nil {
-		return fmt.Errorf("failed to create Master node: %w", err)
+	nodes := m.Cluster.Spec.Workers
+	nodes = append(nodes, m.Cluster.Spec.Master)
+	log.Debugf("Creating %d nodes", len(nodes))
+	if m.Config.Parallel > 1 {
+		return m.createVMsParallel(nodes)
 	}
-	err = m.createWorkerVMs()
-	if err != nil {
-		return fmt.Errorf("failed to create Worker nodes: %w", err)
-	}
-	return nil
-}
-
-// CreateMasterVM creates master node
-func (m *Manager) createMasterVM() error {
-	_, err := m.setupVM(m.Cluster.GetMasterName(), config.RoleMaster,
-		m.Config.Master.CPU, m.Config.Master.Memory, m.Config.Master.Disk)
-
-	return err
+	return m.createVMsSequential(nodes)
 }
 
 func (m *Manager) setupVM(nodeName string, role string, cpu int, memory int, disk int) (*config.Node, error) {
@@ -464,47 +455,42 @@ func (m *Manager) setupVM(nodeName string, role string, cpu int, memory int, dis
 	return node, nil
 }
 
-// CreateWorkerVMs creates worker nodes
-func (m *Manager) createWorkerVMs() error {
-	if m.Config.Parallel > 1 {
-		return m.createWorkerVMsParallel()
-	}
-	return m.createWorkerVMsSequential()
-}
-
-func (m *Manager) createWorkerVMsSequential() error {
-	for i := range m.Cluster.Spec.Workers {
-		_, err := m.setupVM(m.Cluster.Spec.Workers[i].Name, config.RoleWorker,
-			m.Cluster.Spec.Workers[i].Spec.CPU, m.Cluster.Spec.Workers[i].Spec.Memory, m.Cluster.Spec.Workers[i].Spec.Disk)
+func (m *Manager) createVMsSequential(nodes []*config.Node) error {
+	for _, node := range nodes {
+		_, err := m.setupVM(node.Name, node.Spec.Role,
+			node.Spec.CPU, node.Spec.Memory, node.Spec.Disk)
 		if err != nil {
-			return fmt.Errorf("failed to create Worker node %s: %w", m.Cluster.Spec.Workers[i].Name, err)
+			return fmt.Errorf("failed to create Worker node %s: %w", node.Name, err)
 		}
 	}
 	return nil
 }
 
-func (m *Manager) createWorkerVMsParallel() error {
+func (m *Manager) createVMsParallel(nodes []*config.Node) error {
 	var wg sync.WaitGroup
 	var err error
+
 	// concurrent by m.Config.Parallel
 	sem := make(chan struct{}, m.Config.Parallel)
-	errChan := make(chan error, len(m.Cluster.Spec.Workers))
-
-	for i := range m.Cluster.Spec.Workers {
-		wg.Add(1)
+	errChan := make(chan error, len(nodes))
+	wg.Add(len(nodes))
+	for i := range nodes {
+		sem <- struct{}{}
 		go func(node *config.Node) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			_, err = m.setupVM(node.Name, config.RoleWorker,
+			defer func() {
+				wg.Done()
+				<-sem
+			}()
+			_, err = m.setupVM(node.Name, node.Spec.Role,
 				node.Spec.CPU, node.Spec.Memory, node.Spec.Disk)
 			if err != nil {
 				errChan <- fmt.Errorf("failed to create Worker node %s: %w", node.Name, err)
 			}
-		}(m.Cluster.Spec.Workers[i])
+		}(nodes[i])
 	}
 	wg.Wait()
 	close(sem)
+	close(errChan)
 
 	for err := range errChan {
 		if err != nil {
@@ -545,21 +531,24 @@ func (m *Manager) initializeVMsParallel() error {
 	sem := make(chan struct{}, m.Config.Parallel)
 	errChan := make(chan error, len(m.Cluster.Spec.Workers)+1)
 	nodes := append(m.Cluster.Spec.Workers, m.Cluster.Spec.Master)
+	log.Debugf("Initializing %d VMs in parallel", len(nodes))
+	wg.Add(len(nodes))
 	for i := range nodes {
-		wg.Add(1)
+		sem <- struct{}{}
 		go func(node *config.Node) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			defer func() {
+				wg.Done()
+				<-sem
+			}()
 			err = m.initializeVM(node.Name)
 			if err != nil {
 				errChan <- fmt.Errorf("failed to initialize VM %s: %w", node.Name, err)
 			}
-		}(m.Cluster.Spec.Workers[i])
+		}(nodes[i])
 	}
 	wg.Wait()
 	close(sem)
-
+	close(errChan)
 	for err := range errChan {
 		if err != nil {
 			return err

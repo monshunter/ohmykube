@@ -22,7 +22,7 @@
 1. Install [Lima](https://github.com/lima-vm/lima)
 2. Install Go 1.23.0 or higher
 
-### Installation
+### Install
 
 ```bash
 # Clone the repository
@@ -134,17 +134,12 @@ We are planning the following feature enhancements:
 - **Multi-Cluster Management**
   - Project initialization (`ohmykube init`)
   - Cluster switching (`ohmykube switch`)
-  - Build process checkpoints, supporting interrupted recovery
 
 ### Mid-term Plans 🔄
 
 - **Provider Abstraction**
-  - Support for cloud API virtual machine creation (Alibaba Cloud, Tencent Cloud, etc.)
+  - Support for cloud API virtual machine creation (Alibaba Cloud, Tencent Cloud, AWS, GKE, etc.)
   - Support for more local virtualization platforms
-
-- **More Platform Support**
-  - Improved support for different CPU architectures
-  - Optimized Windows environment experience
 
 ### Long-term Vision 🌈
 

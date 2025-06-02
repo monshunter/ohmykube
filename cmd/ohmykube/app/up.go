@@ -60,7 +60,12 @@ var upCmd = &cobra.Command{
 				provider = cls.Spec.Provider
 				proxyMode = cls.Spec.ProxyMode
 				k8sVersion = cls.Spec.K8sVersion
-				lb = cls.Spec.LB
+				if cls.Spec.LB != "" {
+					lb = cls.Spec.LB
+				} else if lb != "" {
+					cls.Spec.LB = lb
+				}
+				log.Debugf("lb: %s, cls.Spec.LB: %s", lb, cls.Spec.LB)
 				log.Debugf("Using existing valid cluster configuration")
 			}
 		}
@@ -96,6 +101,7 @@ var upCmd = &cobra.Command{
 		cfg.SetUpdateSystem(updateSystem)
 		cfg.SetLBType(lb)
 		cfg.SetCSIType(csi)
+		cfg.SetParallel(parallel)
 
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
@@ -180,6 +186,6 @@ func init() {
 	upCmd.Flags().StringVar(&cni, "cni", "flannel", "CNI type to install (flannel, cilium, none)")
 	upCmd.Flags().StringVar(&csi, "csi", "local-path-provisioner",
 		"CSI type to install (local-path-provisioner, rook-ceph, none)")
-	upCmd.Flags().StringVar(&lb, "lb", "metallb",
-		"LoadBalancer (only metallb is supported for now, and ipvs mode is required), leave empty to disable")
+	upCmd.Flags().StringVar(&lb, "lb", "",
+		`LoadBalancer (only "metallb" is supported for now, and ipvs mode is required), leave empty to disable`)
 }
