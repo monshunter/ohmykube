@@ -1,7 +1,7 @@
 # Oh My Kube: Make Kubernetes Simple and Fast!
 
 <p align="center">
-  <strong>Quickly Set Up Complete Kubernetes Environments on Virtual Machines</strong>
+  <strong>Quickly start a complete local kubernetes cluster on multi-node or heterogeneous virtual machines</strong>
 </p>
 
 <p align="center">

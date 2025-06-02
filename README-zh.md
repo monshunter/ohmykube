@@ -1,7 +1,7 @@
 # Oh My Kube：搞定K8S，就是简单，就是快！
 
 <p align="center">
-  <strong>在虚拟机上快速搭建完整的 Kubernetes 环境</strong>
+  <strong>在多节点或异构虚拟机上快速启动完整的本地 Kubernetes 集群</strong>
 </p>
 
 <p align="center">
