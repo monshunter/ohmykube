@@ -183,9 +183,9 @@ func (m *Manager) SetupKubeconfig() (string, error) {
 func (m *Manager) CreateCluster() error {
 	// Initialize multi-step progress
 	progress := log.NewMultiStepProgress("Kubernetes cluster")
-	progress.AddStep("vm-creation", "Creating VMs")
-	progress.AddStep("environment-init", "Initializing environments")
-	progress.AddStep("master-init", "Initializing master node")
+	progress.AddStep("vm-creation", "Preparing virtual machines")
+	progress.AddStep("environment-init", "Initializing node environments")
+	progress.AddStep("master-init", "Starting contol-plane")
 	progress.AddStep("worker-join", "Joining worker nodes")
 	progress.AddStep("cni-install", "Installing CNI")
 	progress.AddStep("csi-install", "Installing CSI")

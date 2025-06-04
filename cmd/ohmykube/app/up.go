@@ -25,6 +25,7 @@ var (
 	workerDisk        int
 	enableSwap        bool
 	kubeadmConfigPath string
+	proxyMode         string
 	cni               string
 	csi               string
 	lb                string
@@ -47,6 +48,12 @@ var upCmd = &cobra.Command{
 		k8sVersion = normalizedVersion
 		log.Debugf("Normalized Kubernetes version: %s", k8sVersion)
 
+		// Auto-configure proxy-mode for MetalLB
+		if lb == "metallb" && proxyMode != "ipvs" {
+			log.Infof("MetalLB requires IPVS mode, automatically setting proxy-mode to 'ipvs'")
+			proxyMode = "ipvs"
+		}
+
 		var cls *config.Cluster
 		if config.CheckExists(clusterName) {
 			cls, err = config.Load(clusterName)
@@ -67,6 +74,12 @@ var upCmd = &cobra.Command{
 			} else {
 				// Use valid stored configuration
 				provider = cls.Spec.Provider
+
+				if cls.Spec.ProxyMode != proxyMode {
+					log.Warningf(`Ignore changing the proxy mode from "%s" to "%s" because the proxy-mode of a running cluster cannot be modified.`,
+						cls.Spec.ProxyMode, proxyMode)
+				}
+
 				proxyMode = cls.Spec.ProxyMode
 				// Normalize the stored k8sVersion as well
 				storedVersion, versionErr := utils.NormalizeK8sVersion(cls.Spec.K8sVersion)
@@ -81,7 +94,12 @@ var upCmd = &cobra.Command{
 				} else if lb != "" {
 					cls.Spec.LB = lb
 				}
-				log.Debugf("lb: %s, cls.Spec.LB: %s", lb, cls.Spec.LB)
+
+				// validation of LoadBalancer and proxy-mode compatibility
+				if err := validateLBProxyModeCompatibility(lb, proxyMode); err != nil {
+					return err
+				}
+
 				log.Debugf("Using existing valid cluster configuration")
 			}
 		}
@@ -154,6 +172,14 @@ var upCmd = &cobra.Command{
 	},
 }
 
+// validateLBProxyModeCompatibility validates that LoadBalancer and proxy-mode are compatible
+func validateLBProxyModeCompatibility(lb, proxyMode string) error {
+	if lb == "metallb" && proxyMode != "ipvs" {
+		return fmt.Errorf("MetalLB requires IPVS proxy mode, but proxy-mode is set to '%s'. MetalLB will not work properly with iptables mode", proxyMode)
+	}
+	return nil
+}
+
 // isValidClusterConfig validates that a cluster configuration is complete and valid
 func isValidClusterConfig(cls *config.Cluster) bool {
 	if cls == nil {
@@ -183,6 +209,12 @@ func isValidClusterConfig(cls *config.Cluster) bool {
 		return false
 	}
 
+	// Validate LoadBalancer and proxy-mode compatibility
+	if err := validateLBProxyModeCompatibility(cls.Spec.LB, cls.Spec.ProxyMode); err != nil {
+		log.Debugf("Invalid cluster config: %v", err)
+		return false
+	}
+
 	log.Debugf("Cluster configuration is valid")
 	return true
 }
@@ -199,9 +231,10 @@ func init() {
 	upCmd.Flags().StringVar(&k8sVersion, "k8s-version", "v1.33.0", "Kubernetes version")
 	upCmd.Flags().BoolVar(&enableSwap, "enable-swap", false, "Enable Swap (only for K8s 1.28+)")
 	upCmd.Flags().StringVar(&kubeadmConfigPath, "kubeadm-config", "", "Custom kubeadm config file path")
+	upCmd.Flags().StringVar(&proxyMode, "proxy-mode", "iptables", "Proxy mode (iptables or ipvs), can only be set once")
 	upCmd.Flags().StringVar(&cni, "cni", "flannel", "CNI type to install (flannel, cilium, none)")
 	upCmd.Flags().StringVar(&csi, "csi", "local-path-provisioner",
 		"CSI type to install (local-path-provisioner, rook-ceph, none)")
 	upCmd.Flags().StringVar(&lb, "lb", "",
-		`LoadBalancer (only "metallb" is supported for now, and ipvs mode is required), leave empty to disable`)
+		`LoadBalancer (only "metallb" is supported for now, automatically sets proxy-mode to ipvs), leave empty to disable`)
 }

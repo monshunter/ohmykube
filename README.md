@@ -47,6 +47,8 @@ kubectl get nodes
 ohmykube down
 ```
 
+![OhMyKube Up Demo](docs/images/ohmykube-up.jpg)
+
 ### Creating Custom Clusters
 
 ```bash
@@ -60,11 +62,9 @@ ohmykube up --cni cilium
 # Select storage plugin
 ohmykube up --csi rook-ceph
 
-# Disable LoadBalancer
-ohmykube up --lb ""
+# Enable LoadBalancer (automatically sets proxy-mode to ipvs)
+ohmykube up --lb "metallb"
 
-# Use custom kubeadm configuration
-ohmykube up --kubeadm-config /path/to/custom-kubeadm-config.yaml
 ```
 
 ### Cluster Management

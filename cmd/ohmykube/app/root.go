@@ -44,7 +44,6 @@ var (
 	clusterName  string
 	provider     string
 	template     string
-	proxyMode    string
 	updateSystem bool
 	parallel     int
 )
@@ -58,7 +57,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&template, "template", "",
 		`template or file, for example: "ubuntu-24.04" or "/path/to/file", default "ubuntu-24.04" in Lima.
 Use "limactl create --list-templates" to list all available templates in Lima.`)
-	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "iptables", "Proxy mode (iptables or ipvs)")
 	rootCmd.PersistentFlags().BoolVar(&updateSystem, "update-system", false,
 		"Update system packages before installation")
 

@@ -47,6 +47,8 @@ kubectl get nodes
 ohmykube down
 ```
 
+![OhMyKube Up Demo](docs/images/ohmykube-up.jpg)
+
 ### 创建自定义集群
 
 ```bash
@@ -60,11 +62,9 @@ ohmykube up --cni cilium
 # 选择存储插件
 ohmykube up --csi rook-ceph
 
-# 禁用 LoadBalancer
-ohmykube up --lb ""
+# 启用 LoadBalancer
+ohmykube up --lb "metallb"
 
-# 使用自定义 kubeadm 配置
-ohmykube up --kubeadm-config /path/to/custom-kubeadm-config.yaml
 ```
 
 ### 集群管理

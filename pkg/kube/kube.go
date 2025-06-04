@@ -210,6 +210,6 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to save kubeconfig file: %w", err)
 	}
-
+	kubeconfigPath = strings.Replace(kubeconfigPath, homeDir, "~", 1)
 	return kubeconfigPath, nil
 }
