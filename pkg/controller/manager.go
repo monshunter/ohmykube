@@ -269,109 +269,11 @@ func (m *Manager) CreateCluster() error {
 		log.Debugf("Skipping master initialization as it was already completed")
 	}
 
-	// 4. Configure worker nodes
+	// 4. Execute worker join, CNI, CSI, and LB installation in parallel
 	stepIndex++
-	if !m.Cluster.HasCondition(config.ConditionTypeWorkersJoined, config.ConditionStatusTrue) ||
-		!m.Cluster.HasAllNodeCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusTrue) {
-		progress.StartStep(stepIndex)
-		log.Debugf("Joining Worker nodes to the cluster...")
-		joinCommand, err := m.getJoinCommand()
-		if err != nil {
-			progress.FailStep(stepIndex, fmt.Errorf("failed to get join command: %w", err))
-			return fmt.Errorf("failed to get join command: %w", err)
-		}
-
-		err = m.JoinWorkerNodes(joinCommand)
-		if err != nil {
-			progress.FailStep(stepIndex, err)
-			m.Cluster.SetCondition(config.ConditionTypeWorkersJoined, config.ConditionStatusFalse,
-				"WorkersJoinFailed", fmt.Sprintf("Failed to join workers: %v", err))
-			m.Cluster.Save()
-			return fmt.Errorf("failed to join Worker nodes to the cluster: %w", err)
-		}
-		progress.CompleteStep(stepIndex)
-		m.Cluster.SetCondition(config.ConditionTypeWorkersJoined, config.ConditionStatusTrue,
-			"WorkersJoined", "All worker nodes joined the cluster successfully")
-		m.Cluster.Save()
-	} else {
-		log.Debugf("Skipping worker joining as it was already completed")
-	}
-
-	// 5. Install CNI if not already done
-	stepIndex++
-
-	if m.Config.CNI != "none" && !m.Cluster.HasCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue) {
-		progress.StartStep(stepIndex)
-		log.Debugf("Installing %s CNI...", m.Config.CNI)
-		err := m.AddonManager.InstallCNI()
-		if err != nil {
-			progress.FailStep(stepIndex, err)
-			m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
-				"CNIInstallFailed", fmt.Sprintf("Failed to install CNI: %v", err))
-			m.Cluster.Save()
-			return fmt.Errorf("failed to install CNI: %w", err)
-		}
-		progress.CompleteStep(stepIndex)
-		m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue,
-			"CNIInstalled", fmt.Sprintf("%s CNI installed successfully", m.Config.CNI))
-		m.Cluster.Save()
-	} else if m.Config.CNI == "none" {
-		log.Debugf("Skipping CNI installation...")
-		m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue,
-			"CNISkipped", "CNI installation was skipped as configured")
-		m.Cluster.Save()
-	} else {
-		log.Debugf("Skipping CNI installation as it was already completed")
-	}
-
-	// 6. Install CSI if not already done
-	stepIndex++
-	if m.Config.CSI != "none" && !m.Cluster.HasCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusTrue) {
-		progress.StartStep(stepIndex)
-		log.Debugf("Installing %s CSI...", m.Config.CSI)
-		err := m.AddonManager.InstallCSI()
-		if err != nil {
-			progress.FailStep(stepIndex, err)
-			m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
-				"CSIInstallFailed", fmt.Sprintf("Failed to install CSI: %v", err))
-			m.Cluster.Save()
-			return fmt.Errorf("failed to install CSI: %w", err)
-		}
-		progress.CompleteStep(stepIndex)
-		m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusTrue,
-			"CSIInstalled", fmt.Sprintf("%s CSI installed successfully", m.Config.CSI))
-		m.Cluster.Save()
-	} else if m.Config.CSI == "none" {
-		log.Debugf("Skipping CSI installation...")
-		m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusTrue,
-			"CSISkipped", "CSI installation was skipped as configured")
-		m.Cluster.Save()
-	} else {
-		log.Debugf("Skipping CSI installation as it was already completed")
-	}
-
-	// 7. Install MetalLB if not already done
-	if m.Config.LB == "metallb" && m.InitOptions.EnableIPVS() {
-		if !m.Cluster.HasCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue) {
-			stepIndex++
-			progress.AddStep("lb-install", "Installing LoadBalancer")
-			progress.StartStep(stepIndex)
-			log.Debugf("Installing MetalLB LoadBalancer...")
-			err := m.AddonManager.InstallLB()
-			if err != nil {
-				progress.FailStep(stepIndex, err)
-				m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
-					"LoadBalancerInstallFailed", fmt.Sprintf("Failed to install LoadBalancer: %v", err))
-				m.Cluster.Save()
-				return fmt.Errorf("failed to install LoadBalancer: %w", err)
-			}
-			progress.CompleteStep(stepIndex)
-			m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue,
-				"LoadBalancerInstalled", "MetalLB LoadBalancer installed successfully")
-			m.Cluster.Save()
-		} else {
-			log.Debugf("Skipping LoadBalancer installation as it was already completed")
-		}
+	err := m.executeParallelSteps(progress, stepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to execute parallel steps: %w", err)
 	}
 
 	// Mark cluster as ready
@@ -380,16 +282,21 @@ func (m *Manager) CreateCluster() error {
 	m.Cluster.Status.Phase = config.ClusterPhaseRunning
 	m.Cluster.Save()
 
-	// 8. Download kubeconfig
-	stepIndex++
-	progress.StartStep(stepIndex)
+	// 8. Download kubeconfig - calculate the correct step index
+	// Steps: vm-creation(0), environment-init(1), master-init(2), worker-join(3), cni-install(4), csi-install(5), [lb-install(6)], kubeconfig(last)
+	kubeconfigStepIndex := 6 // Base index for kubeconfig
+	if m.Config.LB == "metallb" && m.InitOptions.EnableIPVS() {
+		kubeconfigStepIndex = 7 // If LB step exists, kubeconfig is at index 7
+	}
+
+	progress.StartStep(kubeconfigStepIndex)
 	log.Debugf("Downloading kubeconfig to local...")
 	kubeconfigPath, err := m.SetupKubeconfig()
 	if err != nil {
-		progress.FailStep(stepIndex, err)
+		progress.FailStep(kubeconfigStepIndex, err)
 		return fmt.Errorf("failed to download kubeconfig to local: %w", err)
 	}
-	progress.CompleteStep(stepIndex)
+	progress.CompleteStep(kubeconfigStepIndex)
 
 	// Complete the progress
 	progress.Complete()
@@ -629,7 +536,12 @@ func (m *Manager) InitializeMaster() (string, error) {
 }
 
 // JoinWorkerNodes joins worker nodes to the cluster
-func (m *Manager) JoinWorkerNodes(joinCommand string) error {
+func (m *Manager) JoinWorkerNodes() error {
+	joinCommand, err := m.getJoinCommand()
+	if err != nil {
+		return fmt.Errorf("failed to get join command: %w", err)
+	}
+
 	for i := range m.Cluster.Spec.Workers {
 		err := m.JoinWorkerNode(m.Cluster.Spec.Workers[i].Name, joinCommand)
 		if err != nil {
@@ -934,4 +846,192 @@ func (m *Manager) canResumeClusterCreation() bool {
 	}
 
 	return false
+}
+
+// executeParallelSteps executes worker join, CNI, CSI, and LB installation in parallel
+func (m *Manager) executeParallelSteps(progress *log.MultiStepProgress, baseStepIndex int) error {
+	// Define the parallel steps
+	type parallelStep struct {
+		name        string
+		description string
+		condition   config.ConditionType
+		skipCheck   func() bool
+		execute     func() error
+		skipReason  string
+	}
+
+	steps := []parallelStep{
+		{
+			name:        "worker-join",
+			description: "Joining worker nodes",
+			condition:   config.ConditionTypeWorkersJoined,
+			skipCheck: func() bool {
+				return m.Cluster.HasCondition(config.ConditionTypeWorkersJoined, config.ConditionStatusTrue) &&
+					m.Cluster.HasAllNodeCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusTrue)
+			},
+			execute: func() error {
+				log.Debugf("Joining Worker nodes to the cluster...")
+				err := m.JoinWorkerNodes()
+				if err != nil {
+					m.Cluster.SetCondition(config.ConditionTypeWorkersJoined, config.ConditionStatusFalse,
+						"WorkersJoinFailed", fmt.Sprintf("Failed to join workers: %v", err))
+					m.Cluster.Save()
+					return fmt.Errorf("failed to join Worker nodes to the cluster: %w", err)
+				}
+
+				m.Cluster.SetCondition(config.ConditionTypeWorkersJoined, config.ConditionStatusTrue,
+					"WorkersJoined", "All worker nodes joined the cluster successfully")
+				m.Cluster.Save()
+				return nil
+			},
+			skipReason: "worker joining already completed",
+		},
+		{
+			name:        "cni-install",
+			description: "Installing CNI",
+			condition:   config.ConditionTypeCNIInstalled,
+			skipCheck: func() bool {
+				return m.Config.CNI == "none" || m.Cluster.HasCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue)
+			},
+			execute: func() error {
+				log.Debugf("Installing %s CNI...", m.Config.CNI)
+				err := m.AddonManager.InstallCNI()
+				if err != nil {
+					m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusFalse,
+						"CNIInstallFailed", fmt.Sprintf("Failed to install CNI: %v", err))
+					m.Cluster.Save()
+					return fmt.Errorf("failed to install CNI: %w", err)
+				}
+
+				m.Cluster.SetCondition(config.ConditionTypeCNIInstalled, config.ConditionStatusTrue,
+					"CNIInstalled", fmt.Sprintf("%s CNI installed successfully", m.Config.CNI))
+				m.Cluster.Save()
+				return nil
+			},
+			skipReason: func() string {
+				if m.Config.CNI == "none" {
+					return "CNI installation skipped as configured"
+				}
+				return "CNI installation already completed"
+			}(),
+		},
+		{
+			name:        "csi-install",
+			description: "Installing CSI",
+			condition:   config.ConditionTypeCSIInstalled,
+			skipCheck: func() bool {
+				return m.Config.CSI == "none" || m.Cluster.HasCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusTrue)
+			},
+			execute: func() error {
+				log.Debugf("Installing %s CSI...", m.Config.CSI)
+				err := m.AddonManager.InstallCSI()
+				if err != nil {
+					m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusFalse,
+						"CSIInstallFailed", fmt.Sprintf("Failed to install CSI: %v", err))
+					m.Cluster.Save()
+					return fmt.Errorf("failed to install CSI: %w", err)
+				}
+
+				m.Cluster.SetCondition(config.ConditionTypeCSIInstalled, config.ConditionStatusTrue,
+					"CSIInstalled", fmt.Sprintf("%s CSI installed successfully", m.Config.CSI))
+				m.Cluster.Save()
+				return nil
+			},
+			skipReason: func() string {
+				if m.Config.CSI == "none" {
+					return "CSI installation skipped as configured"
+				}
+				return "CSI installation already completed"
+			}(),
+		},
+		{
+			name:        "lb-install",
+			description: "Installing LoadBalancer",
+			condition:   config.ConditionTypeLBInstalled,
+			skipCheck: func() bool {
+				return !(m.Config.LB == "metallb" && m.InitOptions.EnableIPVS()) ||
+					m.Cluster.HasCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue)
+			},
+			execute: func() error {
+				log.Debugf("Installing MetalLB LoadBalancer...")
+				err := m.AddonManager.InstallLB()
+				if err != nil {
+					m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
+						"LoadBalancerInstallFailed", fmt.Sprintf("Failed to install LoadBalancer: %v", err))
+					m.Cluster.Save()
+					return fmt.Errorf("failed to install LoadBalancer: %w", err)
+				}
+
+				m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusTrue,
+					"LoadBalancerInstalled", "MetalLB LoadBalancer installed successfully")
+				m.Cluster.Save()
+				return nil
+			},
+			skipReason: func() string {
+				if !(m.Config.LB == "metallb" && m.InitOptions.EnableIPVS()) {
+					return "LoadBalancer installation not required"
+				}
+				return "LoadBalancer installation already completed"
+			}(),
+		},
+	}
+
+	// Filter out steps that should be skipped
+	var activeSteps []parallelStep
+	for _, step := range steps {
+		if !step.skipCheck() {
+			activeSteps = append(activeSteps, step)
+		} else {
+			log.Debugf("Skipping %s: %s", step.description, step.skipReason)
+		}
+	}
+
+	// If no steps need to be executed, return early
+	if len(activeSteps) == 0 {
+		log.Debugf("All parallel steps already completed, skipping parallel execution")
+		return nil
+	}
+
+	// Execute steps in parallel
+	var wg sync.WaitGroup
+	errors := make([]error, len(activeSteps))
+	stepIndexMap := make(map[string]int)
+
+	// Start all active steps
+	for i, step := range activeSteps {
+		stepIndex := baseStepIndex + i
+		stepIndexMap[step.name] = stepIndex
+
+		// Start the step in progress
+		progress.StartStep(stepIndex)
+
+		wg.Add(1)
+		go func(stepIdx int, s parallelStep) {
+			defer wg.Done()
+
+			// Execute the step
+			err := s.execute()
+			errors[stepIdx] = err
+
+			// Update progress based on result
+			if err != nil {
+				progress.FailStep(stepIndexMap[s.name], err)
+			} else {
+				progress.CompleteStep(stepIndexMap[s.name])
+			}
+		}(i, step)
+	}
+
+	// Wait for all steps to complete
+	wg.Wait()
+
+	// Check for any errors
+	for i, err := range errors {
+		if err != nil {
+			return fmt.Errorf("parallel step %s failed: %w", activeSteps[i].name, err)
+		}
+	}
+
+	log.Debugf("All parallel steps completed successfully")
+	return nil
 }

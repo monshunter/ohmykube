@@ -541,7 +541,7 @@ log_with_time() {
 if command -v nerdctl >/dev/null 2>&1; then
     log_with_time "Loading image using nerdctl for platform ${PLATFORM}..."
     # nerdctl load command with namespace and platform
-    timeout 300 sudo nerdctl --namespace=k8s.io load -i "${IMAGE_FILE}" --platform "${PLATFORM}" || {
+    timeout 600 sudo nerdctl --namespace=k8s.io load -i "${IMAGE_FILE}" --platform "${PLATFORM}" || {
         log_with_time "ERROR: nerdctl load operation timed out or failed"
         exit 1
     }
@@ -550,7 +550,7 @@ if command -v nerdctl >/dev/null 2>&1; then
 elif command -v ctr >/dev/null 2>&1; then
     log_with_time "Loading image using ctr for platform ${PLATFORM}..."
     # ctr import command with namespace (platform is auto-detected from tar)
-    timeout 300 sudo ctr --namespace=k8s.io images import "${IMAGE_FILE}" || {
+    timeout 600 sudo ctr --namespace=k8s.io images import "${IMAGE_FILE}" || {
         log_with_time "ERROR: ctr import operation timed out or failed"
         exit 1
     }
@@ -571,8 +571,25 @@ else
 fi
 `, ref.String(), ref.Arch, remotePath)
 
-	if _, err := sshRunner.RunCommand(nodeName, loadScript); err != nil {
-		return fmt.Errorf("failed to load image on remote node: %w", err)
+	// Retry image loading up to 3 times to handle transient failures
+	var lastErr error
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if _, err := sshRunner.RunCommand(nodeName, loadScript); err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				log.Debugf("Image load attempt %d/%d failed for %s, retrying: %v", attempt, maxRetries, ref.String(), err)
+				time.Sleep(time.Duration(attempt) * 2 * time.Second) // Exponential backoff
+				continue
+			}
+		} else {
+			lastErr = nil
+			break
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("failed to load image on remote node after %d attempts: %w", maxRetries, lastErr)
 	}
 
 	// Update last accessed time
@@ -682,12 +699,6 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 	// Create image manager for caching
 	ctx := context.Background()
 
-	// Cache each cluster image with concurrent processing
-	// Use a semaphore to limit concurrent uploads per node to avoid overwhelming the network
-	maxConcurrentUploads := 3
-	semaphore := make(chan struct{}, maxConcurrentUploads)
-	var wg sync.WaitGroup
-
 	for _, imageName := range imageNames {
 		if len(imageName) == 0 {
 			continue
@@ -699,25 +710,13 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 			continue
 		}
 
-		wg.Add(1)
-		go func(image *ImageInfo) {
-			defer func() {
-				wg.Done()
-				<-semaphore
-			}()
-			// Acquire semaphore
-			semaphore <- struct{}{}
-
-			originalName := image.Reference.Original
-			log.Debugf("Preheating image: %s", originalName)
-			if err := m.EnsureImage(ctx, originalName, sshRunner, nodeName, controllerNode); err != nil {
-				log.Warningf("Failed to preheat image %s: %v", originalName, err)
-				// Continue with other images even if one fails
-			}
-		}(image)
+		originalName := image.Reference.Original
+		log.Debugf("Preheating image: %s to node %s", originalName, nodeName)
+		if err := m.EnsureImage(ctx, originalName, sshRunner, nodeName, controllerNode); err != nil {
+			log.Warningf("Failed to preheat image %s: %v", originalName, err)
+			// Continue with other images even if one fails
+		}
 	}
-
-	wg.Wait()
 
 	log.Debugf("Completed cluster image preheating for node %s", nodeName)
 	return nil

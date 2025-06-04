@@ -53,11 +53,12 @@ func init() {
 	// Global flags can be added here
 	rootCmd.PersistentFlags().StringVar(&password, "password", "ohmykube123", "root password")
 	rootCmd.PersistentFlags().StringVar(&clusterName, "name", "ohmykube", "Cluster name")
-	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 1, "Parallel number for creating nodes")
+	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 3, "Parallel number for creating nodes")
 	rootCmd.PersistentFlags().StringVar(&provider, "provider", "lima", "Provider to use (currently only lima is supported)")
 	rootCmd.PersistentFlags().StringVar(&template, "template", "",
-		`template or file, for example: "ubuntu-24.04" or "/path/to/file", default "ubuntu-24.04" in lima`)
-	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "ipvs", "Proxy mode (iptables or ipvs)")
+		`template or file, for example: "ubuntu-24.04" or "/path/to/file", default "ubuntu-24.04" in Lima.
+Use "limactl create --list-templates" to list all available templates in Lima.`)
+	rootCmd.PersistentFlags().StringVar(&proxyMode, "proxy-mode", "iptables", "Proxy mode (iptables or ipvs)")
 	rootCmd.PersistentFlags().BoolVar(&updateSystem, "update-system", false,
 		"Update system packages before installation")
 

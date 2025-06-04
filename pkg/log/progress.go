@@ -2,7 +2,6 @@ package log
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 )
@@ -116,13 +115,15 @@ type MultiStepProgress struct {
 	steps       []*Step
 	currentStep int
 	title       string
+	startTime   time.Time // Global start time for total duration calculation
 }
 
 // NewMultiStepProgress creates a new multi-step progress tracker
 func NewMultiStepProgress(title string) *MultiStepProgress {
 	return &MultiStepProgress{
-		title: title,
-		steps: make([]*Step, 0),
+		title:     title,
+		steps:     make([]*Step, 0),
+		startTime: time.Now(), // Record global start time
 	}
 }
 
@@ -147,13 +148,8 @@ func (msp *MultiStepProgress) StartStep(stepIndex int) {
 
 	if !quiet {
 		icon := getStepIcon(stepIndex)
-		if verbose {
-			// Verbose mode: show detailed start message
-			Info(fmt.Sprintf("%s %s (starting...)", icon, step.Description))
-		} else {
-			// Default mode: show start message with consistent INFO styling
-			progressStart(fmt.Sprintf("%s %s... ", icon, step.Description))
-		}
+		// Always use two-stage format for consistency
+		Info(fmt.Sprintf("%s %s...", icon, step.Description))
 	}
 }
 
@@ -170,13 +166,8 @@ func (msp *MultiStepProgress) CompleteStep(stepIndex int) {
 	if !quiet {
 		elapsed := step.EndTime.Sub(step.StartTime)
 		icon := getStepIcon(stepIndex)
-		if verbose {
-			// Verbose mode: show complete log entry
-			Info(fmt.Sprintf("%s %s ✅ (%s)", icon, step.Description, formatDuration(elapsed)))
-		} else {
-			// Default mode: complete the same line with consistent styling
-			progressComplete(fmt.Sprintf("✅ (%s)", formatDuration(elapsed)))
-		}
+		// Always use verbose-style format with full log entry and newlines
+		Info(fmt.Sprintf("%s %s ✅ (%s)", icon, step.Description, formatDuration(elapsed)))
 	}
 }
 
@@ -192,13 +183,8 @@ func (msp *MultiStepProgress) FailStep(stepIndex int, err error) {
 
 	if !quiet {
 		icon := getStepIcon(stepIndex)
-		if verbose {
-			// Verbose mode: show complete log entry
-			Error(fmt.Sprintf("%s %s ❌ Failed: %v", icon, step.Description, err))
-		} else {
-			// Default mode: complete the same line with failure styling
-			progressFail(fmt.Sprintf("❌ Failed: %v", err))
-		}
+		// Always use verbose-style format with full log entry and newlines
+		Error(fmt.Sprintf("%s %s ❌ Failed: %v", icon, step.Description, err))
 	}
 }
 
@@ -208,12 +194,8 @@ func (msp *MultiStepProgress) Complete() {
 		return
 	}
 
-	totalTime := time.Duration(0)
-	for _, step := range msp.steps {
-		if step.Completed {
-			totalTime += step.EndTime.Sub(step.StartTime)
-		}
-	}
+	// Calculate total time from global start time to now
+	totalTime := time.Since(msp.startTime)
 
 	Info(fmt.Sprintf("✅ %s completed in %s!", msp.title, formatDuration(totalTime)))
 }
@@ -256,35 +238,4 @@ func QuietInfof(format string, args ...any) {
 	if verbose {
 		Infof(format, args...)
 	}
-}
-
-// pProgressStart shows progress start message with consistent INFO styling but without newline
-func progressStart(args ...any) {
-	if quiet {
-		return
-	}
-
-	timeStr := time.Now().Format(timeFormat)
-	coloredPrefix := getLevelPrefix("INFO", INFO)
-	fmt.Fprintf(os.Stdout, "[%s] %s: %s", timeStr, coloredPrefix, fmt.Sprint(args...))
-}
-
-// progressComplete completes the progress line with consistent styling
-func progressComplete(args ...any) {
-	if quiet {
-		return
-	}
-
-	message := fmt.Sprint(args...)
-	fmt.Printf("%s\n", message)
-}
-
-// ProgressFail completes the progress line with failure message
-func progressFail(args ...any) {
-	if quiet {
-		return
-	}
-
-	message := fmt.Sprint(args...)
-	fmt.Printf("%s\n", message)
 }
