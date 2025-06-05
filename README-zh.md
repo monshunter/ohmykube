@@ -54,7 +54,7 @@ ohmykube down
 ```bash
 # 自定义节点数量和资源
 ohmykube up --workers 3 --master-cpu 4 --master-memory 8 --master-disk 20 \
-            --worker-cpu 2 --worker-memory 4096 --worker-disk 10
+            --worker-cpu 2 --worker-memory 4 --worker-disk 10
 
 # 选择网络插件
 ohmykube up --cni cilium
