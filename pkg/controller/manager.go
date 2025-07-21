@@ -324,8 +324,8 @@ func (m *Manager) CreateCluster() error {
 
 // CreateClusterVMs creates all cluster VMs in parallel (master and workers)
 func (m *Manager) CreateClusterVMs() error {
-	// Initialize node groups from spec
-	m.Cluster.InitializeNodeGroupsFromSpec()
+	// Sync node groups from spec without losing existing status
+	m.syncNodeGroupsFromSpec()
 
 	// Create VMs for all node groups
 	totalNodes := m.Cluster.GetTotalDesiredNodes()
@@ -335,6 +335,20 @@ func (m *Manager) CreateClusterVMs() error {
 		return m.createVMsParallelFromGroups()
 	}
 	return m.createVMsSequentialFromGroups()
+}
+
+// syncNodeGroupsFromSpec syncs node groups from spec while preserving existing status
+func (m *Manager) syncNodeGroupsFromSpec() {
+	// For each spec group, ensure corresponding status group exists with correct desire count
+	for _, masterSpec := range m.Cluster.Spec.Nodes.Master {
+		statusGroup := m.Cluster.GetOrCreateNodeGroup(masterSpec.GroupID)
+		statusGroup.Desire = masterSpec.Replica
+	}
+
+	for _, workerSpec := range m.Cluster.Spec.Nodes.Workers {
+		statusGroup := m.Cluster.GetOrCreateNodeGroup(workerSpec.GroupID)
+		statusGroup.Desire = workerSpec.Replica
+	}
 }
 
 func (m *Manager) setupVM(nodeName string, role string, groupID int, cpu int, memory int, disk int) (*config.NodeGroupMember, error) {
@@ -489,9 +503,16 @@ func (m *Manager) SetStatusForNodeByName(nodeName string) error {
 
 // createVMsSequentialFromGroups creates VMs sequentially from node groups
 func (m *Manager) createVMsSequentialFromGroups() error {
-	// Create master nodes
+	// Create master nodes (only missing ones)
 	for _, masterSpec := range m.Cluster.Spec.Nodes.Master {
-		for i := 0; i < masterSpec.Replica; i++ {
+		statusGroup := m.Cluster.GetNodeGroupByID(masterSpec.GroupID)
+		if statusGroup == nil {
+			continue
+		}
+
+		// Calculate how many nodes we need to create
+		needed := statusGroup.Desire - len(statusGroup.Members)
+		for i := 0; i < needed; i++ {
 			nodeName := m.Cluster.GenNodeName(config.RoleMaster)
 			cpu, memory, disk := m.parseResources(masterSpec.Resources)
 			_, err := m.setupVM(nodeName, config.RoleMaster, masterSpec.GroupID, cpu, memory, disk)
@@ -501,9 +522,16 @@ func (m *Manager) createVMsSequentialFromGroups() error {
 		}
 	}
 
-	// Create worker nodes
+	// Create worker nodes (only missing ones)
 	for _, workerSpec := range m.Cluster.Spec.Nodes.Workers {
-		for i := 0; i < workerSpec.Replica; i++ {
+		statusGroup := m.Cluster.GetNodeGroupByID(workerSpec.GroupID)
+		if statusGroup == nil {
+			continue
+		}
+
+		// Calculate how many nodes we need to create
+		needed := statusGroup.Desire - len(statusGroup.Members)
+		for i := 0; i < needed; i++ {
 			nodeName := m.Cluster.GenNodeName(config.RoleWorker)
 			cpu, memory, disk := m.parseResources(workerSpec.Resources)
 			_, err := m.setupVM(nodeName, config.RoleWorker, workerSpec.GroupID, cpu, memory, disk)
@@ -522,9 +550,16 @@ func (m *Manager) createVMsParallelFromGroups() error {
 	sem := make(chan struct{}, m.Config.Parallel)
 	errChan := make(chan error, m.Cluster.GetTotalDesiredNodes())
 
-	// Create master nodes
+	// Create master nodes (only missing ones)
 	for _, masterSpec := range m.Cluster.Spec.Nodes.Master {
-		for i := 0; i < masterSpec.Replica; i++ {
+		statusGroup := m.Cluster.GetNodeGroupByID(masterSpec.GroupID)
+		if statusGroup == nil {
+			continue
+		}
+
+		// Calculate how many nodes we need to create
+		needed := statusGroup.Desire - len(statusGroup.Members)
+		for i := 0; i < needed; i++ {
 			wg.Add(1)
 			go func(spec config.NodeGroupSpec) {
 				defer wg.Done()
@@ -541,9 +576,16 @@ func (m *Manager) createVMsParallelFromGroups() error {
 		}
 	}
 
-	// Create worker nodes
+	// Create worker nodes (only missing ones)
 	for _, workerSpec := range m.Cluster.Spec.Nodes.Workers {
-		for i := 0; i < workerSpec.Replica; i++ {
+		statusGroup := m.Cluster.GetNodeGroupByID(workerSpec.GroupID)
+		if statusGroup == nil {
+			continue
+		}
+
+		// Calculate how many nodes we need to create
+		needed := statusGroup.Desire - len(statusGroup.Members)
+		for i := 0; i < needed; i++ {
 			wg.Add(1)
 			go func(spec config.NodeGroupSpec) {
 				defer wg.Done()
@@ -867,6 +909,19 @@ func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
 }
 
 func (m *Manager) AddWorkerNodes(cpu int, memory int, disk int, count int) error {
+	// First, check for incomplete node additions and resume them
+	incompleteNodes := m.findIncompleteWorkerNodes()
+	if len(incompleteNodes) > 0 {
+		log.Infof("Found %d incomplete worker nodes, resuming their setup...", len(incompleteNodes))
+		for _, nodeName := range incompleteNodes {
+			err := m.resumeWorkerNodeSetup(nodeName)
+			if err != nil {
+				return fmt.Errorf("failed to resume setup for node %s: %w", nodeName, err)
+			}
+		}
+	}
+
+	// Then add new nodes as requested
 	for i := 0; i < count; i++ {
 		err := m.AddWorkerNode(cpu, memory, disk)
 		if err != nil {
@@ -922,6 +977,90 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 		"Joining", "Joining node to the cluster")
 
 	return m.JoinWorkerNode(nodeName, joinCmd)
+}
+
+// ResumeIncompleteWorkerNodes finds and resumes incomplete worker node additions
+func (m *Manager) ResumeIncompleteWorkerNodes() error {
+	incompleteNodes := m.findIncompleteWorkerNodes()
+	if len(incompleteNodes) == 0 {
+		log.Debugf("No incomplete worker nodes found")
+		return nil
+	}
+
+	log.Infof("Found %d incomplete worker nodes, resuming their setup...", len(incompleteNodes))
+	for _, nodeName := range incompleteNodes {
+		log.Infof("Resuming setup for worker node: %s", nodeName)
+		err := m.resumeWorkerNodeSetup(nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to resume setup for node %s: %w", nodeName, err)
+		}
+	}
+
+	log.Infof("Successfully resumed setup for %d worker nodes", len(incompleteNodes))
+	return nil
+}
+
+// findIncompleteWorkerNodes finds worker nodes that exist but are not fully set up
+func (m *Manager) findIncompleteWorkerNodes() []string {
+	var incompleteNodes []string
+
+	// Check all worker node groups (excluding master group 1)
+	for _, group := range m.Cluster.Status.Nodes {
+		if group.GroupID == 1 { // Skip master group
+			continue
+		}
+
+		for _, member := range group.Members {
+			// Check if node exists but is not fully joined to the cluster
+			if !m.Cluster.HasNodeCondition(member.Name, config.ConditionTypeJoinedCluster, config.ConditionStatusTrue) {
+				// Verify the VM actually exists
+				status, err := m.VMProvider.Status(member.Name)
+				if err == nil && status.IsRunning() {
+					incompleteNodes = append(incompleteNodes, member.Name)
+				}
+			}
+		}
+	}
+
+	return incompleteNodes
+}
+
+// resumeWorkerNodeSetup resumes the setup process for an incomplete worker node
+func (m *Manager) resumeWorkerNodeSetup(nodeName string) error {
+	// Ensure node status is up to date
+	err := m.SetStatusForNodeByName(nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to update status for node %s: %w", nodeName, err)
+	}
+
+	// Check if environment initialization is needed
+	if !m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue) {
+		log.Infof("Initializing environment for node %s", nodeName)
+		err = m.initializeVM(nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to initialize environment for node %s: %w", nodeName, err)
+		}
+	}
+
+	// Check if node needs to join the cluster
+	if !m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeJoinedCluster, config.ConditionStatusTrue) {
+		log.Infof("Joining node %s to cluster", nodeName)
+
+		// Get join command
+		joinCmd, err := m.getJoinCommand()
+		if err != nil {
+			return fmt.Errorf("failed to get join command for node %s: %w", nodeName, err)
+		}
+
+		// Join the node to the cluster
+		err = m.JoinWorkerNode(nodeName, joinCmd)
+		if err != nil {
+			return fmt.Errorf("failed to join node %s to cluster: %w", nodeName, err)
+		}
+	}
+
+	log.Infof("Successfully resumed setup for worker node: %s", nodeName)
+	return nil
 }
 
 // DeleteNode deletes a node from the cluster
@@ -1114,6 +1253,12 @@ func (m *Manager) OpenShell(nodeName string) error {
 // canResumeClusterCreation checks if there are any conditions set that indicate
 // a previous cluster creation attempt that can be resumed
 func (m *Manager) canResumeClusterCreation() bool {
+	// If cluster is already fully ready, we should not resume cluster creation
+	// This prevents 'ohmykube up' from recreating an already completed cluster
+	if m.Cluster.HasCondition(config.ConditionTypeClusterReady, config.ConditionStatusTrue) {
+		return false
+	}
+
 	// Check if any workflow conditions are set to true
 	if m.Cluster.HasCondition(config.ConditionTypeVMCreated, config.ConditionStatusTrue) ||
 		m.Cluster.HasCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue) ||

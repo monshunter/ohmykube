@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,15 +189,9 @@ func (m *PackageManager) uploadPackage(ctx context.Context, packageName, version
 		return fmt.Errorf("local package file not found: %s", packageInfo.LocalPath)
 	}
 
-	// Check if package already exists on remote node
-	checkCmd := fmt.Sprintf("test -f %s && echo 'exists' || echo 'not_exists'", packageInfo.GetRemotePath())
-	output, err := sshRunner.RunCommand(nodeName, checkCmd)
-	if err != nil {
-		return fmt.Errorf("failed to check if package exists on remote node: %w", err)
-	}
-
-	if strings.TrimSpace(output) == "exists" {
-		log.Debugf("Package %s-%s-%s already exists on node %s", packageName, version, arch, nodeName)
+	// Check if package already exists on remote node and verify its integrity
+	if m.isPackageValidOnRemote(sshRunner, nodeName, packageInfo) {
+		log.Debugf("Package %s-%s-%s already exists and is valid on node %s", packageName, version, arch, nodeName)
 		return nil
 	}
 
@@ -207,6 +202,62 @@ func (m *PackageManager) uploadPackage(ctx context.Context, packageName, version
 
 	log.Debugf("Successfully uploaded package %s-%s-%s to node %s using SCP", packageName, version, arch, nodeName)
 	return nil
+}
+
+// isPackageValidOnRemote checks if a package exists on remote node and verifies its integrity
+func (m *PackageManager) isPackageValidOnRemote(sshRunner interfaces.SSHRunner, nodeName string, packageInfo *PackageInfo) bool {
+	remotePath := packageInfo.GetRemotePath()
+
+	// First check if file exists
+	checkCmd := fmt.Sprintf("test -f %s && echo 'exists' || echo 'not_exists'", remotePath)
+	output, err := sshRunner.RunCommand(nodeName, checkCmd)
+	if err != nil {
+		log.Debugf("Failed to check if package exists on remote node: %v", err)
+		return false
+	}
+
+	if strings.TrimSpace(output) != "exists" {
+		log.Debugf("Package file does not exist on remote node: %s", remotePath)
+		return false
+	}
+
+	// Check file size to verify integrity
+	sizeCmd := fmt.Sprintf("stat -c%%s %s 2>/dev/null || echo '0'", remotePath)
+	output, err = sshRunner.RunCommand(nodeName, sizeCmd)
+	if err != nil {
+		log.Debugf("Failed to get remote file size: %v", err)
+		return false
+	}
+
+	remoteSize, err := strconv.ParseInt(strings.TrimSpace(output), 10, 64)
+	if err != nil {
+		log.Debugf("Failed to parse remote file size: %v", err)
+		return false
+	}
+
+	// Get local file size for comparison
+	localInfo, err := os.Stat(packageInfo.LocalPath)
+	if err != nil {
+		log.Debugf("Failed to get local file info: %v", err)
+		return false
+	}
+
+	// Compare file sizes
+	if remoteSize != localInfo.Size() {
+		log.Debugf("File size mismatch: remote=%d, local=%d, removing incomplete file", remoteSize, localInfo.Size())
+		// Remove the incomplete file
+		removeCmd := fmt.Sprintf("rm -f %s", remotePath)
+		if _, err := sshRunner.RunCommand(nodeName, removeCmd); err != nil {
+			log.Warningf("Failed to remove incomplete file: %v", err)
+		}
+		return false
+	}
+
+	// Optionally verify checksum for extra integrity (can be expensive for large files)
+	// For now, size check should be sufficient to detect incomplete transfers
+
+	log.Debugf("Package file is valid on remote node: %s (size: %d bytes)", remotePath, remoteSize)
+	return true
 }
 
 // IsPackageCached checks if a package is already cached locally

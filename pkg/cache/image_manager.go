@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -508,14 +509,8 @@ func (m *ImageManager) UploadImageToNode(ctx context.Context, ref ImageReference
 		return nil
 	}
 
-	// Check if image file exists on remote node
-	checkFileCmd := fmt.Sprintf("test -f %s && echo 'exists' || echo 'not_exists'", remotePath)
-	output, err = sshRunner.RunCommand(nodeName, checkFileCmd)
-	if err != nil {
-		return fmt.Errorf("failed to check if image file exists on remote node: %w", err)
-	}
-
-	if strings.TrimSpace(output) != "exists" {
+	// Check if image file exists on remote node and verify its integrity
+	if !m.isImageValidOnRemote(sshRunner, nodeName, imageInfo.LocalPath, remotePath) {
 		// Upload the image file
 		if err := sshRunner.UploadFile(nodeName, imageInfo.LocalPath, remotePath); err != nil {
 			return fmt.Errorf("failed to upload image file: %w", err)
@@ -720,4 +715,55 @@ func (m *ImageManager) cacheClusterImages(controllerNode string, nodeName string
 
 	log.Debugf("Completed cluster image preheating for node %s", nodeName)
 	return nil
+}
+
+// isImageValidOnRemote checks if an image file exists on remote node and verifies its integrity
+func (m *ImageManager) isImageValidOnRemote(sshRunner interfaces.SSHRunner, nodeName, localPath, remotePath string) bool {
+	// First check if file exists
+	checkCmd := fmt.Sprintf("test -f %s && echo 'exists' || echo 'not_exists'", remotePath)
+	output, err := sshRunner.RunCommand(nodeName, checkCmd)
+	if err != nil {
+		log.Debugf("Failed to check if image exists on remote node: %v", err)
+		return false
+	}
+
+	if strings.TrimSpace(output) != "exists" {
+		log.Debugf("Image file does not exist on remote node: %s", remotePath)
+		return false
+	}
+
+	// Check file size to verify integrity
+	sizeCmd := fmt.Sprintf("stat -c%%s %s 2>/dev/null || echo '0'", remotePath)
+	output, err = sshRunner.RunCommand(nodeName, sizeCmd)
+	if err != nil {
+		log.Debugf("Failed to get remote image file size: %v", err)
+		return false
+	}
+
+	remoteSize, err := strconv.ParseInt(strings.TrimSpace(output), 10, 64)
+	if err != nil {
+		log.Debugf("Failed to parse remote image file size: %v", err)
+		return false
+	}
+
+	// Get local file size for comparison
+	localInfo, err := os.Stat(localPath)
+	if err != nil {
+		log.Debugf("Failed to get local image file info: %v", err)
+		return false
+	}
+
+	// Compare file sizes
+	if remoteSize != localInfo.Size() {
+		log.Debugf("Image file size mismatch: remote=%d, local=%d, removing incomplete file", remoteSize, localInfo.Size())
+		// Remove the incomplete file
+		removeCmd := fmt.Sprintf("rm -f %s", remotePath)
+		if _, err := sshRunner.RunCommand(nodeName, removeCmd); err != nil {
+			log.Warningf("Failed to remove incomplete image file: %v", err)
+		}
+		return false
+	}
+
+	log.Debugf("Image file is valid on remote node: %s (size: %d bytes)", remotePath, remoteSize)
+	return true
 }
