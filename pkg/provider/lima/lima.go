@@ -131,14 +131,14 @@ func (c *LimaProvider) Create(name string, args ...any) error {
 			if err != nil {
 				return err
 			}
-			return c.initAuth(name)
+			return nil
 		} else if status.IsUnknown() {
 			log.Debugf("VM %s already created and unknown status, starting it", name)
 			err := c.Start(name)
 			if err != nil {
 				return err
 			}
-			return c.initAuth(name)
+			return nil
 		} else {
 			return fmt.Errorf("VM %s already created and unknown status, cannot start it", name)
 		}
@@ -187,11 +187,49 @@ func (c *LimaProvider) Create(name string, args ...any) error {
 		return fmt.Errorf("failed to create VM: %w, error message: %s", err, stderr.String())
 	}
 
-	return c.initAuth(name)
+	return nil
+}
+
+// checkInitAuthStatus checks if initAuth has been completed by checking the status file
+func (c *LimaProvider) checkInitAuthStatus(name string) (bool, error) {
+	// Check if the initAuth completion marker file exists in a persistent location
+	checkCmd := `test -f /var/lib/ohmykube/initauth-complete && echo "COMPLETE" || echo "INCOMPLETE"`
+
+	output, err := c.Exec(name, checkCmd)
+	if err != nil {
+		log.Debugf("Failed to check initAuth status for VM %s: %v", name, err)
+		return false, nil // Return false but no error, as this might be expected during initial setup
+	}
+
+	isComplete := strings.TrimSpace(output) == "COMPLETE"
+	log.Debugf("InitAuth status check for VM %s: %v", name, isComplete)
+	return isComplete, nil
+}
+
+// updateInitAuthStatus creates the completion marker file to indicate initAuth is complete
+func (c *LimaProvider) updateInitAuthStatus(name string) error {
+	// Create completion marker file to indicate initAuth is complete
+	markerCmd := `sudo mkdir -p /var/lib/ohmykube && sudo touch /var/lib/ohmykube/initauth-complete`
+	if _, err := c.Exec(name, markerCmd); err != nil {
+		return fmt.Errorf("failed to create initAuth completion marker: %w", err)
+	}
+	log.Debugf("InitAuth completion marker created for VM %s", name)
+	return nil
 }
 
 // InitAuth initializes authentication for the VM
-func (c *LimaProvider) initAuth(name string) error {
+func (c *LimaProvider) InitAuth(name string) error {
+	// First check if initAuth has already been completed
+	isComplete, err := c.checkInitAuthStatus(name)
+	if err != nil {
+		log.Debugf("Failed to check initAuth status for VM %s, proceeding with initialization: %v", name, err)
+	} else if isComplete {
+		log.Debugf("InitAuth already completed for VM %s, skipping initialization", name)
+		return nil
+	}
+
+	log.Debugf("Initializing authentication for VM %s", name)
+
 	// Set host name
 	hostNameCmd := fmt.Sprintf("sudo hostnamectl set-hostname %s && sudo systemctl restart systemd-hostnamed", name)
 	if _, err := c.Exec(name, hostNameCmd); err != nil {
@@ -232,6 +270,12 @@ func (c *LimaProvider) initAuth(name string) error {
 		}
 	}
 
+	// Mark initAuth as complete
+	if err := c.updateInitAuthStatus(name); err != nil {
+		return fmt.Errorf("failed to update initAuth status: %w", err)
+	}
+
+	log.Debugf("InitAuth completed successfully for VM %s", name)
 	return nil
 }
 

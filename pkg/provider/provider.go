@@ -12,6 +12,9 @@ type Provider interface {
 	// Create creates a new virtual machine
 	Create(name string, args ...any) error
 
+	// InitAuth initializes authentication for the virtual machine
+	InitAuth(name string) error
+
 	// Delete deletes a virtual machine
 	Delete(name string) error
 

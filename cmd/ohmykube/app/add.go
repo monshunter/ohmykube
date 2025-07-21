@@ -77,18 +77,9 @@ var addCmd = &cobra.Command{
 		// Set environment initialization options
 		manager.SetInitOptions(initOptions)
 
-		// Check for incomplete node additions and resume them first
-		if err := manager.ResumeIncompleteWorkerNodes(); err != nil {
-			log.Errorf("Failed to resume incomplete worker nodes: %v", err)
-			return fmt.Errorf("failed to resume incomplete worker nodes: %w", err)
-		}
-
 		// Add new nodes as requested
 		if err := manager.AddWorkerNodes(addNodeCPU, addNodeMemory, addNodeDisk, count); err != nil {
 			log.Errorf("Failed to add node: %v", err)
-			log.Errorf(`A failure has occurred.
-			 You can either re-execute "ohmykube add" after the problem is fixed.
-			 The process will resume from where it failed.`)
 			return fmt.Errorf("failed to add node: %w", err)
 		}
 		return nil

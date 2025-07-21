@@ -190,6 +190,7 @@ func (m *Manager) CreateCluster() error {
 	// Initialize multi-step progress
 	progress := log.NewMultiStepProgress("Kubernetes cluster")
 	progress.AddStep("vm-creation", "Preparing virtual machines")
+	progress.AddStep("auth-init", "Initializing authentication")
 	progress.AddStep("environment-init", "Initializing node environments")
 	progress.AddStep("master-init", "Starting contol-plane")
 	progress.AddStep("worker-join", "Joining worker nodes")
@@ -232,7 +233,30 @@ func (m *Manager) CreateCluster() error {
 	} else {
 		log.Debugf("Skipping VM creation as it was already completed")
 	}
-	// 2. Initialize environment if not already done
+
+	// 2. Initialize authentication if not already done
+	stepIndex++
+	if !m.Cluster.HasCondition(config.ConditionTypeAuthInitialized, config.ConditionStatusTrue) ||
+		!m.Cluster.HasAllNodeCondition(config.ConditionTypeAuthInitialized, config.ConditionStatusTrue) {
+		progress.StartStep(stepIndex)
+		log.Debugf("Initializing authentication for VMs...")
+		err := m.InitializeAuth()
+		if err != nil {
+			progress.FailStep(stepIndex, err)
+			m.Cluster.SetCondition(config.ConditionTypeAuthInitialized, config.ConditionStatusFalse,
+				"AuthInitFailed", fmt.Sprintf("Failed to initialize authentication: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to initialize authentication: %w", err)
+		}
+		progress.CompleteStep(stepIndex)
+		m.Cluster.SetCondition(config.ConditionTypeAuthInitialized, config.ConditionStatusTrue,
+			"AuthInitialized", "All VM authentication initialized successfully")
+		m.Cluster.Save()
+	} else {
+		log.Debugf("Skipping authentication initialization as it was already completed")
+	}
+
+	// 3. Initialize environment if not already done
 	stepIndex++
 	if !m.Cluster.HasCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue) ||
 		!m.Cluster.HasAllNodeCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue) {
@@ -383,27 +407,7 @@ func (m *Manager) setupVM(nodeName string, role string, groupID int, cpu int, me
 	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeVMCreated, config.ConditionStatusTrue,
 		"Created", "VM created successfully")
 	m.Cluster.Save()
-	err = m.SetStatusForNodeMember(node)
-	if err != nil {
-		return node, fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
-	}
 	return node, nil
-}
-
-// getGroupIDForRole returns the appropriate group ID for a role
-func (m *Manager) getGroupIDForRole(role string) int {
-	if role == config.RoleMaster {
-		return 1
-	}
-
-	// For workers, this method should not be used anymore
-	// Use Cluster.AddNodeToWorkerGroup() instead
-	panic("getGroupIDForRole should not be used for worker nodes, use Cluster.AddNodeToWorkerGroup() instead")
-}
-
-// SetStatusForNodeMember sets status information for a node member
-func (m *Manager) SetStatusForNodeMember(node *config.NodeGroupMember) error {
-	return m.SetStatusForNodeByName(node.Name)
 }
 
 // SetStatusForNodeByName sets status information for a node by name
@@ -430,23 +434,13 @@ func (m *Manager) SetStatusForNodeByName(nodeName string) error {
 			return fmt.Errorf("failed to start VM %s: %w", nodeName, err)
 		}
 		log.Infof("VM %s started successfully", nodeName)
-
-		// Wait for SSH service to be ready with retry
-		log.Debugf("Waiting for SSH service to be ready on %s...", nodeName)
-		err = m.waitForSSHReady(nodeName, ip, 60*time.Second)
-		if err != nil {
-			return fmt.Errorf("SSH service not ready on node %s after VM start: %w", nodeName, err)
-		}
 	}
 
-	// Ensure SSH connection is established before running commands
-	// This is especially important in resume mode where SSH connections may not exist
-	if sshManager, ok := m.sshRunner.(*ssh.SSHManager); ok {
-		_, err := sshManager.CreateClient(nodeName, ip)
-		if err != nil {
-			return fmt.Errorf("failed to establish SSH connection for node %s: %w", nodeName, err)
-		}
-		log.Debugf("SSH connection established for node %s at %s", nodeName, ip)
+	// Wait for SSH service to be ready with retry
+	log.Debugf("Waiting for SSH service to be ready on %s...", nodeName)
+	err = m.waitForSSHReady(nodeName, ip, 60*time.Second)
+	if err != nil {
+		return fmt.Errorf("SSH service not ready on node %s after VM start: %w", nodeName, err)
 	}
 
 	// Get hostname
@@ -676,6 +670,99 @@ func (m *Manager) waitForSSHReady(nodeName, ip string, timeout time.Duration) er
 // Legacy method removed - use createVMsParallelFromGroups instead
 
 // CreateWorkerVMs creates worker nodes
+
+func (m *Manager) InitializeAuth() error {
+	if m.Config.Parallel > 1 {
+		return m.initializeAuthParallel()
+	}
+	return m.initializeAuthSequential()
+}
+
+func (m *Manager) initializeAuthSequential() error {
+	// Initialize authentication for all nodes from node groups
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			err := m.initializeAuthForNode(member.Name)
+			if err != nil {
+				return fmt.Errorf("failed to initialize authentication for VM %s: %w", member.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Manager) initializeAuthParallel() error {
+	var wg sync.WaitGroup
+	// concurrent by m.Config.Parallel
+	sem := make(chan struct{}, m.Config.Parallel)
+
+	// Count total nodes
+	totalNodes := 0
+	for _, group := range m.Cluster.Status.Nodes {
+		totalNodes += len(group.Members)
+	}
+
+	// Channel to collect errors
+	errChan := make(chan error, totalNodes)
+
+	// Process all nodes from all groups
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			wg.Add(1)
+			go func(nodeName string) {
+				defer wg.Done()
+				sem <- struct{}{}        // acquire semaphore
+				defer func() { <-sem }() // release semaphore
+
+				err := m.initializeAuthForNode(nodeName)
+				if err != nil {
+					errChan <- fmt.Errorf("failed to initialize authentication for VM %s: %w", nodeName, err)
+				}
+			}(member.Name)
+		}
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+	close(errChan)
+
+	// Check for errors
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *Manager) initializeAuthForNode(nodeName string) error {
+	// Check if authentication is already initialized
+	if m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeAuthInitialized, config.ConditionStatusTrue) {
+		log.Debugf("Authentication for node %s already initialized, skipping initialization", nodeName)
+		return nil
+	}
+
+	// Set condition to pending
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeAuthInitialized, config.ConditionStatusFalse,
+		"Initializing", "Initializing node authentication")
+
+	// Call the provider's InitAuth method
+	err := m.VMProvider.InitAuth(nodeName)
+	if err != nil {
+		m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeAuthInitialized, config.ConditionStatusFalse,
+			"InitializationFailed", fmt.Sprintf("Failed to initialize authentication: %v", err))
+		return fmt.Errorf("failed to initialize authentication for node %s: %w", nodeName, err)
+	}
+
+	// Set condition to success
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeAuthInitialized, config.ConditionStatusTrue,
+		"Initialized", "Node authentication initialized successfully")
+	m.Cluster.Save()
+
+	log.Debugf("Authentication initialized successfully for node %s", nodeName)
+	return nil
+}
 
 func (m *Manager) InitializeVMs() error {
 	if m.Config.Parallel > 1 {
@@ -909,19 +996,13 @@ func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
 }
 
 func (m *Manager) AddWorkerNodes(cpu int, memory int, disk int, count int) error {
-	// First, check for incomplete node additions and resume them
-	incompleteNodes := m.findIncompleteWorkerNodes()
-	if len(incompleteNodes) > 0 {
-		log.Infof("Found %d incomplete worker nodes, resuming their setup...", len(incompleteNodes))
-		for _, nodeName := range incompleteNodes {
-			err := m.resumeWorkerNodeSetup(nodeName)
-			if err != nil {
-				return fmt.Errorf("failed to resume setup for node %s: %w", nodeName, err)
-			}
-		}
+	// Check if cluster is healthy before adding nodes
+	healthy, reason := m.IsClusterHealthy()
+	if !healthy {
+		return fmt.Errorf("cluster is not in a healthy state for adding nodes: %s. Please run 'ohmykube up' to fix cluster state first", reason)
 	}
 
-	// Then add new nodes as requested
+	// Add new nodes as requested
 	for i := 0; i < count; i++ {
 		err := m.AddWorkerNode(cpu, memory, disk)
 		if err != nil {
@@ -958,7 +1039,7 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 		return err
 	}
 	nodeName := node.Name
-
+	m.initializeAuthForNode(nodeName)
 	// Use initializer to set environment
 	log.Infof("Initializing node %s", nodeName)
 	err = m.initializeVM(nodeName)
@@ -977,27 +1058,6 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 		"Joining", "Joining node to the cluster")
 
 	return m.JoinWorkerNode(nodeName, joinCmd)
-}
-
-// ResumeIncompleteWorkerNodes finds and resumes incomplete worker node additions
-func (m *Manager) ResumeIncompleteWorkerNodes() error {
-	incompleteNodes := m.findIncompleteWorkerNodes()
-	if len(incompleteNodes) == 0 {
-		log.Debugf("No incomplete worker nodes found")
-		return nil
-	}
-
-	log.Infof("Found %d incomplete worker nodes, resuming their setup...", len(incompleteNodes))
-	for _, nodeName := range incompleteNodes {
-		log.Infof("Resuming setup for worker node: %s", nodeName)
-		err := m.resumeWorkerNodeSetup(nodeName)
-		if err != nil {
-			return fmt.Errorf("failed to resume setup for node %s: %w", nodeName, err)
-		}
-	}
-
-	log.Infof("Successfully resumed setup for %d worker nodes", len(incompleteNodes))
-	return nil
 }
 
 // findIncompleteWorkerNodes finds worker nodes that exist but are not fully set up
@@ -1027,8 +1087,17 @@ func (m *Manager) findIncompleteWorkerNodes() []string {
 
 // resumeWorkerNodeSetup resumes the setup process for an incomplete worker node
 func (m *Manager) resumeWorkerNodeSetup(nodeName string) error {
+	var err error
+	// Check if authentication initialization is needed
+	if !m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeAuthInitialized, config.ConditionStatusTrue) {
+		log.Infof("Initializing authentication for node %s", nodeName)
+		err = m.initializeAuthForNode(nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to initialize authentication for node %s: %w", nodeName, err)
+		}
+	}
 	// Ensure node status is up to date
-	err := m.SetStatusForNodeByName(nodeName)
+	err = m.SetStatusForNodeByName(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to update status for node %s: %w", nodeName, err)
 	}
@@ -1248,6 +1317,27 @@ func (m *Manager) OpenShell(nodeName string) error {
 		return fmt.Errorf("node %s does not exist", nodeName)
 	}
 	return m.VMProvider.Shell(nodeName)
+}
+
+// IsClusterHealthy checks if the cluster is in a healthy state for adding nodes
+func (m *Manager) IsClusterHealthy() (bool, string) {
+	// Check if cluster is ready
+	if !m.Cluster.HasCondition(config.ConditionTypeClusterReady, config.ConditionStatusTrue) {
+		return false, "cluster is not ready"
+	}
+
+	// Check if all nodes are ready
+	if !m.Cluster.HasAllNodeCondition(config.ConditionTypeNodeReady, config.ConditionStatusTrue) {
+		return false, "not all nodes are ready"
+	}
+
+	// Check for incomplete worker nodes
+	incompleteNodes := m.findIncompleteWorkerNodes()
+	if len(incompleteNodes) > 0 {
+		return false, fmt.Sprintf("found %d incomplete worker nodes: %v", len(incompleteNodes), incompleteNodes)
+	}
+
+	return true, ""
 }
 
 // canResumeClusterCreation checks if there are any conditions set that indicate

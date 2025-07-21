@@ -92,6 +92,7 @@ const (
 	// Workflow stage conditions for nodes
 	ConditionTypeNodeReady       ConditionType = "NodeReady"
 	ConditionTypeVMCreated       ConditionType = "VMCreated"
+	ConditionTypeAuthInitialized ConditionType = "AuthInitialized"
 	ConditionTypeEnvironmentInit ConditionType = "EnvironmentInitialized"
 	ConditionTypeKubeInitialized ConditionType = "KubernetesInitialized"
 	ConditionTypeJoinedCluster   ConditionType = "JoinedCluster"
