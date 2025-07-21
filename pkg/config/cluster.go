@@ -269,6 +269,9 @@ func (n *Node) IsRunning() bool {
 
 // SetClusterCondition sets or updates a condition in a cluster's status
 func (c *Cluster) SetCondition(conditionType ConditionType, status ConditionStatus, reason, message string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	condition := NewCondition(conditionType, status, reason, message)
 
 	// Find and update existing condition or append new one
@@ -293,6 +296,8 @@ func (c *Cluster) SetCondition(conditionType ConditionType, status ConditionStat
 
 // GetCondition gets a condition by type from a cluster
 func (c *Cluster) GetCondition(conditionType ConditionType) (Condition, bool) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return FindCondition(c.Status.Conditions, conditionType)
 }
 
@@ -305,6 +310,9 @@ func (c *Cluster) HasCondition(conditionType ConditionType, status ConditionStat
 }
 
 func (c *Cluster) HasAllNodeCondition(conditionType ConditionType, status ConditionStatus) bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for _, group := range c.Status.Nodes {
 		for _, member := range group.Members {
 			if !c.hasNodeCondition(member, conditionType, status) {
@@ -327,6 +335,9 @@ func (c *Cluster) hasNodeCondition(member NodeGroupMember, conditionType Conditi
 
 // GetNodeGroupByID returns a node group status by its group ID
 func (c *Cluster) GetNodeGroupByID(groupID int) *NodeGroupStatus {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for i := range c.Status.Nodes {
 		if c.Status.Nodes[i].GroupID == groupID {
 			return &c.Status.Nodes[i]
@@ -337,8 +348,14 @@ func (c *Cluster) GetNodeGroupByID(groupID int) *NodeGroupStatus {
 
 // GetOrCreateNodeGroup returns an existing node group or creates a new one
 func (c *Cluster) GetOrCreateNodeGroup(groupID int) *NodeGroupStatus {
-	if group := c.GetNodeGroupByID(groupID); group != nil {
-		return group
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Check again with lock held to avoid race condition
+	for i := range c.Status.Nodes {
+		if c.Status.Nodes[i].GroupID == groupID {
+			return &c.Status.Nodes[i]
+		}
 	}
 
 	// Create new node group
@@ -545,6 +562,9 @@ func NewCluster(config *Config) *Cluster {
 
 // InitializeNodeGroupsFromSpec initializes node group status from spec
 func (c *Cluster) InitializeNodeGroupsFromSpec() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	// Clear existing node groups
 	c.Status.Nodes = []NodeGroupStatus{}
 
@@ -575,6 +595,9 @@ func (c *Cluster) InitializeNodeGroupsFromSpec() {
 
 // SetNodeCondition sets a condition for a specific node
 func (c *Cluster) SetNodeCondition(nodeName string, conditionType ConditionType, status ConditionStatus, reason, message string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	for i := range c.Status.Nodes {
 		group := &c.Status.Nodes[i]
 		for j := range group.Members {
@@ -612,6 +635,9 @@ func (c *Cluster) setNodeMemberCondition(member *NodeGroupMember, conditionType 
 
 // GetNodeCondition gets a condition by type from a node
 func (c *Cluster) GetNodeCondition(nodeName string, conditionType ConditionType) (Condition, bool) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for _, group := range c.Status.Nodes {
 		for _, member := range group.Members {
 			if member.Name == nodeName {
@@ -632,6 +658,9 @@ func (c *Cluster) HasNodeCondition(nodeName string, conditionType ConditionType,
 
 // SetNodeIP sets the IP address for a specific node
 func (c *Cluster) SetNodeIP(nodeName string, ip string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	for i := range c.Status.Nodes {
 		group := &c.Status.Nodes[i]
 		for j := range group.Members {
@@ -645,6 +674,9 @@ func (c *Cluster) SetNodeIP(nodeName string, ip string) {
 
 // SetNodeHostname sets the hostname for a specific node
 func (c *Cluster) SetNodeHostname(nodeName string, hostname string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	for i := range c.Status.Nodes {
 		group := &c.Status.Nodes[i]
 		for j := range group.Members {
@@ -658,6 +690,9 @@ func (c *Cluster) SetNodeHostname(nodeName string, hostname string) {
 
 // SetNodeSystemInfo sets system information for a specific node
 func (c *Cluster) SetNodeSystemInfo(nodeName string, release, kernel, arch, os string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	for i := range c.Status.Nodes {
 		group := &c.Status.Nodes[i]
 		for j := range group.Members {
@@ -674,7 +709,30 @@ func (c *Cluster) SetNodeSystemInfo(nodeName string, release, kernel, arch, os s
 
 // CreateNodeInGroup creates a new node in the specified group
 func (c *Cluster) CreateNodeInGroup(groupID int, nodeName string) *NodeGroupMember {
-	group := c.GetOrCreateNodeGroup(groupID)
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Find or create group with lock held
+	var group *NodeGroupStatus
+	for i := range c.Status.Nodes {
+		if c.Status.Nodes[i].GroupID == groupID {
+			group = &c.Status.Nodes[i]
+			break
+		}
+	}
+
+	if group == nil {
+		// Create new node group
+		newGroup := NodeGroupStatus{
+			GroupID: groupID,
+			Desire:  0,
+			Created: 0,
+			Running: 0,
+			Members: []NodeGroupMember{},
+		}
+		c.Status.Nodes = append(c.Status.Nodes, newGroup)
+		group = &c.Status.Nodes[len(c.Status.Nodes)-1]
+	}
 
 	// Check if node already exists
 	for i := range group.Members {
@@ -698,31 +756,44 @@ func (c *Cluster) CreateNodeInGroup(groupID int, nodeName string) *NodeGroupMemb
 
 // GetKubernetesVersion returns the Kubernetes version
 func (c *Cluster) GetKubernetesVersion() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.KubernetesVersion
 }
 
 // GetProxyMode returns the proxy mode from networking config
 func (c *Cluster) GetProxyMode() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.Networking.ProxyMode
 }
 
 // GetCNI returns the CNI from networking config
 func (c *Cluster) GetCNI() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.Networking.CNI
 }
 
 // GetCSI returns the CSI from storage config
 func (c *Cluster) GetCSI() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.Storage.CSI
 }
 
 // GetLoadBalancer returns the load balancer from networking config
 func (c *Cluster) GetLoadBalancer() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.Networking.LoadBalancer
 }
 
 // GetPodSubnet returns the pod subnet from networking config
 func (c *Cluster) GetPodSubnet() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	if c.Spec.Networking.PodSubnet != "" {
 		return c.Spec.Networking.PodSubnet
 	}
@@ -731,6 +802,9 @@ func (c *Cluster) GetPodSubnet() string {
 
 // GetServiceSubnet returns the service subnet from networking config
 func (c *Cluster) GetServiceSubnet() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	if c.Spec.Networking.ServiceSubnet != "" {
 		return c.Spec.Networking.ServiceSubnet
 	}
@@ -739,6 +813,9 @@ func (c *Cluster) GetServiceSubnet() string {
 
 // GetNodeGroupSpecs returns all node group specifications
 func (c *Cluster) GetNodeGroupSpecs() []NodeGroupSpec {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	var specs []NodeGroupSpec
 	specs = append(specs, c.Spec.Nodes.Master...)
 	specs = append(specs, c.Spec.Nodes.Workers...)
@@ -747,18 +824,26 @@ func (c *Cluster) GetNodeGroupSpecs() []NodeGroupSpec {
 
 // GetMasterNodeGroupSpecs returns master node group specifications
 func (c *Cluster) GetMasterNodeGroupSpecs() []NodeGroupSpec {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.Nodes.Master
 }
 
 // GetWorkerNodeGroupSpecs returns worker node group specifications
 func (c *Cluster) GetWorkerNodeGroupSpecs() []NodeGroupSpec {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return c.Spec.Nodes.Workers
 }
 
 // GetTotalDesiredNodes returns the total number of desired nodes across all groups
 func (c *Cluster) GetTotalDesiredNodes() int {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	total := 0
-	for _, spec := range c.GetNodeGroupSpecs() {
+	specs := append(c.Spec.Nodes.Master, c.Spec.Nodes.Workers...)
+	for _, spec := range specs {
 		total += spec.Replica
 	}
 	return total
@@ -766,6 +851,9 @@ func (c *Cluster) GetTotalDesiredNodes() int {
 
 // GetTotalRunningNodes returns the total number of running nodes across all groups
 func (c *Cluster) GetTotalRunningNodes() int {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	total := 0
 	for _, group := range c.Status.Nodes {
 		total += group.Running
@@ -775,6 +863,9 @@ func (c *Cluster) GetTotalRunningNodes() int {
 
 // IsClusterFullyRunning checks if all desired nodes are running
 func (c *Cluster) IsClusterFullyRunning() bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for _, group := range c.Status.Nodes {
 		if group.Running < group.Desire {
 			return false
@@ -785,6 +876,9 @@ func (c *Cluster) IsClusterFullyRunning() bool {
 
 // FindMatchingWorkerGroup finds a worker node group with matching template and resources
 func (c *Cluster) FindMatchingWorkerGroup(template string, resources ResourceRequests) *NodeGroupSpec {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for i := range c.Spec.Nodes.Workers {
 		worker := &c.Spec.Nodes.Workers[i]
 		if worker.Template == template &&
@@ -799,8 +893,23 @@ func (c *Cluster) FindMatchingWorkerGroup(template string, resources ResourceReq
 
 // AddNodeToWorkerGroup adds a node to an existing worker group or creates a new one
 func (c *Cluster) AddNodeToWorkerGroup(template string, resources ResourceRequests) int {
-	// Try to find matching existing group
-	if matchingGroup := c.FindMatchingWorkerGroup(template, resources); matchingGroup != nil {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Try to find matching existing group (with lock held)
+	var matchingGroup *NodeGroupSpec
+	for i := range c.Spec.Nodes.Workers {
+		worker := &c.Spec.Nodes.Workers[i]
+		if worker.Template == template &&
+			worker.Resources.CPU == resources.CPU &&
+			worker.Resources.Memory == resources.Memory &&
+			worker.Resources.Storage == resources.Storage {
+			matchingGroup = worker
+			break
+		}
+	}
+
+	if matchingGroup != nil {
 		// Increase replica count in existing group
 		matchingGroup.Replica++
 
@@ -860,6 +969,9 @@ func (c *Cluster) getNextAvailableGroupID() int {
 }
 
 func (c *Cluster) GetMasterIP() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	// Find master node in group 1
 	for _, group := range c.Status.Nodes {
 		if group.GroupID == 1 && len(group.Members) > 0 {
@@ -870,6 +982,9 @@ func (c *Cluster) GetMasterIP() string {
 }
 
 func (c *Cluster) GetMasterName() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	// Find master node in group 1
 	for _, group := range c.Status.Nodes {
 		if group.GroupID == 1 && len(group.Members) > 0 {
@@ -880,6 +995,9 @@ func (c *Cluster) GetMasterName() string {
 }
 
 func (c *Cluster) GetWorkerNames() []string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	var names []string
 	// Find worker nodes in groups other than 1
 	for _, group := range c.Status.Nodes {
@@ -893,6 +1011,9 @@ func (c *Cluster) GetWorkerNames() []string {
 }
 
 func (c *Cluster) Nodes2IPsMap() map[string]string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	ips := make(map[string]string)
 	for _, group := range c.Status.Nodes {
 		for _, member := range group.Members {
@@ -903,6 +1024,9 @@ func (c *Cluster) Nodes2IPsMap() map[string]string {
 }
 
 func (c *Cluster) GetNodeByIP(ip string) *NodeGroupMember {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for _, group := range c.Status.Nodes {
 		for i := range group.Members {
 			if group.Members[i].IP == ip {
@@ -914,6 +1038,9 @@ func (c *Cluster) GetNodeByIP(ip string) *NodeGroupMember {
 }
 
 func (c *Cluster) GetNodeByName(name string) *NodeGroupMember {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	for _, group := range c.Status.Nodes {
 		for i := range group.Members {
 			if group.Members[i].Name == name {
@@ -922,34 +1049,6 @@ func (c *Cluster) GetNodeByName(name string) *NodeGroupMember {
 		}
 	}
 	return nil
-}
-
-func (c *Cluster) GetNodeOrNew(name string, role string, cpu int, memory int, disk int) *NodeGroupMember {
-	node := c.GetNodeByName(name)
-	if node == nil {
-		if name == "" {
-			name = c.GenNodeName(role)
-		}
-		// Create new node member
-		member := &NodeGroupMember{
-			Name:  name,
-			Phase: PhasePending,
-		}
-
-		// Determine group ID based on role
-		groupID := 1 // Master
-		if role == RoleWorker {
-			groupID = c.getNextWorkerGroupID()
-		}
-
-		// Add to appropriate group
-		group := c.GetOrCreateNodeGroup(groupID)
-		group.Members = append(group.Members, *member)
-		group.Created++
-
-		return &group.Members[len(group.Members)-1]
-	}
-	return node
 }
 
 func (c *Cluster) RemoveNode(name string) {
@@ -996,22 +1095,16 @@ func (c *Cluster) updateSpecReplicaForGroup(groupID int, newReplica int) {
 	}
 }
 
-// getNextWorkerGroupID returns the next available group ID for worker nodes
-func (c *Cluster) getNextWorkerGroupID() int {
-	maxGroupID := 1 // Start from 2 since 1 is reserved for master
-	for _, group := range c.Status.Nodes {
-		if group.GroupID > maxGroupID {
-			maxGroupID = group.GroupID
-		}
-	}
-	return maxGroupID + 1
-}
-
 func (c *Cluster) SetPhase(phase ClusterPhase) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	c.Status.Phase = phase
 }
 
 func (c *Cluster) SetPhaseForNode(nodeName string, phase Phase) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	for i := range c.Status.Nodes {
 		group := &c.Status.Nodes[i]
 		for j := range group.Members {
@@ -1032,14 +1125,31 @@ func (c *Cluster) SetPhaseForNode(nodeName string, phase Phase) {
 }
 
 func (c *Cluster) Prefix() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return fmt.Sprintf("%s-", c.Name)
 }
 
 func (c *Cluster) GenNodeName(role string) string {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	var nodeName string
 	for {
 		nodeName = fmt.Sprintf("%s-%s-%s", c.Name, role, GetRandomString(6))
-		if c.GetNodeByName(nodeName) == nil {
+		exists := false
+		for _, group := range c.Status.Nodes {
+			for _, member := range group.Members {
+				if member.Name == nodeName {
+					exists = true
+					break
+				}
+			}
+			if exists {
+				break
+			}
+		}
+		if !exists {
 			break
 		}
 	}
@@ -1064,7 +1174,7 @@ func (c *Cluster) RecordImage(imageName string) {
 	})
 }
 
-// GetClusterImageNames returns all recorded cluster image names
+// GetImageNames returns all recorded cluster image names
 // Implements interfaces.ClusterImageTracker
 func (c *Cluster) GetImageNames() []string {
 	c.lock.RLock()
@@ -1078,6 +1188,9 @@ func (c *Cluster) GetImageNames() []string {
 
 // Save saves cluster information to a file
 func (c *Cluster) Save() error {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	if c.Deleted {
 		return nil
 	}
@@ -1110,6 +1223,8 @@ func (c *Cluster) MarkDeleted() {
 	if c == nil {
 		return
 	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	c.Metadata.Deleted = true
 }
 
