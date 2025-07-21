@@ -22,6 +22,10 @@ var deleteCmd = &cobra.Command{
 	Long:    `Delete one or more nodes from an existing Kubernetes cluster`,
 	Args:    cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		// Get node names from args
 		deleteNodeNames := args
 		// Load cluster information
@@ -53,6 +57,10 @@ var deleteCmd = &cobra.Command{
 			return fmt.Errorf("failed to create cluster manager: %w", err)
 		}
 		defer manager.Close()
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
+
 		// Delete nodes
 		for _, nodeName := range deleteNodeNames {
 			nodeName = strings.TrimSpace(nodeName)

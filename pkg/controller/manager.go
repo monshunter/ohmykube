@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/monshunter/ohmykube/pkg/addons"
 	"github.com/monshunter/ohmykube/pkg/addons/api"
@@ -27,6 +30,7 @@ type Manager struct {
 	KubeManager  *kube.Manager
 	sshRunner    interfaces.SSHRunner
 	AddonManager addons.AddonManager
+	closed       uint32
 	Cluster      *config.Cluster
 	InitOptions  initializer.InitOptions
 }
@@ -75,7 +79,7 @@ func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluste
 		Cluster:      cls,
 		InitOptions:  initializer.DefaultInitOptions(),
 		KubeManager: kube.NewManager(sshRunner, cfg.KubernetesVersion,
-			cls.Spec.Master.Name, cfg.ProxyMode),
+			cls.GetMasterName(), cls.GetProxyMode()),
 	}
 
 	return manager, nil
@@ -92,14 +96,16 @@ func (m *Manager) GetNodeIP(nodeName string) (string, error) {
 }
 
 func (m *Manager) Close() error {
-	var err error
-	err = m.Cluster.Save()
-	if err != nil {
-		return fmt.Errorf("failed to save cluster information: %w", err)
-	}
-	err = m.sshRunner.Close()
-	if err != nil {
-		log.Warningf("failed to close SSH clients: %v", err)
+	if atomic.CompareAndSwapUint32(&m.closed, 0, 1) {
+		var err error
+		err = m.Cluster.Save()
+		if err != nil {
+			return fmt.Errorf("failed to save cluster information: %w", err)
+		}
+		err = m.sshRunner.Close()
+		if err != nil {
+			log.Warningf("failed to close SSH clients: %v", err)
+		}
 	}
 	return nil
 }
@@ -318,94 +324,314 @@ func (m *Manager) CreateCluster() error {
 
 // CreateClusterVMs creates all cluster VMs in parallel (master and workers)
 func (m *Manager) CreateClusterVMs() error {
-	nodes := m.Cluster.Spec.Workers
-	nodes = append(nodes, m.Cluster.Spec.Master)
-	log.Debugf("Creating %d nodes", len(nodes))
+	// Initialize node groups from spec
+	m.Cluster.InitializeNodeGroupsFromSpec()
+
+	// Create VMs for all node groups
+	totalNodes := m.Cluster.GetTotalDesiredNodes()
+	log.Debugf("Creating %d nodes", totalNodes)
+
 	if m.Config.Parallel > 1 {
-		return m.createVMsParallel(nodes)
+		return m.createVMsParallelFromGroups()
 	}
-	return m.createVMsSequential(nodes)
+	return m.createVMsSequentialFromGroups()
 }
 
-func (m *Manager) setupVM(nodeName string, role string, cpu int, memory int, disk int) (*config.Node, error) {
+func (m *Manager) setupVM(nodeName string, role string, groupID int, cpu int, memory int, disk int) (*config.NodeGroupMember, error) {
 
-	node := m.Cluster.GetNodeOrNew(nodeName, role, cpu, memory, disk)
-	// log.Infof("Setting up node %s, role: %s", node.Name, role)
-	nodeName = node.Name
+	// Get or create node in the appropriate group
+	node := m.Cluster.GetNodeByName(nodeName)
+	if node == nil {
+		if nodeName == "" {
+			nodeName = m.Cluster.GenNodeName(role)
+		}
+		node = m.Cluster.CreateNodeInGroup(groupID, nodeName)
+	}
 
-	if node.HasCondition(config.ConditionTypeVMCreated, config.ConditionStatusTrue) {
+	if m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeVMCreated, config.ConditionStatusTrue) {
 		log.Debugf("VM %s already created, skipping creation", nodeName)
 		return node, nil
 	}
 
 	// Create virtual machine
 	log.Debugf("Creating node %s, cpu: %d, memory: %d, disk: %d", nodeName, cpu, memory, disk)
-	node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
-		"Creating", "Creating worker VM")
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeVMCreated, config.ConditionStatusFalse,
+		"Creating", "Creating VM")
 
 	err := m.VMProvider.Create(nodeName, cpu, memory, disk)
 	if err != nil {
-		node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusFalse,
-			"CreationFailed", fmt.Sprintf("Failed to create worker VM: %v", err))
+		m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeVMCreated, config.ConditionStatusFalse,
+			"CreationFailed", fmt.Sprintf("Failed to create VM: %v", err))
 		m.Cluster.Save()
 		return node, fmt.Errorf("failed to create node %s: %w", nodeName, err)
 	}
 
-	node.SetCondition(config.ConditionTypeVMCreated, config.ConditionStatusTrue,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeVMCreated, config.ConditionStatusTrue,
 		"Created", "VM created successfully")
 	m.Cluster.Save()
-
-	err = m.SetStatusForNode(node)
+	err = m.SetStatusForNodeMember(node)
 	if err != nil {
 		return node, fmt.Errorf("failed to get information for node %s: %w", nodeName, err)
 	}
 	return node, nil
 }
 
-func (m *Manager) createVMsSequential(nodes []*config.Node) error {
-	for _, node := range nodes {
-		_, err := m.setupVM(node.Name, node.Spec.Role,
-			node.Spec.CPU, node.Spec.Memory, node.Spec.Disk)
+// getGroupIDForRole returns the appropriate group ID for a role
+func (m *Manager) getGroupIDForRole(role string) int {
+	if role == config.RoleMaster {
+		return 1
+	}
+
+	// For workers, this method should not be used anymore
+	// Use Cluster.AddNodeToWorkerGroup() instead
+	panic("getGroupIDForRole should not be used for worker nodes, use Cluster.AddNodeToWorkerGroup() instead")
+}
+
+// SetStatusForNodeMember sets status information for a node member
+func (m *Manager) SetStatusForNodeMember(node *config.NodeGroupMember) error {
+	return m.SetStatusForNodeByName(node.Name)
+}
+
+// SetStatusForNodeByName sets status information for a node by name
+func (m *Manager) SetStatusForNodeByName(nodeName string) error {
+	// Get IP information
+	ip, err := m.GetNodeIP(nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to get IP for node %s: %w", nodeName, err)
+	}
+	m.Cluster.SetNodeIP(nodeName, ip)
+	m.Cluster.SetPhaseForNode(nodeName, config.PhaseRunning)
+
+	// Ensure VM is running before establishing SSH connection
+	// This is especially important in resume mode where VMs may have been stopped
+	vmStatus, err := m.VMProvider.Status(nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to get VM status for node %s: %w", nodeName, err)
+	}
+
+	if !vmStatus.IsRunning() {
+		log.Infof("VM %s is not running, starting it...", nodeName)
+		err := m.VMProvider.Start(nodeName)
 		if err != nil {
-			return fmt.Errorf("failed to create Worker node %s: %w", node.Name, err)
+			return fmt.Errorf("failed to start VM %s: %w", nodeName, err)
+		}
+		log.Infof("VM %s started successfully", nodeName)
+
+		// Wait for SSH service to be ready with retry
+		log.Debugf("Waiting for SSH service to be ready on %s...", nodeName)
+		err = m.waitForSSHReady(nodeName, ip, 60*time.Second)
+		if err != nil {
+			return fmt.Errorf("SSH service not ready on node %s after VM start: %w", nodeName, err)
 		}
 	}
+
+	// Ensure SSH connection is established before running commands
+	// This is especially important in resume mode where SSH connections may not exist
+	if sshManager, ok := m.sshRunner.(*ssh.SSHManager); ok {
+		_, err := sshManager.CreateClient(nodeName, ip)
+		if err != nil {
+			return fmt.Errorf("failed to establish SSH connection for node %s: %w", nodeName, err)
+		}
+		log.Debugf("SSH connection established for node %s at %s", nodeName, ip)
+	}
+
+	// Get hostname
+	hostnameCmd := "hostname"
+	hostnameOutput, err := m.sshRunner.RunCommand(nodeName, hostnameCmd)
+	if err != nil {
+		log.Warningf("failed to get hostname for node %s: %v", nodeName, err)
+		return fmt.Errorf("failed to get hostname for node %s: %w", nodeName, err)
+	}
+	m.Cluster.SetNodeHostname(nodeName, strings.TrimSpace(hostnameOutput))
+
+	// Get OS distribution information
+	releaseCmd := `cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2`
+	releaseOutput, err := m.sshRunner.RunCommand(nodeName, releaseCmd)
+	if err != nil {
+		log.Warningf("failed to get distribution information for node %s: %v", nodeName, err)
+		return err
+	}
+
+	// Get kernel version
+	kernelCmd := "uname -r"
+	kernelOutput, err := m.sshRunner.RunCommand(nodeName, kernelCmd)
+	if err != nil {
+		log.Warningf("failed to get kernel version for node %s: %v", nodeName, err)
+	}
+
+	// Get system architecture
+	archCmd := "uname -m"
+	archOutput, err := m.sshRunner.RunCommand(nodeName, archCmd)
+	if err != nil {
+		log.Warningf("failed to get system architecture for node %s: %v", nodeName, err)
+		return err
+	}
+	arch := strings.TrimSpace(archOutput)
+	if arch == "aarch64" {
+		arch = "arm64"
+	} else if arch == "x86_64" {
+		arch = "amd64"
+	}
+
+	// Get OS type
+	osCmd := `uname -o`
+	osOutput, err := m.sshRunner.RunCommand(nodeName, osCmd)
+	if err != nil {
+		log.Warningf("failed to get OS type for node %s: %v", nodeName, err)
+		return err
+	}
+
+	// Update all system information
+	m.Cluster.SetNodeSystemInfo(nodeName, strings.TrimSpace(releaseOutput), strings.TrimSpace(kernelOutput), arch, strings.TrimSpace(osOutput))
+	m.Cluster.Save()
 	return nil
 }
 
-func (m *Manager) createVMsParallel(nodes []*config.Node) error {
-	var wg sync.WaitGroup
-	var err error
-
-	// concurrent by m.Config.Parallel
-	sem := make(chan struct{}, m.Config.Parallel)
-	errChan := make(chan error, len(nodes))
-	wg.Add(len(nodes))
-	for i := range nodes {
-		sem <- struct{}{}
-		go func(node *config.Node) {
-			defer func() {
-				wg.Done()
-				<-sem
-			}()
-			_, err = m.setupVM(node.Name, node.Spec.Role,
-				node.Spec.CPU, node.Spec.Memory, node.Spec.Disk)
+// createVMsSequentialFromGroups creates VMs sequentially from node groups
+func (m *Manager) createVMsSequentialFromGroups() error {
+	// Create master nodes
+	for _, masterSpec := range m.Cluster.Spec.Nodes.Master {
+		for i := 0; i < masterSpec.Replica; i++ {
+			nodeName := m.Cluster.GenNodeName(config.RoleMaster)
+			cpu, memory, disk := m.parseResources(masterSpec.Resources)
+			_, err := m.setupVM(nodeName, config.RoleMaster, masterSpec.GroupID, cpu, memory, disk)
 			if err != nil {
-				errChan <- fmt.Errorf("failed to create Worker node %s: %w", node.Name, err)
+				return err
 			}
-		}(nodes[i])
+		}
 	}
+
+	// Create worker nodes
+	for _, workerSpec := range m.Cluster.Spec.Nodes.Workers {
+		for i := 0; i < workerSpec.Replica; i++ {
+			nodeName := m.Cluster.GenNodeName(config.RoleWorker)
+			cpu, memory, disk := m.parseResources(workerSpec.Resources)
+			_, err := m.setupVM(nodeName, config.RoleWorker, workerSpec.GroupID, cpu, memory, disk)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// createVMsParallelFromGroups creates VMs in parallel from node groups
+func (m *Manager) createVMsParallelFromGroups() error {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, m.Config.Parallel)
+	errChan := make(chan error, m.Cluster.GetTotalDesiredNodes())
+
+	// Create master nodes
+	for _, masterSpec := range m.Cluster.Spec.Nodes.Master {
+		for i := 0; i < masterSpec.Replica; i++ {
+			wg.Add(1)
+			go func(spec config.NodeGroupSpec) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				nodeName := m.Cluster.GenNodeName(config.RoleMaster)
+				cpu, memory, disk := m.parseResources(spec.Resources)
+				_, err := m.setupVM(nodeName, config.RoleMaster, spec.GroupID, cpu, memory, disk)
+				if err != nil {
+					errChan <- err
+				}
+			}(masterSpec)
+		}
+	}
+
+	// Create worker nodes
+	for _, workerSpec := range m.Cluster.Spec.Nodes.Workers {
+		for i := 0; i < workerSpec.Replica; i++ {
+			wg.Add(1)
+			go func(spec config.NodeGroupSpec) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				nodeName := m.Cluster.GenNodeName(config.RoleWorker)
+				cpu, memory, disk := m.parseResources(spec.Resources)
+				_, err := m.setupVM(nodeName, config.RoleWorker, spec.GroupID, cpu, memory, disk)
+				if err != nil {
+					errChan <- err
+				}
+			}(workerSpec)
+		}
+	}
+
 	wg.Wait()
-	close(sem)
 	close(errChan)
 
+	// Check for errors
 	for err := range errChan {
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
+
+// parseResources parses resource requirements from string format to integers
+func (m *Manager) parseResources(resources config.ResourceRequests) (cpu, memory, disk int) {
+	// Parse CPU (remove any suffix and convert to int)
+	cpu = 1 // default
+	if resources.CPU != "" {
+		if parsed, err := strconv.Atoi(resources.CPU); err == nil {
+			cpu = parsed
+		}
+	}
+
+	// Parse Memory (remove "Gi" suffix and convert to int)
+	memory = 2 // default
+	if resources.Memory != "" {
+		memStr := strings.TrimSuffix(resources.Memory, "Gi")
+		if parsed, err := strconv.Atoi(memStr); err == nil {
+			memory = parsed
+		}
+	}
+
+	// Parse Storage (remove "Gi" suffix and convert to int)
+	disk = 10 // default
+	if resources.Storage != "" {
+		diskStr := strings.TrimSuffix(resources.Storage, "Gi")
+		if parsed, err := strconv.Atoi(diskStr); err == nil {
+			disk = parsed
+		}
+	}
+
+	return cpu, memory, disk
+}
+
+// waitForSSHReady waits for SSH service to be ready on a node
+func (m *Manager) waitForSSHReady(nodeName, ip string, timeout time.Duration) error {
+	start := time.Now()
+	for time.Since(start) < timeout {
+		if sshManager, ok := m.sshRunner.(*ssh.SSHManager); ok {
+			client, err := sshManager.CreateClient(nodeName, ip)
+			if err == nil && client != nil {
+				// Test the connection with a simple command
+				_, err := client.RunCommand("echo 'SSH ready'")
+				if err == nil {
+					log.Debugf("SSH service ready on node %s", nodeName)
+					return nil
+				}
+				// Close the failed client
+				sshManager.CloseClient(nodeName)
+			}
+		}
+
+		log.Debugf("SSH not ready on node %s, retrying in 3 seconds...", nodeName)
+		time.Sleep(3 * time.Second)
+	}
+
+	return fmt.Errorf("SSH service not ready after %v timeout", timeout)
+}
+
+// Legacy method removed - use createVMsSequentialFromGroups instead
+
+// Legacy method removed - use createVMsParallelFromGroups instead
 
 // CreateWorkerVMs creates worker nodes
 
@@ -417,15 +643,13 @@ func (m *Manager) InitializeVMs() error {
 }
 
 func (m *Manager) initializeVMsSequential() error {
-	masterName := m.Cluster.GetMasterName()
-	err := m.initializeVM(masterName)
-	if err != nil {
-		return fmt.Errorf("failed to initialize Master node: %w", err)
-	}
-	for i := range m.Cluster.Spec.Workers {
-		err := m.initializeVM(m.Cluster.Spec.Workers[i].Name)
-		if err != nil {
-			return fmt.Errorf("failed to initialize VM %s: %w", m.Cluster.Spec.Workers[i].Name, err)
+	// Initialize all nodes from node groups
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			err := m.initializeVM(member.Name)
+			if err != nil {
+				return fmt.Errorf("failed to initialize VM %s: %w", member.Name, err)
+			}
 		}
 	}
 	return nil
@@ -433,29 +657,34 @@ func (m *Manager) initializeVMsSequential() error {
 
 func (m *Manager) initializeVMsParallel() error {
 	var wg sync.WaitGroup
-	var err error
 	// concurrent by m.Config.Parallel
 	sem := make(chan struct{}, m.Config.Parallel)
-	errChan := make(chan error, len(m.Cluster.Spec.Workers)+1)
-	nodes := append(m.Cluster.Spec.Workers, m.Cluster.Spec.Master)
-	log.Debugf("Initializing %d VMs in parallel", len(nodes))
-	wg.Add(len(nodes))
-	for i := range nodes {
-		sem <- struct{}{}
-		go func(node *config.Node) {
-			defer func() {
-				wg.Done()
-				<-sem
-			}()
-			err = m.initializeVM(node.Name)
-			if err != nil {
-				errChan <- fmt.Errorf("failed to initialize VM %s: %w", node.Name, err)
-			}
-		}(nodes[i])
+
+	// Count total nodes
+	totalNodes := m.Cluster.GetTotalRunningNodes()
+	errChan := make(chan error, totalNodes)
+
+	// Initialize all nodes from node groups
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			wg.Add(1)
+			go func(nodeName string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				err := m.initializeVM(nodeName)
+				if err != nil {
+					errChan <- fmt.Errorf("failed to initialize VM %s: %w", nodeName, err)
+				}
+			}(member.Name)
+		}
 	}
+
 	wg.Wait()
-	close(sem)
 	close(errChan)
+
+	// Check for errors
 	for err := range errChan {
 		if err != nil {
 			return err
@@ -472,31 +701,63 @@ func (m *Manager) initializeVM(nodeName string) error {
 	}
 
 	// Check if environment is already initialized
-	if node.HasCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue) {
+	if m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue) {
 		log.Debugf("Environment for node %s already initialized, skipping initialization", nodeName)
 		return nil
 	}
 
+	// Ensure node status is up to date (including architecture detection)
+	if node.Arch == "" {
+		log.Debugf("Architecture not detected for node %s, detecting now...", nodeName)
+		err := m.SetStatusForNodeByName(nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to detect node architecture for %s: %w", nodeName, err)
+		}
+		// Refresh node reference after status update
+		node = m.Cluster.GetNodeByName(nodeName)
+		if node == nil {
+			return fmt.Errorf("node %s not found after status update", nodeName)
+		}
+	}
+
 	// Set condition to pending
-	node.SetCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
 		"Initializing", "Initializing node environment")
 
+	// Create a temporary Node structure for the initializer
+	tempNode := &config.Node{
+		Metadata: config.Metadata{
+			Name: nodeName,
+		},
+		Status: config.NodeStatus{
+			NodeInternalStatus: config.NodeInternalStatus{
+				IP:       node.IP,
+				Hostname: node.Hostname,
+				Phase:    node.Phase,
+				Arch:     node.Arch, // Set the architecture
+				Release:  node.Release,
+				Kernel:   node.Kernel,
+				OS:       node.OS,
+			},
+		},
+	}
+
 	// Create and run the initializer
-	initializer, err := initializer.NewInitializerWithOptions(m.sshRunner, node, m.InitOptions)
+	initializer, err := initializer.NewInitializerWithOptions(m.sshRunner, tempNode, m.InitOptions)
 	if err != nil {
-		node.SetCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
+		m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
 			"InitializationFailed", fmt.Sprintf("Failed to create initializer: %v", err))
 		return fmt.Errorf("failed to create initializer for node %s: %w", nodeName, err)
 	}
 
 	if err := initializer.Initialize(); err != nil {
-		node.SetCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
+		m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
 			"InitializationFailed", fmt.Sprintf("Failed to initialize environment: %v", err))
 		return fmt.Errorf("failed to initialize VM %s: %w", nodeName, err)
 	}
 
 	// Set condition to success
-	node.SetCondition(config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusTrue,
 		"Initialized", "Node environment initialized successfully")
 	m.Cluster.Save()
 
@@ -507,28 +768,36 @@ func (m *Manager) initializeVM(nodeName string) error {
 func (m *Manager) InitializeMaster() (string, error) {
 	log.Debugf("Initializing Master node...")
 
+	masterName := m.Cluster.GetMasterName()
+	if masterName == "" {
+		return "", fmt.Errorf("no master node found in cluster")
+	}
+
+	// Update KubeManager with the actual master node name
+	m.KubeManager.SetMasterNode(masterName)
+
 	// Check if master is already initialized
-	if m.Cluster.Spec.Master.HasCondition(config.ConditionTypeKubeInitialized, config.ConditionStatusTrue) {
+	if m.Cluster.HasNodeCondition(masterName, config.ConditionTypeKubeInitialized, config.ConditionStatusTrue) {
 		log.Debugf("Master node already initialized, skipping initialization")
 		return m.getJoinCommand()
 	}
 
 	// Set condition to pending
-	m.Cluster.Spec.Master.SetCondition(config.ConditionTypeKubeInitialized, config.ConditionStatusFalse,
+	m.Cluster.SetNodeCondition(masterName, config.ConditionTypeKubeInitialized, config.ConditionStatusFalse,
 		"Initializing", "Initializing Kubernetes master node")
 
 	// Use new config system to generate config file and initialize Master
 	err := m.KubeManager.InitMaster()
 	if err != nil {
-		m.Cluster.Spec.Master.SetCondition(config.ConditionTypeKubeInitialized, config.ConditionStatusFalse,
+		m.Cluster.SetNodeCondition(masterName, config.ConditionTypeKubeInitialized, config.ConditionStatusFalse,
 			"InitializationFailed", fmt.Sprintf("Failed to initialize master: %v", err))
 		return "", fmt.Errorf("failed to initialize Master node: %w", err)
 	}
 
 	// Set condition to success
-	m.Cluster.Spec.Master.SetCondition(config.ConditionTypeKubeInitialized, config.ConditionStatusTrue,
+	m.Cluster.SetNodeCondition(masterName, config.ConditionTypeKubeInitialized, config.ConditionStatusTrue,
 		"Initialized", "Master node initialized successfully")
-	m.Cluster.Spec.Master.SetCondition(config.ConditionTypeNodeReady, config.ConditionStatusTrue,
+	m.Cluster.SetNodeCondition(masterName, config.ConditionTypeNodeReady, config.ConditionStatusTrue,
 		"NodeReady", "Master node is ready")
 	m.Cluster.Save()
 
@@ -542,10 +811,15 @@ func (m *Manager) JoinWorkerNodes() error {
 		return fmt.Errorf("failed to get join command: %w", err)
 	}
 
-	for i := range m.Cluster.Spec.Workers {
-		err := m.JoinWorkerNode(m.Cluster.Spec.Workers[i].Name, joinCommand)
-		if err != nil {
-			return err
+	// Join all worker nodes from node groups (excluding master group 1)
+	for _, group := range m.Cluster.Status.Nodes {
+		if group.GroupID != 1 { // Skip master group
+			for _, member := range group.Members {
+				err := m.JoinWorkerNode(member.Name, joinCommand)
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -566,27 +840,27 @@ func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
 	}
 
 	// Check if node is already joined
-	if node.HasCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusTrue) {
+	if m.Cluster.HasNodeCondition(nodeName, config.ConditionTypeJoinedCluster, config.ConditionStatusTrue) {
 		log.Debugf("Node %s already joined the cluster, skipping join", nodeName)
 		return nil
 	}
 
 	// Set condition to pending
-	node.SetCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusFalse,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeJoinedCluster, config.ConditionStatusFalse,
 		"Joining", "Joining node to the cluster")
 
 	// Join the node to the cluster
 	err := m.KubeManager.JoinNode(nodeName, joinCommand)
 	if err != nil {
-		node.SetCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusFalse,
+		m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeJoinedCluster, config.ConditionStatusFalse,
 			"JoinFailed", fmt.Sprintf("Failed to join node to cluster: %v", err))
 		return err
 	}
 
 	// Set condition to success
-	node.SetCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusTrue,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeJoinedCluster, config.ConditionStatusTrue,
 		"Joined", "Node joined the cluster successfully")
-	node.SetCondition(config.ConditionTypeNodeReady, config.ConditionStatusTrue,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeNodeReady, config.ConditionStatusTrue,
 		"NodeReady", "Worker node is ready")
 
 	return m.Cluster.Save()
@@ -605,7 +879,26 @@ func (m *Manager) AddWorkerNodes(cpu int, memory int, disk int, count int) error
 // AddWorkerNode adds a new worker node to the cluster
 func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	log.Infof("Create new worker node...")
-	node, err := m.setupVM("", config.RoleWorker, cpu, memory, disk)
+
+	// Create resource requirements
+	resources := config.ResourceRequests{
+		CPU:     fmt.Sprintf("%d", cpu),
+		Memory:  fmt.Sprintf("%dGi", memory),
+		Storage: fmt.Sprintf("%dGi", disk),
+	}
+
+	// Get template from config, fallback to default if not set
+	template := m.Config.Template
+	if template == "" {
+		template = "ubuntu-24.04" // Default template
+	}
+
+	// Find matching group or create new one
+	groupID := m.Cluster.AddNodeToWorkerGroup(template, resources)
+
+	log.Infof("Adding worker node to group %d", groupID)
+
+	node, err := m.setupVM("", config.RoleWorker, groupID, cpu, memory, disk)
 	if err != nil {
 		return err
 	}
@@ -625,7 +918,7 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 	}
 
 	log.Infof("Joining cluster with node %s", nodeName)
-	node.SetCondition(config.ConditionTypeJoinedCluster, config.ConditionStatusFalse,
+	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeJoinedCluster, config.ConditionStatusFalse,
 		"Joining", "Joining node to the cluster")
 
 	return m.JoinWorkerNode(nodeName, joinCmd)
@@ -640,12 +933,25 @@ func (m *Manager) DeleteNode(nodeName string, force bool) error {
 		return fmt.Errorf("node %s does not exist", nodeName)
 	}
 
-	if nodeInfo.Spec.Role == config.RoleMaster && len(m.Cluster.Spec.Workers) > 0 {
+	// Check if it's a master node and there are worker nodes
+	isMaster := false
+	for _, group := range m.Cluster.Status.Nodes {
+		if group.GroupID == 1 {
+			for _, member := range group.Members {
+				if member.Name == nodeName {
+					isMaster = true
+					break
+				}
+			}
+		}
+	}
+
+	if isMaster && m.Cluster.GetTotalRunningNodes() > 1 {
 		return fmt.Errorf("cannot delete Master node, please delete the entire cluster first")
 	}
 
 	// Evict node from Kubernetes
-	if !force && nodeInfo.IsRunning() {
+	if !force && nodeInfo.Phase == config.PhaseRunning {
 		err := m.drainAndDeleteNode(nodeName)
 		if err != nil {
 			return err
@@ -770,7 +1076,7 @@ func (m *Manager) StopVM(nodeName string, force bool) error {
 	}
 
 	// Evict node from Kubernetes
-	if !force && nodeInfo.IsRunning() {
+	if !force && nodeInfo.Phase == config.PhaseRunning {
 		err := m.drainAndDeleteNode(nodeName)
 		if err != nil {
 			return err
@@ -820,23 +1126,12 @@ func (m *Manager) canResumeClusterCreation() bool {
 	}
 
 	// Check if any node has workflow conditions set
-	if m.Cluster.Spec.Master != nil {
-		for _, cond := range m.Cluster.Spec.Master.Status.Conditions {
-			if (cond.Type == config.ConditionTypeVMCreated ||
-				cond.Type == config.ConditionTypeEnvironmentInit ||
-				cond.Type == config.ConditionTypeKubeInitialized ||
-				cond.Type == config.ConditionTypeJoinedCluster) &&
-				cond.Status == config.ConditionStatusTrue {
-				return true
-			}
-		}
-	}
-
-	for _, worker := range m.Cluster.Spec.Workers {
-		if worker != nil {
-			for _, cond := range worker.Status.Conditions {
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			for _, cond := range member.Conditions {
 				if (cond.Type == config.ConditionTypeVMCreated ||
 					cond.Type == config.ConditionTypeEnvironmentInit ||
+					cond.Type == config.ConditionTypeKubeInitialized ||
 					cond.Type == config.ConditionTypeJoinedCluster) &&
 					cond.Status == config.ConditionStatusTrue {
 					return true

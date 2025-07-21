@@ -304,16 +304,57 @@ func (c *Cluster) HasCondition(conditionType ConditionType, status ConditionStat
 }
 
 func (c *Cluster) HasAllNodeCondition(conditionType ConditionType, status ConditionStatus) bool {
-	if c.Spec.Master != nil && !c.Spec.Master.HasCondition(conditionType, status) {
-		return false
-	}
-	for _, node := range c.Spec.Workers {
-		if node != nil && !node.HasCondition(conditionType, status) {
-			return false
+	for _, group := range c.Status.Nodes {
+		for _, member := range group.Members {
+			if !c.hasNodeCondition(member, conditionType, status) {
+				return false
+			}
 		}
 	}
 	return true
 }
+
+// hasNodeCondition checks if a node member has a specific condition
+func (c *Cluster) hasNodeCondition(member NodeGroupMember, conditionType ConditionType, status ConditionStatus) bool {
+	for _, condition := range member.Conditions {
+		if condition.Type == conditionType && condition.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+// GetNodeGroupByID returns a node group status by its group ID
+func (c *Cluster) GetNodeGroupByID(groupID int) *NodeGroupStatus {
+	for i := range c.Status.Nodes {
+		if c.Status.Nodes[i].GroupID == groupID {
+			return &c.Status.Nodes[i]
+		}
+	}
+	return nil
+}
+
+// GetOrCreateNodeGroup returns an existing node group or creates a new one
+func (c *Cluster) GetOrCreateNodeGroup(groupID int) *NodeGroupStatus {
+	if group := c.GetNodeGroupByID(groupID); group != nil {
+		return group
+	}
+
+	// Create new node group
+	newGroup := NodeGroupStatus{
+		GroupID: groupID,
+		Desire:  0,
+		Created: 0,
+		Running: 0,
+		Members: []NodeGroupMember{},
+	}
+	c.Status.Nodes = append(c.Status.Nodes, newGroup)
+	return &c.Status.Nodes[len(c.Status.Nodes)-1]
+}
+
+// Note: AddNodeToGroup and updateNodeGroupMember methods have been removed
+// as they were designed for the legacy Node structure.
+// Use CreateNodeInGroup and direct member manipulation instead.
 
 func NewNode(name string, role string, cpu int, memory int, disk int) *Node {
 	return &Node{
@@ -345,22 +386,77 @@ type Cluster struct {
 	lock       sync.RWMutex
 }
 
+// NetworkingConfig defines networking configuration for the cluster
+type NetworkingConfig struct {
+	ProxyMode     string `yaml:"proxyMode,omitempty"`
+	CNI           string `yaml:"cni,omitempty"`
+	PodSubnet     string `yaml:"podSubnet,omitempty"`
+	ServiceSubnet string `yaml:"serviceSubnet,omitempty"`
+	LoadBalancer  string `yaml:"loadbalancer,omitempty"`
+}
+
+// StorageConfig defines storage configuration for the cluster
+type StorageConfig struct {
+	CSI string `yaml:"csi,omitempty"`
+}
+
+// ResourceRequests defines resource requirements for nodes
+type ResourceRequests struct {
+	CPU     string `yaml:"cpu,omitempty"`
+	Memory  string `yaml:"memory,omitempty"`
+	Storage string `yaml:"storage,omitempty"`
+}
+
+// NodeGroupSpec defines a group of nodes with the same configuration
+type NodeGroupSpec struct {
+	Replica   int              `yaml:"replica,omitempty"`
+	GroupID   int              `yaml:"groupid,omitempty"`
+	Template  string           `yaml:"template,omitempty"`
+	Resources ResourceRequests `yaml:"resources,omitempty"`
+}
+
+// NodesConfig defines the node configuration for master and workers
+type NodesConfig struct {
+	Master  []NodeGroupSpec `yaml:"master,omitempty"`
+	Workers []NodeGroupSpec `yaml:"workers,omitempty"`
+}
+
 type ClusterSpec struct {
-	K8sVersion string  `yaml:"k8sVersion,omitempty"`
-	Provider   string  `yaml:"provider,omitempty"`
-	ProxyMode  string  `yaml:"proxyMode,omitempty"`
-	Master     *Node   `yaml:"master,omitempty"`
-	Workers    []*Node `yaml:"workers,omitempty"`
-	CNI        string  `yaml:"cni,omitempty"`
-	CSI        string  `yaml:"csi,omitempty"`
-	LB         string  `yaml:"lb,omitempty"`
+	KubernetesVersion string           `yaml:"kubernetesVersion,omitempty"`
+	Provider          string           `yaml:"provider,omitempty"`
+	Networking        NetworkingConfig `yaml:"networking,omitempty"`
+	Storage           StorageConfig    `yaml:"storage,omitempty"`
+	Nodes             NodesConfig      `yaml:"nodes,omitempty"`
+}
+
+// NodeGroupMember represents a single node within a node group
+type NodeGroupMember struct {
+	Name       string      `yaml:"name,omitempty"`
+	Phase      Phase       `yaml:"phase,omitempty"`
+	Hostname   string      `yaml:"hostname,omitempty"`
+	IP         string      `yaml:"ip,omitempty"`
+	Release    string      `yaml:"release,omitempty"`
+	Kernel     string      `yaml:"kernel,omitempty"`
+	Arch       string      `yaml:"arch,omitempty"`
+	OS         string      `yaml:"os,omitempty"`
+	Conditions []Condition `yaml:"conditions,omitempty"`
+}
+
+// NodeGroupStatus represents the status of a node group
+type NodeGroupStatus struct {
+	GroupID int               `yaml:"groupid,omitempty"`
+	Desire  int               `yaml:"desire,omitempty"`
+	Created int               `yaml:"created,omitempty"`
+	Running int               `yaml:"running,omitempty"`
+	Members []NodeGroupMember `yaml:"members,omitempty"`
 }
 
 type ClusterStatus struct {
-	Phase      ClusterPhase `yaml:"phase,omitempty"`
-	Auth       Auth         `yaml:"auth,omitempty"`
-	Images     Images       `yaml:"images,omitempty"` // Cluster images (names correspond to global cache)
-	Conditions []Condition  `yaml:"conditions,omitempty"`
+	Phase      ClusterPhase      `yaml:"phase,omitempty"`
+	Auth       Auth              `yaml:"auth,omitempty"`
+	Images     Images            `yaml:"images,omitempty"` // Cluster images (names correspond to global cache)
+	Nodes      []NodeGroupStatus `yaml:"nodes,omitempty"`  // New node group status
+	Conditions []Condition       `yaml:"conditions,omitempty"`
 }
 
 // Image represents a simple image reference
@@ -371,6 +467,14 @@ type Image struct {
 
 type Images []Image
 
+// getTemplateOrDefault returns the template or default if empty
+func getTemplateOrDefault(template string) string {
+	if template == "" {
+		return "ubuntu-24.04" // Default template
+	}
+	return template
+}
+
 func NewCluster(config *Config) *Cluster {
 	cls := &Cluster{
 		ApiVersion: ApiVersion,
@@ -380,97 +484,469 @@ func NewCluster(config *Config) *Cluster {
 			Annotations: map[string]string{
 				"ohmykube.dev/created-at": time.Now().Format(time.RFC3339),
 			},
-
 			Labels: map[string]string{
 				"ohmykube.dev/cluster": config.Name,
 			},
 		},
 		Spec: ClusterSpec{
-			K8sVersion: config.KubernetesVersion,
-			Provider:   config.Provider,
-			ProxyMode:  config.ProxyMode,
-			Workers:    make([]*Node, 0),
-			CNI:        config.CNI,
-			CSI:        config.CSI,
-			LB:         config.LB,
+			KubernetesVersion: config.KubernetesVersion,
+			Provider:          config.Provider,
+			Networking: NetworkingConfig{
+				ProxyMode:     config.ProxyMode,
+				CNI:           config.CNI,
+				PodSubnet:     "10.244.0.0/16", // Default pod subnet
+				ServiceSubnet: "10.96.0.0/12",  // Default service subnet
+				LoadBalancer:  config.LB,
+			},
+			Storage: StorageConfig{
+				CSI: config.CSI,
+			},
+			Nodes: NodesConfig{
+				Master: []NodeGroupSpec{
+					{
+						Replica:  1,
+						GroupID:  1,
+						Template: getTemplateOrDefault(config.Template),
+						Resources: ResourceRequests{
+							CPU:     fmt.Sprintf("%d", config.Master.CPU),
+							Memory:  fmt.Sprintf("%dGi", config.Master.Memory),
+							Storage: fmt.Sprintf("%dGi", config.Master.Disk),
+						},
+					},
+				},
+				Workers: []NodeGroupSpec{},
+			},
 		},
 		Status: ClusterStatus{
 			Phase: ClusterPhasePending,
+			Nodes: []NodeGroupStatus{},
 		},
 	}
-	cls.Spec.Master = NewNode(cls.GenNodeName(RoleMaster), RoleMaster,
-		config.Master.CPU, config.Master.Memory, config.Master.Disk)
-	for _, worker := range config.Workers {
-		cls.Spec.Workers = append(cls.Spec.Workers, NewNode(cls.GenNodeName(RoleWorker),
-			RoleWorker, worker.CPU, worker.Memory, worker.Disk))
+
+	// Create worker node group (combine all workers into one group)
+	if len(config.Workers) > 0 {
+		// Use the first worker's configuration as the template
+		firstWorker := config.Workers[0]
+		cls.Spec.Nodes.Workers = append(cls.Spec.Nodes.Workers, NodeGroupSpec{
+			Replica:  len(config.Workers), // Total number of worker nodes
+			GroupID:  2,                   // Worker group ID
+			Template: getTemplateOrDefault(config.Template),
+			Resources: ResourceRequests{
+				CPU:     fmt.Sprintf("%d", firstWorker.CPU),
+				Memory:  fmt.Sprintf("%dGi", firstWorker.Memory),
+				Storage: fmt.Sprintf("%dGi", firstWorker.Disk),
+			},
+		})
 	}
+
 	return cls
 }
 
-func (c *Cluster) GetMasterIP() string {
-	if c.Spec.Master == nil {
-		return ""
+// InitializeNodeGroupsFromSpec initializes node group status from spec
+func (c *Cluster) InitializeNodeGroupsFromSpec() {
+	// Clear existing node groups
+	c.Status.Nodes = []NodeGroupStatus{}
+
+	// Initialize master node groups
+	for _, masterSpec := range c.Spec.Nodes.Master {
+		group := NodeGroupStatus{
+			GroupID: masterSpec.GroupID,
+			Desire:  masterSpec.Replica,
+			Created: 0,
+			Running: 0,
+			Members: []NodeGroupMember{},
+		}
+		c.Status.Nodes = append(c.Status.Nodes, group)
 	}
-	return c.Spec.Master.Status.IP
+
+	// Initialize worker node groups
+	for _, workerSpec := range c.Spec.Nodes.Workers {
+		group := NodeGroupStatus{
+			GroupID: workerSpec.GroupID,
+			Desire:  workerSpec.Replica,
+			Created: 0,
+			Running: 0,
+			Members: []NodeGroupMember{},
+		}
+		c.Status.Nodes = append(c.Status.Nodes, group)
+	}
+}
+
+// SetNodeCondition sets a condition for a specific node
+func (c *Cluster) SetNodeCondition(nodeName string, conditionType ConditionType, status ConditionStatus, reason, message string) {
+	for i := range c.Status.Nodes {
+		group := &c.Status.Nodes[i]
+		for j := range group.Members {
+			if group.Members[j].Name == nodeName {
+				c.setNodeMemberCondition(&group.Members[j], conditionType, status, reason, message)
+				return
+			}
+		}
+	}
+}
+
+// setNodeMemberCondition sets or updates a condition for a node member
+func (c *Cluster) setNodeMemberCondition(member *NodeGroupMember, conditionType ConditionType, status ConditionStatus, reason, message string) {
+	condition := NewCondition(conditionType, status, reason, message)
+
+	// Find and update existing condition or append new one
+	for i, c := range member.Conditions {
+		if c.Type == conditionType {
+			// Only update if status changed to avoid unnecessary updates
+			if c.Status != status {
+				condition.LastTransitionTime = time.Now()
+				member.Conditions[i] = condition
+			} else {
+				// Just update reason and message if status didn't change
+				member.Conditions[i].Reason = reason
+				member.Conditions[i].Message = message
+			}
+			return
+		}
+	}
+
+	// Condition not found, append new one
+	member.Conditions = append(member.Conditions, condition)
+}
+
+// GetNodeCondition gets a condition by type from a node
+func (c *Cluster) GetNodeCondition(nodeName string, conditionType ConditionType) (Condition, bool) {
+	for _, group := range c.Status.Nodes {
+		for _, member := range group.Members {
+			if member.Name == nodeName {
+				return FindCondition(member.Conditions, conditionType)
+			}
+		}
+	}
+	return Condition{}, false
+}
+
+// HasNodeCondition checks if a node has a condition with the specified type and status
+func (c *Cluster) HasNodeCondition(nodeName string, conditionType ConditionType, status ConditionStatus) bool {
+	if condition, found := c.GetNodeCondition(nodeName, conditionType); found {
+		return condition.Status == status
+	}
+	return false
+}
+
+// SetNodeIP sets the IP address for a specific node
+func (c *Cluster) SetNodeIP(nodeName string, ip string) {
+	for i := range c.Status.Nodes {
+		group := &c.Status.Nodes[i]
+		for j := range group.Members {
+			if group.Members[j].Name == nodeName {
+				group.Members[j].IP = ip
+				return
+			}
+		}
+	}
+}
+
+// SetNodeHostname sets the hostname for a specific node
+func (c *Cluster) SetNodeHostname(nodeName string, hostname string) {
+	for i := range c.Status.Nodes {
+		group := &c.Status.Nodes[i]
+		for j := range group.Members {
+			if group.Members[j].Name == nodeName {
+				group.Members[j].Hostname = hostname
+				return
+			}
+		}
+	}
+}
+
+// SetNodeSystemInfo sets system information for a specific node
+func (c *Cluster) SetNodeSystemInfo(nodeName string, release, kernel, arch, os string) {
+	for i := range c.Status.Nodes {
+		group := &c.Status.Nodes[i]
+		for j := range group.Members {
+			if group.Members[j].Name == nodeName {
+				group.Members[j].Release = release
+				group.Members[j].Kernel = kernel
+				group.Members[j].Arch = arch
+				group.Members[j].OS = os
+				return
+			}
+		}
+	}
+}
+
+// CreateNodeInGroup creates a new node in the specified group
+func (c *Cluster) CreateNodeInGroup(groupID int, nodeName string) *NodeGroupMember {
+	group := c.GetOrCreateNodeGroup(groupID)
+
+	// Check if node already exists
+	for i := range group.Members {
+		if group.Members[i].Name == nodeName {
+			return &group.Members[i]
+		}
+	}
+
+	// Create new member
+	member := NodeGroupMember{
+		Name:       nodeName,
+		Phase:      PhasePending,
+		Conditions: []Condition{},
+	}
+
+	group.Members = append(group.Members, member)
+	group.Created++
+
+	return &group.Members[len(group.Members)-1]
+}
+
+// GetKubernetesVersion returns the Kubernetes version
+func (c *Cluster) GetKubernetesVersion() string {
+	return c.Spec.KubernetesVersion
+}
+
+// GetProxyMode returns the proxy mode from networking config
+func (c *Cluster) GetProxyMode() string {
+	return c.Spec.Networking.ProxyMode
+}
+
+// GetCNI returns the CNI from networking config
+func (c *Cluster) GetCNI() string {
+	return c.Spec.Networking.CNI
+}
+
+// GetCSI returns the CSI from storage config
+func (c *Cluster) GetCSI() string {
+	return c.Spec.Storage.CSI
+}
+
+// GetLoadBalancer returns the load balancer from networking config
+func (c *Cluster) GetLoadBalancer() string {
+	return c.Spec.Networking.LoadBalancer
+}
+
+// GetPodSubnet returns the pod subnet from networking config
+func (c *Cluster) GetPodSubnet() string {
+	if c.Spec.Networking.PodSubnet != "" {
+		return c.Spec.Networking.PodSubnet
+	}
+	return "10.244.0.0/16" // Default pod subnet
+}
+
+// GetServiceSubnet returns the service subnet from networking config
+func (c *Cluster) GetServiceSubnet() string {
+	if c.Spec.Networking.ServiceSubnet != "" {
+		return c.Spec.Networking.ServiceSubnet
+	}
+	return "10.96.0.0/12" // Default service subnet
+}
+
+// GetNodeGroupSpecs returns all node group specifications
+func (c *Cluster) GetNodeGroupSpecs() []NodeGroupSpec {
+	var specs []NodeGroupSpec
+	specs = append(specs, c.Spec.Nodes.Master...)
+	specs = append(specs, c.Spec.Nodes.Workers...)
+	return specs
+}
+
+// GetMasterNodeGroupSpecs returns master node group specifications
+func (c *Cluster) GetMasterNodeGroupSpecs() []NodeGroupSpec {
+	return c.Spec.Nodes.Master
+}
+
+// GetWorkerNodeGroupSpecs returns worker node group specifications
+func (c *Cluster) GetWorkerNodeGroupSpecs() []NodeGroupSpec {
+	return c.Spec.Nodes.Workers
+}
+
+// GetTotalDesiredNodes returns the total number of desired nodes across all groups
+func (c *Cluster) GetTotalDesiredNodes() int {
+	total := 0
+	for _, spec := range c.GetNodeGroupSpecs() {
+		total += spec.Replica
+	}
+	return total
+}
+
+// GetTotalRunningNodes returns the total number of running nodes across all groups
+func (c *Cluster) GetTotalRunningNodes() int {
+	total := 0
+	for _, group := range c.Status.Nodes {
+		total += group.Running
+	}
+	return total
+}
+
+// IsClusterFullyRunning checks if all desired nodes are running
+func (c *Cluster) IsClusterFullyRunning() bool {
+	for _, group := range c.Status.Nodes {
+		if group.Running < group.Desire {
+			return false
+		}
+	}
+	return true
+}
+
+// FindMatchingWorkerGroup finds a worker node group with matching template and resources
+func (c *Cluster) FindMatchingWorkerGroup(template string, resources ResourceRequests) *NodeGroupSpec {
+	for i := range c.Spec.Nodes.Workers {
+		worker := &c.Spec.Nodes.Workers[i]
+		if worker.Template == template &&
+			worker.Resources.CPU == resources.CPU &&
+			worker.Resources.Memory == resources.Memory &&
+			worker.Resources.Storage == resources.Storage {
+			return worker
+		}
+	}
+	return nil
+}
+
+// AddNodeToWorkerGroup adds a node to an existing worker group or creates a new one
+func (c *Cluster) AddNodeToWorkerGroup(template string, resources ResourceRequests) int {
+	// Try to find matching existing group
+	if matchingGroup := c.FindMatchingWorkerGroup(template, resources); matchingGroup != nil {
+		// Increase replica count in existing group
+		matchingGroup.Replica++
+
+		// Update corresponding status group desire count
+		for i := range c.Status.Nodes {
+			if c.Status.Nodes[i].GroupID == matchingGroup.GroupID {
+				c.Status.Nodes[i].Desire++
+				break
+			}
+		}
+
+		return matchingGroup.GroupID
+	}
+
+	// No matching group found, create new one
+	newGroupID := c.getNextAvailableGroupID()
+	newGroup := NodeGroupSpec{
+		Replica:   1,
+		GroupID:   newGroupID,
+		Template:  template,
+		Resources: resources,
+	}
+
+	// Add to spec
+	c.Spec.Nodes.Workers = append(c.Spec.Nodes.Workers, newGroup)
+
+	// Add corresponding status group
+	statusGroup := NodeGroupStatus{
+		GroupID: newGroupID,
+		Desire:  1,
+		Created: 0,
+		Running: 0,
+		Members: []NodeGroupMember{},
+	}
+	c.Status.Nodes = append(c.Status.Nodes, statusGroup)
+
+	return newGroupID
+}
+
+// getNextAvailableGroupID returns the next available group ID
+func (c *Cluster) getNextAvailableGroupID() int {
+	maxGroupID := 1 // Start from 2 since 1 is reserved for master
+
+	// Check spec groups
+	for _, masterSpec := range c.Spec.Nodes.Master {
+		if masterSpec.GroupID > maxGroupID {
+			maxGroupID = masterSpec.GroupID
+		}
+	}
+	for _, workerSpec := range c.Spec.Nodes.Workers {
+		if workerSpec.GroupID > maxGroupID {
+			maxGroupID = workerSpec.GroupID
+		}
+	}
+
+	return maxGroupID + 1
+}
+
+func (c *Cluster) GetMasterIP() string {
+	// Find master node in group 1
+	for _, group := range c.Status.Nodes {
+		if group.GroupID == 1 && len(group.Members) > 0 {
+			return group.Members[0].IP
+		}
+	}
+	return ""
 }
 
 func (c *Cluster) GetMasterName() string {
-	if c.Spec.Master == nil {
-		return ""
+	// Find master node in group 1
+	for _, group := range c.Status.Nodes {
+		if group.GroupID == 1 && len(group.Members) > 0 {
+			return group.Members[0].Name
+		}
 	}
-	return c.Spec.Master.Name
+	return ""
 }
 
 func (c *Cluster) GetWorkerNames() []string {
-	names := make([]string, len(c.Spec.Workers))
-	for i, node := range c.Spec.Workers {
-		names[i] = node.Name
+	var names []string
+	// Find worker nodes in groups other than 1
+	for _, group := range c.Status.Nodes {
+		if group.GroupID != 1 {
+			for _, member := range group.Members {
+				names = append(names, member.Name)
+			}
+		}
 	}
 	return names
 }
 
 func (c *Cluster) Nodes2IPsMap() map[string]string {
 	ips := make(map[string]string)
-	ips[c.Spec.Master.Name] = c.Spec.Master.Status.IP
-	for _, node := range c.Spec.Workers {
-		ips[node.Name] = node.Status.IP
+	for _, group := range c.Status.Nodes {
+		for _, member := range group.Members {
+			ips[member.Name] = member.IP
+		}
 	}
 	return ips
 }
 
-func (c *Cluster) GetNodeByIP(ip string) *Node {
-	for _, node := range c.Spec.Workers {
-		if node.Status.IP == ip {
-			return node
+func (c *Cluster) GetNodeByIP(ip string) *NodeGroupMember {
+	for _, group := range c.Status.Nodes {
+		for i := range group.Members {
+			if group.Members[i].IP == ip {
+				return &group.Members[i]
+			}
 		}
 	}
 	return nil
 }
 
-func (c *Cluster) GetNodeByName(name string) *Node {
-	if c.Spec.Master != nil && c.Spec.Master.Name == name {
-		return c.Spec.Master
-	}
-	for _, node := range c.Spec.Workers {
-		if node != nil && node.Name == name {
-			return node
+func (c *Cluster) GetNodeByName(name string) *NodeGroupMember {
+	for _, group := range c.Status.Nodes {
+		for i := range group.Members {
+			if group.Members[i].Name == name {
+				return &group.Members[i]
+			}
 		}
 	}
 	return nil
 }
 
-func (c *Cluster) GetNodeOrNew(name string, role string, cpu int, memory int, disk int) *Node {
+func (c *Cluster) GetNodeOrNew(name string, role string, cpu int, memory int, disk int) *NodeGroupMember {
 	node := c.GetNodeByName(name)
 	if node == nil {
 		if name == "" {
 			name = c.GenNodeName(role)
 		}
-		node = NewNode(name, role, cpu, memory, disk)
-		if role == RoleMaster {
-			c.SetMaster(node)
-		} else {
-			c.AddNode(node)
+		// Create new node member
+		member := &NodeGroupMember{
+			Name:  name,
+			Phase: PhasePending,
 		}
+
+		// Determine group ID based on role
+		groupID := 1 // Master
+		if role == RoleWorker {
+			groupID = c.getNextWorkerGroupID()
+		}
+
+		// Add to appropriate group
+		group := c.GetOrCreateNodeGroup(groupID)
+		group.Members = append(group.Members, *member)
+		group.Created++
+
+		return &group.Members[len(group.Members)-1]
 	}
 	return node
 }
@@ -478,25 +954,56 @@ func (c *Cluster) GetNodeOrNew(name string, role string, cpu int, memory int, di
 func (c *Cluster) RemoveNode(name string) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	if c.Spec.Master.Name == name {
-		c.Spec.Master = nil
-	}
-	for i, node := range c.Spec.Workers {
-		if node.Name == name {
-			c.Spec.Workers = slices.Delete(c.Spec.Workers, i, i+1)
-			break
+
+	for i := range c.Status.Nodes {
+		group := &c.Status.Nodes[i]
+		for j, member := range group.Members {
+			if member.Name == name {
+				// Remove member from group
+				group.Members = slices.Delete(group.Members, j, j+1)
+				group.Created--
+				if member.Phase == PhaseRunning {
+					group.Running--
+				}
+
+				// Update corresponding spec replica count
+				group.Desire--
+				c.updateSpecReplicaForGroup(group.GroupID, group.Desire)
+
+				return
+			}
 		}
 	}
 }
 
-func (c *Cluster) AddNode(node *Node) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.Spec.Workers = append(c.Spec.Workers, node)
+// updateSpecReplicaForGroup updates the replica count in spec for a given group
+func (c *Cluster) updateSpecReplicaForGroup(groupID int, newReplica int) {
+	// Update master spec
+	for i := range c.Spec.Nodes.Master {
+		if c.Spec.Nodes.Master[i].GroupID == groupID {
+			c.Spec.Nodes.Master[i].Replica = newReplica
+			return
+		}
+	}
+
+	// Update worker spec
+	for i := range c.Spec.Nodes.Workers {
+		if c.Spec.Nodes.Workers[i].GroupID == groupID {
+			c.Spec.Nodes.Workers[i].Replica = newReplica
+			return
+		}
+	}
 }
 
-func (c *Cluster) SetMaster(node *Node) {
-	c.Spec.Master = node
+// getNextWorkerGroupID returns the next available group ID for worker nodes
+func (c *Cluster) getNextWorkerGroupID() int {
+	maxGroupID := 1 // Start from 2 since 1 is reserved for master
+	for _, group := range c.Status.Nodes {
+		if group.GroupID > maxGroupID {
+			maxGroupID = group.GroupID
+		}
+	}
+	return maxGroupID + 1
 }
 
 func (c *Cluster) SetPhase(phase ClusterPhase) {
@@ -504,9 +1011,22 @@ func (c *Cluster) SetPhase(phase ClusterPhase) {
 }
 
 func (c *Cluster) SetPhaseForNode(nodeName string, phase Phase) {
-	node := c.GetNodeByName(nodeName)
-	if node != nil {
-		node.SetPhase(phase)
+	for i := range c.Status.Nodes {
+		group := &c.Status.Nodes[i]
+		for j := range group.Members {
+			if group.Members[j].Name == nodeName {
+				oldPhase := group.Members[j].Phase
+				group.Members[j].Phase = phase
+
+				// Update group counters
+				if oldPhase == PhaseRunning && phase != PhaseRunning {
+					group.Running--
+				} else if oldPhase != PhaseRunning && phase == PhaseRunning {
+					group.Running++
+				}
+				return
+			}
+		}
 	}
 }
 

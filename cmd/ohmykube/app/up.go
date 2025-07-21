@@ -39,6 +39,10 @@ var upCmd = &cobra.Command{
 - Optional CSI: local-path-provisioner(default) or rook-ceph
 - MetalLB as LoadBalancer implementation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		// Normalize and validate k8sVersion first
 		normalizedVersion, err := utils.NormalizeK8sVersion(k8sVersion)
 		if err != nil {
@@ -75,24 +79,24 @@ var upCmd = &cobra.Command{
 				// Use valid stored configuration
 				provider = cls.Spec.Provider
 
-				if cls.Spec.ProxyMode != proxyMode {
+				if cls.GetProxyMode() != proxyMode {
 					log.Warningf(`Ignore changing the proxy mode from "%s" to "%s" because the proxy-mode of a running cluster cannot be modified.`,
-						cls.Spec.ProxyMode, proxyMode)
+						cls.GetProxyMode(), proxyMode)
 				}
 
-				proxyMode = cls.Spec.ProxyMode
+				proxyMode = cls.GetProxyMode()
 				// Normalize the stored k8sVersion as well
-				storedVersion, versionErr := utils.NormalizeK8sVersion(cls.Spec.K8sVersion)
+				storedVersion, versionErr := utils.NormalizeK8sVersion(cls.GetKubernetesVersion())
 				if versionErr != nil {
-					return fmt.Errorf("invalid stored Kubernetes version '%s': %w", cls.Spec.K8sVersion, versionErr)
+					return fmt.Errorf("invalid stored Kubernetes version '%s': %w", cls.GetKubernetesVersion(), versionErr)
 				} else {
 					k8sVersion = storedVersion
 					log.Debugf("Using stored Kubernetes version: %s", k8sVersion)
 				}
-				if cls.Spec.LB != "" {
-					lb = cls.Spec.LB
+				if cls.GetLoadBalancer() != "" {
+					lb = cls.GetLoadBalancer()
 				} else if lb != "" {
-					cls.Spec.LB = lb
+					cls.Spec.Networking.LoadBalancer = lb
 				}
 
 				// validation of LoadBalancer and proxy-mode compatibility
@@ -113,29 +117,72 @@ var upCmd = &cobra.Command{
 		if !providerType.IsValid() {
 			return fmt.Errorf("invalid provider type: %s, currently only 'lima' is supported", providerType)
 		}
-		// Create environment initialization options
 		// Create cluster configuration
-		cfg := config.NewConfig(
-			clusterName,
-			workersCount,
-			proxyMode,
-			config.Resource{
-				CPU:    masterCPU,
-				Memory: masterMemory,
-				Disk:   masterDisk,
-			}, config.Resource{
-				CPU:    workerCPU,
-				Memory: workerMemory,
-				Disk:   workerDisk,
-			})
-		cfg.SetKubernetesVersion(k8sVersion)
-		cfg.SetProvider(providerType.String())
-		cfg.SetTemplate(template)
-		cfg.SetCNIType(cni)
-		cfg.SetUpdateSystem(updateSystem)
-		cfg.SetLBType(lb)
-		cfg.SetCSIType(csi)
-		cfg.SetParallel(parallel)
+		var cfg *config.Config
+
+		if cls != nil {
+			// Use existing cluster configuration for resume
+			// Get template from existing node groups (use master template as default)
+			existingTemplate := template // Use command line template as fallback
+			if len(cls.Spec.Nodes.Master) > 0 {
+				existingTemplate = cls.Spec.Nodes.Master[0].Template
+			} else if len(cls.Spec.Nodes.Workers) > 0 {
+				existingTemplate = cls.Spec.Nodes.Workers[0].Template
+			}
+
+			cfg = &config.Config{
+				Name:     cls.Name,
+				Provider: cls.Spec.Provider,
+				Template: existingTemplate,
+				Parallel: parallel, // Allow override from command line
+				Master: config.Resource{
+					CPU:    masterCPU,    // Allow override from command line
+					Memory: masterMemory, // Allow override from command line
+					Disk:   masterDisk,   // Allow override from command line
+				},
+				Workers: []config.Resource{
+					{
+						CPU:    workerCPU,    // Allow override from command line
+						Memory: workerMemory, // Allow override from command line
+						Disk:   workerDisk,   // Allow override from command line
+					},
+				},
+			}
+			cfg.SetKubernetesVersion(cls.GetKubernetesVersion())
+			cfg.SetCNIType(cls.GetCNI())
+			cfg.SetCSIType(cls.GetCSI())
+			cfg.SetLBType(cls.GetLoadBalancer())
+			cfg.SetUpdateSystem(updateSystem)
+
+			log.Infof("🔄 Resuming cluster creation from previous state")
+		} else {
+			// Create new cluster configuration
+			cfg = config.NewConfig(
+				clusterName,
+				workersCount,
+				proxyMode,
+				config.Resource{
+					CPU:    masterCPU,
+					Memory: masterMemory,
+					Disk:   masterDisk,
+				}, config.Resource{
+					CPU:    workerCPU,
+					Memory: workerMemory,
+					Disk:   workerDisk,
+				})
+			cfg.SetKubernetesVersion(k8sVersion)
+			cfg.SetProvider(providerType.String())
+			cfg.SetTemplate(template)
+			cfg.SetCNIType(cni)
+			cfg.SetUpdateSystem(updateSystem)
+			cfg.SetLBType(lb)
+			cfg.SetCSIType(csi)
+			cfg.SetParallel(parallel)
+
+			// Create new cluster
+			cls = config.NewCluster(cfg)
+			log.Infof("🆕 Creating new cluster")
+		}
 
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
@@ -149,6 +196,9 @@ var upCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
 
 		// Set environment initialization options
 		manager.SetInitOptions(initOptions)
@@ -187,8 +237,8 @@ func isValidClusterConfig(cls *config.Cluster) bool {
 	}
 
 	// Check essential fields that must not be empty
-	if cls.Spec.K8sVersion == "" {
-		log.Debugf("Invalid cluster config: K8sVersion is empty")
+	if cls.GetKubernetesVersion() == "" {
+		log.Debugf("Invalid cluster config: KubernetesVersion is empty")
 		return false
 	}
 
@@ -210,7 +260,7 @@ func isValidClusterConfig(cls *config.Cluster) bool {
 	}
 
 	// Validate LoadBalancer and proxy-mode compatibility
-	if err := validateLBProxyModeCompatibility(cls.Spec.LB, cls.Spec.ProxyMode); err != nil {
+	if err := validateLBProxyModeCompatibility(cls.GetLoadBalancer(), cls.GetProxyMode()); err != nil {
 		log.Debugf("Invalid cluster config: %v", err)
 		return false
 	}

@@ -23,6 +23,10 @@ var listCmd = &cobra.Command{
 	Long:    `List all virtual machines managed by OhMyKube. Supports various output formats.`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		// Load cluster information if it exists
 		var cls *config.Cluster
 		var err error
@@ -65,6 +69,9 @@ var listCmd = &cobra.Command{
 			return fmt.Errorf("failed to create manager: %w", err)
 		}
 		defer manager.Close()
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
 
 		// List VMs
 		vms, err := manager.ListVMs()

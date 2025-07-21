@@ -45,6 +45,11 @@ func NewManager(sshManager interfaces.SSHRunner, k8sVersion string,
 	}
 }
 
+// SetMasterNode updates the master node name
+func (k *Manager) SetMasterNode(masterNode string) {
+	k.MasterNode = masterNode
+}
+
 // InitMaster initializes Kubernetes control plane
 func (k *Manager) InitMaster() error {
 	// Cache required kubeadm images before initialization

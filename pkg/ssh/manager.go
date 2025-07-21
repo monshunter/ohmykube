@@ -278,7 +278,7 @@ func (sm *SSHManager) Address(nodeName string) string {
 		log.Errorf("Node %s does not exist, cannot get IP address", nodeName)
 		return ""
 	}
-	return node.Status.IP
+	return node.IP
 }
 
 // GetClient gets an SSH client
@@ -302,10 +302,11 @@ func (sm *SSHManager) GetClient(nodeName string) (*Client, bool) {
 			sm.mutex.Unlock()
 			return client, true
 		}
-
+		log.Debugf("Creating new SSH client for node %s at %s", nodeName, ip)
 		client = NewClient(ip, "22", "root", sm.sshConfig.Password, sm.sshConfig.GetSSHKey())
 		err := client.Connect()
 		if err != nil {
+			log.Errorf("Failed to connect to node %s: %v", nodeName, err)
 			sm.mutex.Unlock()
 			return nil, false
 		}

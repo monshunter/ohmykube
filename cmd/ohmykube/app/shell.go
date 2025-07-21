@@ -17,8 +17,12 @@ var shellCmd = &cobra.Command{
 	Long:    `Open an interactive shell to a virtual machine. If no name is provided, connects to the master node.`,
 	Args:    cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		nodeName := args[0]
-		// Load cluster information if it exists
+		// Load cluster information
 		cls, err := config.Load(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
@@ -47,6 +51,9 @@ var shellCmd = &cobra.Command{
 			return fmt.Errorf("failed to create manager: %w", err)
 		}
 		defer manager.Close()
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
 
 		// Open shell
 		log.Infof("Opening shell to VM: %s", nodeName)

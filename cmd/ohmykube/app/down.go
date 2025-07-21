@@ -16,6 +16,10 @@ var downCmd = &cobra.Command{
 	Short: "Delete a k8s cluster",
 	Long:  `Delete the created Kubernetes cluster and all related virtual machine resources`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		sshConfig, err := ssh.NewSSHConfig(password, clusterName)
 		if err != nil {
 			return err
@@ -46,6 +50,10 @@ var downCmd = &cobra.Command{
 			return err
 		}
 		defer manager.Close()
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
+
 		// Delete cluster
 		err = manager.DeleteCluster()
 		if err != nil {

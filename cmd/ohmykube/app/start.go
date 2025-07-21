@@ -16,7 +16,10 @@ var startCmd = &cobra.Command{
 	Long:  `Start a virtual machine by name. If no name is provided, starts all VMs in the cluster.`,
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Load cluster information if it exists
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		// Load cluster information
 		cls, err := config.Load(clusterName)
 		if err != nil {
@@ -46,6 +49,9 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("failed to create manager: %w", err)
 		}
 		defer manager.Close()
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
 
 		// Start specific VM
 		for _, nodeName := range args {

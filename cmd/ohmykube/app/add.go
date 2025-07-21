@@ -24,6 +24,10 @@ var addCmd = &cobra.Command{
 	Long:  `Add one or more worker nodes to an existing Kubernetes cluster`,
 	Args:  cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up graceful shutdown handling
+		shutdownHandler := NewGracefulShutdownHandler()
+		defer shutdownHandler.Close()
+
 		// Load cluster information
 		cls, err := config.Load(clusterName)
 		if err != nil {
@@ -43,20 +47,20 @@ var addCmd = &cobra.Command{
 			Master: config.Resource{},
 		}
 
-		cfg.SetKubernetesVersion(cls.Spec.K8sVersion)
+		cfg.SetKubernetesVersion(cls.GetKubernetesVersion())
 		cfg.SetProvider(cls.Spec.Provider)
 		cfg.SetTemplate(template)
 		cfg.SetParallel(parallel)
-		cfg.SetCNIType(cls.Spec.CNI)
-		cfg.SetCSIType(cls.Spec.CSI)
-		cfg.SetLBType(cls.Spec.LB)
+		cfg.SetCNIType(cls.GetCNI())
+		cfg.SetCSIType(cls.GetCSI())
+		cfg.SetLBType(cls.GetLoadBalancer())
 		cfg.SetUpdateSystem(updateSystem)
 
 		// Get default initialization options and modify required fields
 		initOptions := initializer.DefaultInitOptions()
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
-		initOptions.ProxyMode = initializer.ProxyMode(cls.Spec.ProxyMode)
-		initOptions.K8SVersion = cls.Spec.K8sVersion
+		initOptions.ProxyMode = initializer.ProxyMode(cls.GetProxyMode())
+		initOptions.K8SVersion = cls.GetKubernetesVersion()
 		initOptions.UpdateSystem = updateSystem
 
 		// Create cluster manager
@@ -66,13 +70,17 @@ var addCmd = &cobra.Command{
 			return fmt.Errorf("failed to create cluster manager: %w", err)
 		}
 		defer manager.Close()
+
+		// Set manager for graceful shutdown
+		shutdownHandler.SetManager(manager)
+
 		// Set environment initialization options
 		manager.SetInitOptions(initOptions)
 		// Add node (InitOptions is already initialized in NewManager with DefaultInitOptions)
 		if err := manager.AddWorkerNodes(addNodeCPU, addNodeMemory, addNodeDisk, count); err != nil {
 			log.Errorf("Failed to add node: %v", err)
 			log.Errorf(`A failure has occurred.
-			 You can either re-execute "ohmykube up" after the problem is fixed or directly. 
+			 You can either re-execute "ohmykube up" after the problem is fixed or directly.
 			 The process will resume from where it failed.`)
 			return fmt.Errorf("failed to add node: %w", err)
 		}
