@@ -1221,14 +1221,15 @@ func (m *Manager) DeleteCluster() error {
 		}
 	}
 
-	// Delete kubeconfig
+	// Delete legacy kubeconfig from ~/.kube/ directory (backward compatibility)
 	kubeDir := filepath.Join(os.Getenv("HOME"), ".kube")
-	ohmykubeConfig := filepath.Join(kubeDir, m.Config.Name+"-config")
-	if _, err := os.Stat(ohmykubeConfig); err == nil {
-		os.Remove(ohmykubeConfig)
+	legacyKubeconfigPath := filepath.Join(kubeDir, m.Config.Name+"-config")
+	if _, err := os.Stat(legacyKubeconfigPath); err == nil {
+		os.Remove(legacyKubeconfigPath)
+		log.Debugf("Removed legacy kubeconfig file: %s", legacyKubeconfigPath)
 	}
 
-	// Delete cluster information
+	// Delete cluster information (including kubeconfig in cluster directory)
 	err = config.RemoveCluster(m.Config.Name)
 	if err != nil {
 		return fmt.Errorf("failed to delete cluster information: %w", err)

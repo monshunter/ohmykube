@@ -3,7 +3,7 @@ package app
 import (
 	"fmt"
 
-	"github.com/monshunter/ohmykube/pkg/config"
+	configpkg "github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/controller"
 	"github.com/monshunter/ohmykube/pkg/log"
 	myProvider "github.com/monshunter/ohmykube/pkg/provider"
@@ -25,8 +25,8 @@ var downCmd = &cobra.Command{
 			return err
 		}
 
-		if provider == "" && config.CheckExists(clusterName) {
-			clusterInfo, err := config.Load(clusterName)
+		if provider == "" && configpkg.CheckExists(clusterName) {
+			clusterInfo, err := configpkg.Load(clusterName)
 			if err != nil {
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}
@@ -38,8 +38,8 @@ var downCmd = &cobra.Command{
 		}
 
 		// Create cluster configuration
-		config := config.NewConfig(clusterName, workersCount, "iptables",
-			config.Resource{}, config.Resource{})
+		config := configpkg.NewConfig(clusterName, workersCount, "iptables",
+			configpkg.Resource{}, configpkg.Resource{})
 		config.SetKubernetesVersion("")
 		config.SetProvider(providerType.String())
 		config.SetTemplate(template)
@@ -63,6 +63,11 @@ var downCmd = &cobra.Command{
 		// Clean up SSH keys for the cluster
 		if err := ssh.CleanupSSHKeys(clusterName); err != nil {
 			log.Warningf("Failed to clean up SSH keys: %v", err)
+		}
+
+		// Auto-switch to next available cluster if current cluster was deleted
+		if err := configpkg.AutoSwitchAfterDeletion(clusterName); err != nil {
+			log.Warningf("Failed to auto-switch cluster: %v", err)
 		}
 
 		return nil

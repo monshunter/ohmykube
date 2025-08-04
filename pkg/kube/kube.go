@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/cache"
+	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/config/default/kubeadm"
 	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
@@ -125,25 +126,34 @@ func (k *Manager) JoinNode(nodeName, joinCommand string) error {
 }
 
 // GetKubeconfig gets kubeconfig to local
-func (k *Manager) GetKubeconfig() (string, error) {
+func (k *Manager) GetKubeconfig(clusterName string) (string, error) {
 	// Get kubeconfig content
 	output, err := k.sshRunner.RunCommand(k.MasterNode, "cat $HOME/.kube/config")
 	if err != nil {
 		return "", fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
 
-	// Create local kubeconfig file
-	kubeDir := filepath.Join(os.Getenv("HOME"), ".kube")
-	if err := os.MkdirAll(kubeDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create .kube directory: %w", err)
+	// Create local kubeconfig file in cluster directory
+	clusterDir, err := config.ClusterDir(clusterName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get cluster directory: %w", err)
 	}
 
-	ohmykubeConfig := filepath.Join(kubeDir, "ohmykube-config")
-	if err := os.WriteFile(ohmykubeConfig, []byte(output), 0644); err != nil {
+	if err := os.MkdirAll(clusterDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cluster directory: %w", err)
+	}
+
+	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
+	if err := os.WriteFile(kubeconfigPath, []byte(output), 0644); err != nil {
 		return "", fmt.Errorf("failed to write kubeconfig file: %w", err)
 	}
 
-	return ohmykubeConfig, nil
+	// Convert to relative path for display
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		kubeconfigPath = strings.Replace(kubeconfigPath, homeDir, "~", 1)
+	}
+	return kubeconfigPath, nil
 }
 
 // SetCustomConfig sets custom configuration file path
@@ -200,21 +210,25 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 		return "", fmt.Errorf("failed to get kubeconfig content: %w", err)
 	}
 
-	// Create local kubeconfig file
-	homeDir, err := os.UserHomeDir()
+	// Create local kubeconfig file in cluster directory
+	clusterDir, err := config.ClusterDir(clusterName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %w", err)
+		return "", fmt.Errorf("failed to get cluster directory: %w", err)
 	}
 
-	kubeDir := filepath.Join(homeDir, ".kube")
-	if err := os.MkdirAll(kubeDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create .kube directory: %w", err)
+	if err := os.MkdirAll(clusterDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cluster directory: %w", err)
 	}
 
-	kubeconfigPath := filepath.Join(kubeDir, clusterName+"-config")
+	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
 	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to save kubeconfig file: %w", err)
 	}
-	kubeconfigPath = strings.Replace(kubeconfigPath, homeDir, "~", 1)
+
+	// Convert to relative path for display
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		kubeconfigPath = strings.Replace(kubeconfigPath, homeDir, "~", 1)
+	}
 	return kubeconfigPath, nil
 }

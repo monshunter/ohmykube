@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/log"
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,13 @@ including Cilium(CNI), Rook(CSI), and MetalLB(LB).`,
 		}
 		if quiet {
 			log.SetQuiet(true)
+		}
+
+		// Set default cluster name from current cluster if --name flag not explicitly set
+		if !cmd.Flags().Changed("name") {
+			if currentCluster, err := config.GetCurrentCluster(); err == nil {
+				clusterName = currentCluster
+			}
 		}
 	},
 }
@@ -71,4 +79,6 @@ Use "limactl create --list-templates" to list all available templates in Lima.`)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(loadCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(switchCmd)
+	rootCmd.AddCommand(statusCmd)
 }
