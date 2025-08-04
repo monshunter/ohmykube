@@ -69,5 +69,6 @@ Use "limactl create --list-templates" to list all available templates in Lima.`)
 	rootCmd.AddCommand(shellCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(stopCmd)
+	rootCmd.AddCommand(loadCmd)
 	rootCmd.AddCommand(versionCmd)
 }
