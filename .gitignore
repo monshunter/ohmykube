@@ -100,4 +100,6 @@ localk8s
 /ohmykube
 /bin
 /debug*
-
+# AI
+.claude
+CLAUDE.local.md

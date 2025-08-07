@@ -427,10 +427,19 @@ type ResourceRequests struct {
 
 // NodeGroupSpec defines a group of nodes with the same configuration
 type NodeGroupSpec struct {
-	Replica   int              `yaml:"replica,omitempty"`
-	GroupID   int              `yaml:"groupid,omitempty"`
-	Template  string           `yaml:"template,omitempty"`
-	Resources ResourceRequests `yaml:"resources,omitempty"`
+	Replica      int               `yaml:"replica,omitempty"`
+	GroupID      int               `yaml:"groupid,omitempty"`
+	Template     string            `yaml:"template,omitempty"`
+	Resources    ResourceRequests  `yaml:"resources,omitempty"`
+	Metadata     NodeGroupMetadata `yaml:"metadata,omitempty"`
+	CustomInit   CustomInitConfig  `yaml:"customInit,omitempty"`
+}
+
+// NodeGroupMetadata defines metadata for a node group (used for applying to all nodes in the group)
+type NodeGroupMetadata struct {
+	Labels      map[string]string `yaml:"labels,omitempty"`
+	Annotations map[string]string `yaml:"annotations,omitempty"`
+	Taints      []Taint           `yaml:"taints,omitempty"`
 }
 
 // NodesConfig defines the node configuration for master and workers
@@ -493,6 +502,25 @@ func getTemplateOrDefault(template string) string {
 	return template
 }
 
+// convertNodeMetadataToGroupMetadata converts NodeMetadata to NodeGroupMetadata
+func convertNodeMetadataToGroupMetadata(metadata NodeMetadata) NodeGroupMetadata {
+	groupMetadata := NodeGroupMetadata{
+		Labels:      metadata.Labels,
+		Annotations: metadata.Annotations,
+	}
+	
+	// Convert NodeTaint to Taint
+	for _, nt := range metadata.Taints {
+		groupMetadata.Taints = append(groupMetadata.Taints, Taint{
+			Key:    nt.Key,
+			Value:  nt.Value,
+			Effect: nt.Effect,
+		})
+	}
+	
+	return groupMetadata
+}
+
 func NewCluster(config *Config) *Cluster {
 	cls := &Cluster{
 		ApiVersion: ApiVersion,
@@ -530,6 +558,8 @@ func NewCluster(config *Config) *Cluster {
 							Memory:  fmt.Sprintf("%dGi", config.Master.Memory),
 							Storage: fmt.Sprintf("%dGi", config.Master.Disk),
 						},
+						Metadata:   convertNodeMetadataToGroupMetadata(config.MasterMetadata),
+						CustomInit: config.MasterCustomInit,
 					},
 				},
 				Workers: []NodeGroupSpec{},
@@ -554,6 +584,8 @@ func NewCluster(config *Config) *Cluster {
 				Memory:  fmt.Sprintf("%dGi", firstWorker.Memory),
 				Storage: fmt.Sprintf("%dGi", firstWorker.Disk),
 			},
+			Metadata:   convertNodeMetadataToGroupMetadata(config.WorkerMetadata),
+			CustomInit: config.WorkerCustomInit,
 		})
 	}
 
@@ -754,6 +786,69 @@ func (c *Cluster) CreateNodeInGroup(groupID int, nodeName string) *NodeGroupMemb
 	return &group.Members[len(group.Members)-1]
 }
 
+// GetNodeGroupMetadata returns the metadata for a specific node group
+func (c *Cluster) GetNodeGroupMetadata(groupID int) (NodeGroupMetadata, bool) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	// Check master groups
+	for _, masterSpec := range c.Spec.Nodes.Master {
+		if masterSpec.GroupID == groupID {
+			return masterSpec.Metadata, true
+		}
+	}
+
+	// Check worker groups
+	for _, workerSpec := range c.Spec.Nodes.Workers {
+		if workerSpec.GroupID == groupID {
+			return workerSpec.Metadata, true
+		}
+	}
+
+	return NodeGroupMetadata{}, false
+}
+
+// GetNodeGroupCustomInit returns the custom initialization configuration for a specific node group
+func (c *Cluster) GetNodeGroupCustomInit(groupID int) (CustomInitConfig, bool) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	// Check master groups
+	for _, masterSpec := range c.Spec.Nodes.Master {
+		if masterSpec.GroupID == groupID {
+			return masterSpec.CustomInit, true
+		}
+	}
+
+	// Check worker groups
+	for _, workerSpec := range c.Spec.Nodes.Workers {
+		if workerSpec.GroupID == groupID {
+			return workerSpec.CustomInit, true
+		}
+	}
+
+	return CustomInitConfig{}, false
+}
+
+// ConvertGroupMetadataToNodeMetadata converts NodeGroupMetadata to NodeMetadata for applying to nodes
+func ConvertGroupMetadataToNodeMetadata(groupMetadata NodeGroupMetadata) NodeMetadata {
+	nodeMetadata := NodeMetadata{
+		Labels:      groupMetadata.Labels,
+		Annotations: groupMetadata.Annotations,
+	}
+
+	// Convert Taint to NodeTaint
+	for _, t := range groupMetadata.Taints {
+		nodeMetadata.Taints = append(nodeMetadata.Taints, NodeTaint{
+			Key:    t.Key,
+			Value:  t.Value,
+			Effect: t.Effect,
+		})
+	}
+
+	return nodeMetadata
+}
+
 // GetKubernetesVersion returns the Kubernetes version
 func (c *Cluster) GetKubernetesVersion() string {
 	c.lock.RLock()
@@ -874,25 +969,134 @@ func (c *Cluster) IsClusterFullyRunning() bool {
 	return true
 }
 
-// FindMatchingWorkerGroup finds a worker node group with matching template and resources
-func (c *Cluster) FindMatchingWorkerGroup(template string, resources ResourceRequests) *NodeGroupSpec {
+// FindMatchingWorkerGroup finds a worker node group with matching template, resources, metadata, and customInit
+func (c *Cluster) FindMatchingWorkerGroup(template string, resources ResourceRequests, metadata NodeGroupMetadata, customInit CustomInitConfig) *NodeGroupSpec {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
 	for i := range c.Spec.Nodes.Workers {
 		worker := &c.Spec.Nodes.Workers[i]
-		if worker.Template == template &&
-			worker.Resources.CPU == resources.CPU &&
-			worker.Resources.Memory == resources.Memory &&
-			worker.Resources.Storage == resources.Storage {
+		if c.isNodeGroupSpecMatching(worker, template, resources, metadata, customInit) {
 			return worker
 		}
 	}
 	return nil
 }
 
+// isNodeGroupSpecMatching checks if a node group spec matches the given criteria
+func (c *Cluster) isNodeGroupSpecMatching(spec *NodeGroupSpec, template string, resources ResourceRequests, metadata NodeGroupMetadata, customInit CustomInitConfig) bool {
+	// Check template and resources
+	if spec.Template != template ||
+		spec.Resources.CPU != resources.CPU ||
+		spec.Resources.Memory != resources.Memory ||
+		spec.Resources.Storage != resources.Storage {
+		return false
+	}
+
+	// Check metadata matching
+	if !c.isMetadataMatching(spec.Metadata, metadata) {
+		return false
+	}
+
+	// Check custom init matching
+	if !c.isCustomInitMatching(spec.CustomInit, customInit) {
+		return false
+	}
+
+	return true
+}
+
+// isMetadataMatching checks if two NodeGroupMetadata instances are equivalent
+func (c *Cluster) isMetadataMatching(meta1, meta2 NodeGroupMetadata) bool {
+	// Check labels
+	if !c.isStringMapMatching(meta1.Labels, meta2.Labels) {
+		return false
+	}
+
+	// Check annotations
+	if !c.isStringMapMatching(meta1.Annotations, meta2.Annotations) {
+		return false
+	}
+
+	// Check taints
+	if len(meta1.Taints) != len(meta2.Taints) {
+		return false
+	}
+	for _, taint1 := range meta1.Taints {
+		found := false
+		for _, taint2 := range meta2.Taints {
+			if taint1.Key == taint2.Key && taint1.Value == taint2.Value && taint1.Effect == taint2.Effect {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isCustomInitMatching checks if two CustomInitConfig instances are equivalent
+func (c *Cluster) isCustomInitMatching(init1, init2 CustomInitConfig) bool {
+	// Check hooks
+	if !c.isStringSliceMatching(init1.Hooks.PreSystemInit, init2.Hooks.PreSystemInit) ||
+		!c.isStringSliceMatching(init1.Hooks.PostSystemInit, init2.Hooks.PostSystemInit) ||
+		!c.isStringSliceMatching(init1.Hooks.PreK8sInit, init2.Hooks.PreK8sInit) ||
+		!c.isStringSliceMatching(init1.Hooks.PostK8sInit, init2.Hooks.PostK8sInit) {
+		return false
+	}
+
+	// Check files
+	if len(init1.Files) != len(init2.Files) {
+		return false
+	}
+	for _, file1 := range init1.Files {
+		found := false
+		for _, file2 := range init2.Files {
+			if file1.LocalPath == file2.LocalPath && file1.RemotePath == file2.RemotePath &&
+				file1.Mode == file2.Mode && file1.Owner == file2.Owner {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isStringMapMatching checks if two string maps are equivalent
+func (c *Cluster) isStringMapMatching(map1, map2 map[string]string) bool {
+	if len(map1) != len(map2) {
+		return false
+	}
+	for k, v1 := range map1 {
+		if v2, exists := map2[k]; !exists || v1 != v2 {
+			return false
+		}
+	}
+	return true
+}
+
+// isStringSliceMatching checks if two string slices are equivalent
+func (c *Cluster) isStringSliceMatching(slice1, slice2 []string) bool {
+	if len(slice1) != len(slice2) {
+		return false
+	}
+	for i, v1 := range slice1 {
+		if i >= len(slice2) || v1 != slice2[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // AddNodeToWorkerGroup adds a node to an existing worker group or creates a new one
-func (c *Cluster) AddNodeToWorkerGroup(template string, resources ResourceRequests) int {
+func (c *Cluster) AddNodeToWorkerGroup(template string, resources ResourceRequests, metadata NodeGroupMetadata, customInit CustomInitConfig) int {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -900,10 +1104,7 @@ func (c *Cluster) AddNodeToWorkerGroup(template string, resources ResourceReques
 	var matchingGroup *NodeGroupSpec
 	for i := range c.Spec.Nodes.Workers {
 		worker := &c.Spec.Nodes.Workers[i]
-		if worker.Template == template &&
-			worker.Resources.CPU == resources.CPU &&
-			worker.Resources.Memory == resources.Memory &&
-			worker.Resources.Storage == resources.Storage {
+		if c.isNodeGroupSpecMatching(worker, template, resources, metadata, customInit) {
 			matchingGroup = worker
 			break
 		}
@@ -927,10 +1128,12 @@ func (c *Cluster) AddNodeToWorkerGroup(template string, resources ResourceReques
 	// No matching group found, create new one
 	newGroupID := c.getNextAvailableGroupID()
 	newGroup := NodeGroupSpec{
-		Replica:   1,
-		GroupID:   newGroupID,
-		Template:  template,
-		Resources: resources,
+		Replica:    1,
+		GroupID:    newGroupID,
+		Template:   template,
+		Resources:  resources,
+		Metadata:   metadata,
+		CustomInit: customInit,
 	}
 
 	// Add to spec

@@ -871,8 +871,31 @@ func (m *Manager) initializeVM(nodeName string) error {
 		},
 	}
 
-	// Create and run the initializer
-	initializer, err := initializer.NewInitializerWithOptions(m.sshRunner, tempNode, m.InitOptions)
+	// Find the node's group ID to get custom initialization configuration
+	var groupID int
+	found := false
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			if member.Name == nodeName {
+				groupID = group.GroupID
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("could not find group ID for node %s", nodeName)
+	}
+
+	// Get custom initialization configuration for the node's group
+	customInit, _ := m.Cluster.GetNodeGroupCustomInit(groupID)
+
+	// Create and run the initializer with custom initialization
+	initializer, err := initializer.NewInitializerWithCustomInit(m.sshRunner, tempNode, m.InitOptions, customInit)
 	if err != nil {
 		m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeEnvironmentInit, config.ConditionStatusFalse,
 			"InitializationFailed", fmt.Sprintf("Failed to create initializer: %v", err))
@@ -928,6 +951,13 @@ func (m *Manager) InitializeMaster() (string, error) {
 		"Initialized", "Master node initialized successfully")
 	m.Cluster.SetNodeCondition(masterName, config.ConditionTypeNodeReady, config.ConditionStatusTrue,
 		"NodeReady", "Master node is ready")
+	
+	// Apply node metadata (labels, annotations, taints) after master node is initialized
+	if err := m.applyNodeMetadata(masterName); err != nil {
+		log.Warningf("Failed to apply metadata to master node %s: %v", masterName, err)
+		// Don't fail the entire process if metadata application fails
+	}
+	
 	m.Cluster.Save()
 
 	return m.getJoinCommand()
@@ -992,6 +1022,12 @@ func (m *Manager) JoinWorkerNode(nodeName, joinCommand string) error {
 	m.Cluster.SetNodeCondition(nodeName, config.ConditionTypeNodeReady, config.ConditionStatusTrue,
 		"NodeReady", "Worker node is ready")
 
+	// Apply node metadata (labels, annotations, taints) after node successfully joins cluster
+	if err := m.applyNodeMetadata(nodeName); err != nil {
+		log.Warningf("Failed to apply metadata to node %s: %v", nodeName, err)
+		// Don't fail the entire process if metadata application fails
+	}
+
 	return m.Cluster.Save()
 }
 
@@ -1029,8 +1065,24 @@ func (m *Manager) AddWorkerNode(cpu int, memory int, disk int) error {
 		template = "ubuntu-24.04" // Default template
 	}
 
+	// Get metadata and custom init configuration from config
+	// Convert NodeMetadata to NodeGroupMetadata
+	metadata := config.NodeGroupMetadata{
+		Labels:      m.Config.WorkerMetadata.Labels,
+		Annotations: m.Config.WorkerMetadata.Annotations,
+	}
+	// Convert NodeTaints to Taints
+	for _, nt := range m.Config.WorkerMetadata.Taints {
+		metadata.Taints = append(metadata.Taints, config.Taint{
+			Key:    nt.Key,
+			Value:  nt.Value,
+			Effect: nt.Effect,
+		})
+	}
+	customInit := m.Config.WorkerCustomInit
+
 	// Find matching group or create new one
-	groupID := m.Cluster.AddNodeToWorkerGroup(template, resources)
+	groupID := m.Cluster.AddNodeToWorkerGroup(template, resources, metadata, customInit)
 
 	log.Infof("Adding worker node to group %d", groupID)
 
@@ -1565,4 +1617,44 @@ func (m *Manager) executeParallelSteps(progress *log.MultiStepProgress, baseStep
 
 	log.Debugf("All parallel steps completed successfully")
 	return nil
+}
+
+// applyNodeMetadata applies node metadata (labels, annotations, taints) to a Kubernetes node
+func (m *Manager) applyNodeMetadata(nodeName string) error {
+	// Find the node in cluster to get its group ID
+	node := m.Cluster.GetNodeByName(nodeName)
+	if node == nil {
+		return fmt.Errorf("node %s not found in cluster", nodeName)
+	}
+
+	// Find the group ID by checking all node groups
+	var groupID int = -1
+	for _, group := range m.Cluster.Status.Nodes {
+		for _, member := range group.Members {
+			if member.Name == nodeName {
+				groupID = group.GroupID
+				break
+			}
+		}
+		if groupID != -1 {
+			break
+		}
+	}
+
+	if groupID == -1 {
+		return fmt.Errorf("could not determine group ID for node %s", nodeName)
+	}
+
+	// Get metadata from the node group spec
+	groupMetadata, found := m.Cluster.GetNodeGroupMetadata(groupID)
+	if !found {
+		log.Debugf("No metadata configuration found for group %d (node %s)", groupID, nodeName)
+		return nil
+	}
+
+	// Convert group metadata to node metadata
+	nodeMetadata := config.ConvertGroupMetadataToNodeMetadata(groupMetadata)
+
+	// Apply metadata using kube manager
+	return m.KubeManager.ApplyNodeMetadata(nodeName, nodeMetadata)
 }

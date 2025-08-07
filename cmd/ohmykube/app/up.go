@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/config"
 	"github.com/monshunter/ohmykube/pkg/controller"
@@ -29,6 +30,29 @@ var (
 	cni               string
 	csi               string
 	lb                string
+	// Node metadata options
+	masterLabels      []string
+	workerLabels      []string
+	masterAnnotations []string
+	workerAnnotations []string
+	masterTaints      []string
+	workerTaints      []string
+
+	// Custom initialization options for master nodes
+	masterHookPreSystemInit  []string
+	masterHookPostSystemInit []string
+	masterHookPreK8sInit     []string
+	masterHookPostK8sInit    []string
+	masterUploadFiles        []string
+	masterUploadDirs         []string
+
+	// Custom initialization options for worker nodes  
+	workerHookPreSystemInit  []string
+	workerHookPostSystemInit []string
+	workerHookPreK8sInit     []string
+	workerHookPostK8sInit    []string
+	workerUploadFiles        []string
+	workerUploadDirs         []string
 )
 
 var upCmd = &cobra.Command{
@@ -42,6 +66,17 @@ var upCmd = &cobra.Command{
 		// Set up graceful shutdown handling
 		shutdownHandler := NewGracefulShutdownHandler()
 		defer shutdownHandler.Close()
+
+		// log.Infof("master:labels=%d,anno=%d,taints=%d\n",
+		// 	len(masterLabels), len(masterAnnotations), len(masterTaints))
+		// log.Infof("master:labels=%v,anno=%v,taints=%v\n",
+		// 	masterLabels, masterAnnotations, masterTaints)
+
+		// log.Infof("worker:labels=%d,anno=%d,taints=%d\n",
+		// 	len(workerLabels), len(workerAnnotations), len(workerTaints))
+		// log.Infof("worker:labels=%v,anno=%v,taints=%v\n",
+		// 	workerLabels, workerAnnotations, workerTaints)
+		// return nil
 
 		// Normalize and validate k8sVersion first
 		normalizedVersion, err := utils.NormalizeK8sVersion(k8sVersion)
@@ -179,6 +214,32 @@ var upCmd = &cobra.Command{
 			cfg.SetCSIType(csi)
 			cfg.SetParallel(parallel)
 
+			// Parse and set node metadata
+			masterMetadata, err := parseNodeMetadata(masterLabels, masterAnnotations, masterTaints)
+			if err != nil {
+				return fmt.Errorf("failed to parse master node metadata: %w", err)
+			}
+			cfg.SetMasterMetadata(masterMetadata)
+
+			workerMetadata, err := parseNodeMetadata(workerLabels, workerAnnotations, workerTaints)
+			if err != nil {
+				return fmt.Errorf("failed to parse worker node metadata: %w", err)
+			}
+			cfg.SetWorkerMetadata(workerMetadata)
+
+			// Parse and set custom initialization configuration
+			masterCustomInit, err := parseCustomInitConfig(masterHookPreSystemInit, masterHookPostSystemInit, masterHookPreK8sInit, masterHookPostK8sInit, masterUploadFiles, masterUploadDirs)
+			if err != nil {
+				return fmt.Errorf("failed to parse master custom initialization config: %w", err)
+			}
+			cfg.SetMasterCustomInit(masterCustomInit)
+
+			workerCustomInit, err := parseCustomInitConfig(workerHookPreSystemInit, workerHookPostSystemInit, workerHookPreK8sInit, workerHookPostK8sInit, workerUploadFiles, workerUploadDirs)
+			if err != nil {
+				return fmt.Errorf("failed to parse worker custom initialization config: %w", err)
+			}
+			cfg.SetWorkerCustomInit(workerCustomInit)
+
 			// Create new cluster
 			cls = config.NewCluster(cfg)
 			log.Infof("🆕 Creating new cluster")
@@ -213,7 +274,7 @@ var upCmd = &cobra.Command{
 		err = manager.CreateCluster()
 		if err != nil {
 			log.Errorf(`A failure has occurred.
-			 You can either re-execute "ohmykube up" after the problem is fixed or directly. 
+			 You can either re-execute "ohmykube up" after the problem is fixed or directly.
 			 The process will resume from where it failed.`)
 			return err
 		}
@@ -269,6 +330,91 @@ func isValidClusterConfig(cls *config.Cluster) bool {
 	return true
 }
 
+// parseLabelsAnnotations parses key=value format strings into a map
+func parseLabelsAnnotations(items []string) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, item := range items {
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid format '%s', expected key=value", item)
+		}
+		result[parts[0]] = parts[1]
+	}
+	return result, nil
+}
+
+// parseTaints parses key=value:effect format strings into NodeTaint slice
+func parseTaints(items []string) ([]config.NodeTaint, error) {
+	var taints []config.NodeTaint
+	for _, item := range items {
+		// Format: key=value:effect or key:effect (value is optional)
+		parts := strings.Split(item, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid taint format '%s', expected key=value:effect or key:effect", item)
+		}
+
+		keyValue := parts[0]
+		effect := parts[1]
+
+		// Validate effect
+		if effect != "NoSchedule" && effect != "NoExecute" && effect != "PreferNoSchedule" {
+			return nil, fmt.Errorf("invalid taint effect '%s', must be NoSchedule, NoExecute, or PreferNoSchedule", effect)
+		}
+
+		// Parse key and value
+		var key, value string
+		if strings.Contains(keyValue, "=") {
+			kvParts := strings.SplitN(keyValue, "=", 2)
+			key = kvParts[0]
+			value = kvParts[1]
+		} else {
+			key = keyValue
+			value = ""
+		}
+
+		taints = append(taints, config.NodeTaint{
+			Key:    key,
+			Value:  value,
+			Effect: effect,
+		})
+	}
+	return taints, nil
+}
+
+// parseNodeMetadata parses command line flags into NodeMetadata
+func parseNodeMetadata(labels, annotations, taints []string) (config.NodeMetadata, error) {
+	metadata := config.NodeMetadata{}
+
+	// Parse labels
+	if len(labels) > 0 {
+		parsedLabels, err := parseLabelsAnnotations(labels)
+		if err != nil {
+			return metadata, fmt.Errorf("failed to parse labels: %w", err)
+		}
+		metadata.Labels = parsedLabels
+	}
+
+	// Parse annotations
+	if len(annotations) > 0 {
+		parsedAnnotations, err := parseLabelsAnnotations(annotations)
+		if err != nil {
+			return metadata, fmt.Errorf("failed to parse annotations: %w", err)
+		}
+		metadata.Annotations = parsedAnnotations
+	}
+
+	// Parse taints
+	if len(taints) > 0 {
+		parsedTaints, err := parseTaints(taints)
+		if err != nil {
+			return metadata, fmt.Errorf("failed to parse taints: %w", err)
+		}
+		metadata.Taints = parsedTaints
+	}
+
+	return metadata, nil
+}
+
 func init() {
 	// Add command line parameters
 	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 2, "Number of worker nodes")
@@ -287,4 +433,46 @@ func init() {
 		"CSI type to install (local-path-provisioner, rook-ceph, none)")
 	upCmd.Flags().StringVar(&lb, "lb", "",
 		`LoadBalancer (only "metallb" is supported for now, automatically sets proxy-mode to ipvs), leave empty to disable`)
+
+	// Node metadata flags
+	upCmd.Flags().StringArrayVar(&masterLabels, "master-labels", []string{},
+		`Labels for master nodes (format: key=value). Can be specified multiple times`)
+	upCmd.Flags().StringArrayVar(&workerLabels, "worker-labels", []string{},
+		`Labels for worker nodes (format: key=value). Can be specified multiple times`)
+	upCmd.Flags().StringArrayVar(&masterAnnotations, "master-annotations", []string{},
+		`Annotations for master nodes (format: key=value). Can be specified multiple times`)
+	upCmd.Flags().StringArrayVar(&workerAnnotations, "worker-annotations", []string{},
+		`Annotations for worker nodes (format: key=value). Can be specified multiple times`)
+	upCmd.Flags().StringArrayVar(&masterTaints, "master-taints", []string{},
+		`Taints for master nodes (format: key=value:effect). Can be specified multiple times. Effect can be NoSchedule|NoExecute|PreferNoSchedule`)
+	upCmd.Flags().StringArrayVar(&workerTaints, "worker-taints", []string{},
+		`Taints for worker nodes (format: key=value:effect). Can be specified multiple times. Effect can be NoSchedule|NoExecute|PreferNoSchedule`)
+
+	// Master custom initialization flags
+	upCmd.Flags().StringArrayVar(&masterHookPreSystemInit, "master-hook-pre-system-init", []string{},
+		`Hook scripts to run before system update on master nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&masterHookPostSystemInit, "master-hook-post-system-init", []string{},
+		`Hook scripts to run after system update, before K8s install on master nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&masterHookPreK8sInit, "master-hook-pre-k8s-init", []string{},
+		`Hook scripts to run before K8s components install on master nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&masterHookPostK8sInit, "master-hook-post-k8s-init", []string{},
+		`Hook scripts to run after all initialization on master nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&masterUploadFiles, "master-upload-file", []string{},
+		`Files to upload to master nodes (format: local_path:remote_path[:mode[:owner]]). Example: /tmp/config.yml:/etc/config.yml:0644:root:root`)
+	upCmd.Flags().StringArrayVar(&masterUploadDirs, "master-upload-dir", []string{},
+		`Directories to upload to master nodes (format: local_dir:remote_dir[:mode[:owner]]). Recursively copies entire directory`)
+
+	// Worker custom initialization flags
+	upCmd.Flags().StringArrayVar(&workerHookPreSystemInit, "worker-hook-pre-system-init", []string{},
+		`Hook scripts to run before system update on worker nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&workerHookPostSystemInit, "worker-hook-post-system-init", []string{},
+		`Hook scripts to run after system update, before K8s install on worker nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&workerHookPreK8sInit, "worker-hook-pre-k8s-init", []string{},
+		`Hook scripts to run before K8s components install on worker nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&workerHookPostK8sInit, "worker-hook-post-k8s-init", []string{},
+		`Hook scripts to run after all initialization on worker nodes (format: /path/to/script.sh). Multiple files supported with comma separation`)
+	upCmd.Flags().StringArrayVar(&workerUploadFiles, "worker-upload-file", []string{},
+		`Files to upload to worker nodes (format: local_path:remote_path[:mode[:owner]]). Example: /tmp/config.yml:/etc/config.yml:0644:root:root`)
+	upCmd.Flags().StringArrayVar(&workerUploadDirs, "worker-upload-dir", []string{},
+		`Directories to upload to worker nodes (format: local_dir:remote_dir[:mode[:owner]]). Recursively copies entire directory`)
 }

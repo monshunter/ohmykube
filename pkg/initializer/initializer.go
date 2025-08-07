@@ -2,7 +2,11 @@ package initializer
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,6 +42,7 @@ type Initializer struct {
 	arch           string
 	useDnf         bool
 	packageManager interfaces.PackageCacheManager
+	customInit     config.CustomInitConfig // Custom initialization configuration
 }
 
 // NewInitializer creates a new node initializer
@@ -72,6 +77,16 @@ func NewInitializerWithOptions(sshRunner interfaces.SSHRunner, node *config.Node
 		return nil, err
 	}
 	initializer.options = options
+	return initializer, nil
+}
+
+// NewInitializerWithCustomInit creates a new node initializer with custom initialization configuration
+func NewInitializerWithCustomInit(sshRunner interfaces.SSHRunner, node *config.Node, options InitOptions, customInit config.CustomInitConfig) (*Initializer, error) {
+	initializer, err := NewInitializerWithOptions(sshRunner, node, options)
+	if err != nil {
+		return nil, err
+	}
+	initializer.customInit = customInit
 	return initializer, nil
 }
 
@@ -1509,6 +1524,11 @@ func (i *Initializer) installRequiredSystemPackagesOnRedhat() error {
 
 // Initialize executes all initialization steps
 func (i *Initializer) Initialize() error {
+	// Phase 1: Execute pre-system-init hooks
+	if err := i.executeHooks(config.HookPreSystemInit, i.customInit.Hooks.PreSystemInit); err != nil {
+		return fmt.Errorf("%s hooks failed: %w", config.HookPreSystemInit, err)
+	}
+
 	if err := i.DoSystemUpdate(); err != nil {
 		return err
 	}
@@ -1526,6 +1546,16 @@ func (i *Initializer) Initialize() error {
 	// Setup DNS resolution to prevent CoreDNS loop detection issues
 	if err := i.SetupDNSResolution(); err != nil {
 		return err
+	}
+
+	// Phase 2: Execute post-system-init hooks and apply system configuration
+	if err := i.executeHooks(config.HookPostSystemInit, i.customInit.Hooks.PostSystemInit); err != nil {
+		return fmt.Errorf("%s hooks failed: %w", config.HookPostSystemInit, err)
+	}
+
+	// Upload custom files to nodes
+	if err := i.uploadFiles(); err != nil {
+		return fmt.Errorf("failed to upload custom files: %w", err)
 	}
 
 	// Based on options, disable swap if specified
@@ -1565,6 +1595,11 @@ func (i *Initializer) Initialize() error {
 		}
 	}
 
+	// Phase 3: Execute pre-k8s-init hooks
+	if err := i.executeHooks(config.HookPreK8sInit, i.customInit.Hooks.PreK8sInit); err != nil {
+		return fmt.Errorf("%s hooks failed: %w", config.HookPreK8sInit, err)
+	}
+
 	// Install Kubernetes components
 	if err := i.InstallK8sComponents(); err != nil {
 		return err
@@ -1575,5 +1610,153 @@ func (i *Initializer) Initialize() error {
 		return err
 	}
 
+	// Phase 4: Execute post-k8s-init hooks
+	if err := i.executeHooks(config.HookPostK8sInit, i.customInit.Hooks.PostK8sInit); err != nil {
+		return fmt.Errorf("%s hooks failed: %w", config.HookPostK8sInit, err)
+	}
+
 	return nil
+}
+
+// executeHooks executes hook scripts for a specific phase
+func (i *Initializer) executeHooks(phase config.HookPhase, scripts []string) error {
+	if len(scripts) == 0 {
+		return nil
+	}
+
+	log.Debugf("Executing %d hook script(s) for phase '%s' on node %s", len(scripts), phase, i.nodeName)
+
+	for idx, script := range scripts {
+		if script == "" {
+			continue
+		}
+
+		log.Debugf("Executing hook script %d/%d for phase '%s' on node %s", idx+1, len(scripts), phase, i.nodeName)
+
+		// Execute the script on the remote node
+		_, err := i.sshRunner.RunCommand(i.nodeName, script)
+		if err != nil {
+			return fmt.Errorf("failed to execute hook script %d for phase '%s' on node %s: %w", idx+1, phase, i.nodeName, err)
+		}
+
+		log.Debugf("Successfully executed hook script %d/%d for phase '%s' on node %s", idx+1, len(scripts), phase, i.nodeName)
+	}
+
+	log.Debugf("Successfully executed all hook scripts for phase '%s' on node %s", phase, i.nodeName)
+	return nil
+}
+
+// uploadFiles uploads custom files to the node
+func (i *Initializer) uploadFiles() error {
+	if len(i.customInit.Files) == 0 {
+		return nil
+	}
+
+	log.Debugf("Uploading %d custom file(s) to node %s", len(i.customInit.Files), i.nodeName)
+
+	for idx, file := range i.customInit.Files {
+		log.Debugf("Uploading file %d/%d: %s -> %s on node %s", idx+1, len(i.customInit.Files), file.LocalPath, file.RemotePath, i.nodeName)
+
+		if err := i.uploadFile(file); err != nil {
+			return fmt.Errorf("failed to upload file %s to %s on node %s: %w", file.LocalPath, file.RemotePath, i.nodeName, err)
+		}
+
+		log.Debugf("Successfully uploaded file %d/%d to node %s", idx+1, len(i.customInit.Files), i.nodeName)
+	}
+
+	log.Debugf("Successfully uploaded all custom files to node %s", i.nodeName)
+	return nil
+}
+
+// uploadFile uploads a single file or directory to the node
+func (i *Initializer) uploadFile(file config.FileUpload) error {
+	// Create the parent directory on remote node
+	remoteDir := filepath.Dir(file.RemotePath)
+	createDirCmd := fmt.Sprintf("sudo mkdir -p %s", remoteDir)
+	if _, err := i.sshRunner.RunCommand(i.nodeName, createDirCmd); err != nil {
+		return fmt.Errorf("failed to create remote directory %s: %w", remoteDir, err)
+	}
+
+	// Check if it's a directory or file
+	stat, err := os.Stat(file.LocalPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat local path %s: %w", file.LocalPath, err)
+	}
+
+	if stat.IsDir() {
+		return i.uploadDirectory(file)
+	}
+	return i.uploadSingleFile(file)
+}
+
+// uploadSingleFile uploads a single file to the node
+func (i *Initializer) uploadSingleFile(file config.FileUpload) error {
+	// Read local file content
+	content, err := ioutil.ReadFile(file.LocalPath)
+	if err != nil {
+		return fmt.Errorf("failed to read local file %s: %w", file.LocalPath, err)
+	}
+
+	// Create a temporary script to write the file content
+	// We use base64 encoding to handle binary files and special characters
+	encodedContent := base64.StdEncoding.EncodeToString(content)
+	
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+# Decode and write file content
+echo "%s" | base64 -d | sudo tee "%s" > /dev/null
+# Set file permissions
+sudo chmod %s "%s"
+# Set file ownership
+sudo chown %s "%s"
+echo "File uploaded successfully: %s"
+`, encodedContent, file.RemotePath, file.Mode, file.RemotePath, file.Owner, file.RemotePath, file.RemotePath)
+
+	_, err = i.sshRunner.RunCommand(i.nodeName, script)
+	if err != nil {
+		return fmt.Errorf("failed to upload file to remote path %s: %w", file.RemotePath, err)
+	}
+
+	return nil
+}
+
+// uploadDirectory recursively uploads a directory to the node
+func (i *Initializer) uploadDirectory(file config.FileUpload) error {
+	return filepath.Walk(file.LocalPath, func(localPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate relative path from the source directory
+		relPath, err := filepath.Rel(file.LocalPath, localPath)
+		if err != nil {
+			return fmt.Errorf("failed to calculate relative path: %w", err)
+		}
+
+		// Calculate remote path
+		remotePath := filepath.Join(file.RemotePath, relPath)
+		
+		if info.IsDir() {
+			// Create directory on remote
+			createDirCmd := fmt.Sprintf("sudo mkdir -p %s && sudo chmod %s %s && sudo chown %s %s",
+				remotePath, file.Mode, remotePath, file.Owner, remotePath)
+			_, err := i.sshRunner.RunCommand(i.nodeName, createDirCmd)
+			if err != nil {
+				return fmt.Errorf("failed to create remote directory %s: %w", remotePath, err)
+			}
+		} else {
+			// Upload file
+			singleFile := config.FileUpload{
+				LocalPath:  localPath,
+				RemotePath: remotePath,
+				Mode:       file.Mode,
+				Owner:      file.Owner,
+			}
+			if err := i.uploadSingleFile(singleFile); err != nil {
+				return fmt.Errorf("failed to upload file %s: %w", localPath, err)
+			}
+		}
+
+		return nil
+	})
 }
