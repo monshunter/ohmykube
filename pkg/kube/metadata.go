@@ -14,7 +14,7 @@ func (k *Manager) ApplyNodeMetadata(nodeName string, metadata config.NodeMetadat
 		return nil
 	}
 
-	log.Debugf("Applying metadata to node %s: %d labels, %d annotations, %d taints", 
+	log.Debugf("Applying metadata to node %s: %d labels, %d annotations, %d taints",
 		nodeName, len(metadata.Labels), len(metadata.Annotations), len(metadata.Taints))
 
 	// Apply labels
@@ -41,15 +41,15 @@ func (k *Manager) ApplyNodeMetadata(nodeName string, metadata config.NodeMetadat
 	for _, taint := range metadata.Taints {
 		var taintCmd string
 		if taint.Value != "" {
-			taintCmd = fmt.Sprintf("kubectl taint node %s %s=%s:%s --overwrite", 
+			taintCmd = fmt.Sprintf("kubectl taint node %s %s=%s:%s --overwrite",
 				nodeName, taint.Key, taint.Value, taint.Effect)
 		} else {
-			taintCmd = fmt.Sprintf("kubectl taint node %s %s:%s --overwrite", 
+			taintCmd = fmt.Sprintf("kubectl taint node %s %s:%s --overwrite",
 				nodeName, taint.Key, taint.Effect)
 		}
 		_, err := k.sshRunner.RunCommand(k.MasterNode, taintCmd)
 		if err != nil {
-			return fmt.Errorf("failed to apply taint %s=%s:%s to node %s: %w", 
+			return fmt.Errorf("failed to apply taint %s=%s:%s to node %s: %w",
 				taint.Key, taint.Value, taint.Effect, nodeName, err)
 		}
 		if taint.Value != "" {
@@ -64,7 +64,7 @@ func (k *Manager) ApplyNodeMetadata(nodeName string, metadata config.NodeMetadat
 }
 
 // ConvertNodeTaintToMetadata converts config.NodeTaint slice to config.Taint slice
-func ConvertNodeTaintToMetadata(nodeTaints []config.NodeTaint) []config.Taint {
+func ConvertNodeTaintToMetadata(nodeTaints []config.Taint) []config.Taint {
 	var taints []config.Taint
 	for _, nt := range nodeTaints {
 		taints = append(taints, config.Taint{

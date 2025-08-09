@@ -359,8 +359,8 @@ func parseLabelsAnnotations(items []string) (map[string]string, error) {
 }
 
 // parseTaints parses key=value:effect format strings into NodeTaint slice
-func parseTaints(items []string) ([]config.NodeTaint, error) {
-	var taints []config.NodeTaint
+func parseTaints(items []string) ([]config.Taint, error) {
+	var taints []config.Taint
 	for _, item := range items {
 		// Format: key=value:effect or key:effect (value is optional)
 		parts := strings.Split(item, ":")
@@ -387,7 +387,7 @@ func parseTaints(items []string) ([]config.NodeTaint, error) {
 			value = ""
 		}
 
-		taints = append(taints, config.NodeTaint{
+		taints = append(taints, config.Taint{
 			Key:    key,
 			Value:  value,
 			Effect: effect,

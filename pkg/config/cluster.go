@@ -841,7 +841,7 @@ func ConvertGroupMetadataToNodeMetadata(groupMetadata NodeGroupMetadata) NodeMet
 
 	// Convert Taint to NodeTaint
 	for _, t := range groupMetadata.Taints {
-		nodeMetadata.Taints = append(nodeMetadata.Taints, NodeTaint{
+		nodeMetadata.Taints = append(nodeMetadata.Taints, Taint{
 			Key:    t.Key,
 			Value:  t.Value,
 			Effect: t.Effect,

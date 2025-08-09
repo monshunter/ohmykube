@@ -24,14 +24,7 @@ type Resource struct {
 type NodeMetadata struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
-	Taints      []NodeTaint       `json:"taints,omitempty"`
-}
-
-// NodeTaint represents a Kubernetes node taint (used for CLI parsing)
-type NodeTaint struct {
-	Key    string `json:"key"`
-	Value  string `json:"value,omitempty"`
-	Effect string `json:"effect"`
+	Taints      []Taint           `json:"taints,omitempty"`
 }
 
 // CustomInitConfig defines custom initialization configuration for nodes
@@ -172,12 +165,12 @@ func (c *Config) AddWorkerAnnotation(key, value string) {
 }
 
 // AddMasterTaint adds a taint to master nodes
-func (c *Config) AddMasterTaint(taint NodeTaint) {
+func (c *Config) AddMasterTaint(taint Taint) {
 	c.MasterMetadata.Taints = append(c.MasterMetadata.Taints, taint)
 }
 
 // AddWorkerTaint adds a taint to worker nodes
-func (c *Config) AddWorkerTaint(taint NodeTaint) {
+func (c *Config) AddWorkerTaint(taint Taint) {
 	c.WorkerMetadata.Taints = append(c.WorkerMetadata.Taints, taint)
 }
 
