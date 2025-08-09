@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -44,7 +43,7 @@ var addCmd = &cobra.Command{
 		defer shutdownHandler.Close()
 
 		// Load cluster information
-		cls, err := config.Load(clusterName)
+		cls, err := config.LoadCluster(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
@@ -69,7 +68,7 @@ var addCmd = &cobra.Command{
 		cfg.SetCNIType(cls.GetCNI())
 		cfg.SetCSIType(cls.GetCSI())
 		cfg.SetLBType(cls.GetLoadBalancer())
-		cfg.SetUpdateSystem(updateSystem)
+		cfg.SetUpdateSystem(cls.GetUpdateSystem())
 
 		// Parse and set node metadata for new nodes
 		nodeMetadata, err := parseNodeMetadata(addNodeLabels, addNodeAnnotations, addNodeTaints)
@@ -90,7 +89,7 @@ var addCmd = &cobra.Command{
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
 		initOptions.ProxyMode = initializer.ProxyMode(cls.GetProxyMode())
 		initOptions.K8SVersion = cls.GetKubernetesVersion()
-		initOptions.UpdateSystem = updateSystem
+		initOptions.UpdateSystem = cls.GetUpdateSystem()
 
 		// Create cluster manager
 		manager, err := controller.NewManager(cfg, sshConfig, cls, nil)
@@ -203,7 +202,7 @@ func parseHookScripts(target *[]string, scriptPaths []string) error {
 			}
 
 			// Read script content
-			content, err := ioutil.ReadFile(path)
+			content, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Errorf("failed to read script file '%s': %w", path, err)
 			}

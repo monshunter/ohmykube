@@ -427,12 +427,12 @@ type ResourceRequests struct {
 
 // NodeGroupSpec defines a group of nodes with the same configuration
 type NodeGroupSpec struct {
-	Replica      int               `yaml:"replica,omitempty"`
-	GroupID      int               `yaml:"groupid,omitempty"`
-	Template     string            `yaml:"template,omitempty"`
-	Resources    ResourceRequests  `yaml:"resources,omitempty"`
-	Metadata     NodeGroupMetadata `yaml:"metadata,omitempty"`
-	CustomInit   CustomInitConfig  `yaml:"customInit,omitempty"`
+	Replica    int               `yaml:"replica,omitempty"`
+	GroupID    int               `yaml:"groupid,omitempty"`
+	Template   string            `yaml:"template,omitempty"`
+	Resources  ResourceRequests  `yaml:"resources,omitempty"`
+	Metadata   NodeGroupMetadata `yaml:"metadata,omitempty"`
+	CustomInit CustomInitConfig  `yaml:"customInit,omitempty"`
 }
 
 // NodeGroupMetadata defines metadata for a node group (used for applying to all nodes in the group)
@@ -451,6 +451,7 @@ type NodesConfig struct {
 type ClusterSpec struct {
 	KubernetesVersion string           `yaml:"kubernetesVersion,omitempty"`
 	Provider          string           `yaml:"provider,omitempty"`
+	UpdateSystem      bool             `yaml:"updateSystem,omitempty"`
 	Networking        NetworkingConfig `yaml:"networking,omitempty"`
 	Storage           StorageConfig    `yaml:"storage,omitempty"`
 	Nodes             NodesConfig      `yaml:"nodes,omitempty"`
@@ -508,7 +509,7 @@ func convertNodeMetadataToGroupMetadata(metadata NodeMetadata) NodeGroupMetadata
 		Labels:      metadata.Labels,
 		Annotations: metadata.Annotations,
 	}
-	
+
 	// Convert NodeTaint to Taint
 	for _, nt := range metadata.Taints {
 		groupMetadata.Taints = append(groupMetadata.Taints, Taint{
@@ -517,7 +518,7 @@ func convertNodeMetadataToGroupMetadata(metadata NodeMetadata) NodeGroupMetadata
 			Effect: nt.Effect,
 		})
 	}
-	
+
 	return groupMetadata
 }
 
@@ -537,6 +538,7 @@ func NewCluster(config *Config) *Cluster {
 		Spec: ClusterSpec{
 			KubernetesVersion: config.KubernetesVersion,
 			Provider:          config.Provider,
+			UpdateSystem:      config.UpdateSystem,
 			Networking: NetworkingConfig{
 				ProxyMode:     config.ProxyMode,
 				CNI:           config.CNI,
@@ -882,6 +884,13 @@ func (c *Cluster) GetLoadBalancer() string {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 	return c.Spec.Networking.LoadBalancer
+}
+
+// GetUpdateSystem returns the update system setting
+func (c *Cluster) GetUpdateSystem() bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	return c.Spec.UpdateSystem
 }
 
 // GetPodSubnet returns the pod subnet from networking config
@@ -1431,8 +1440,49 @@ func (c *Cluster) MarkDeleted() {
 	c.Metadata.Deleted = true
 }
 
-// Load loads cluster information from a file
-func Load(name string) (*Cluster, error) {
+// LoadClusterFromFile loads cluster configuration from a YAML file
+func LoadClusterFromFile(filePath string) (*Cluster, error) {
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("configuration file does not exist: %s", filePath)
+	}
+
+	// Read file content
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read configuration file: %w", err)
+	}
+
+	// Parse YAML
+	var cluster Cluster
+	if err := yaml.Unmarshal(data, &cluster); err != nil {
+		return nil, fmt.Errorf("failed to parse configuration file: %w", err)
+	}
+
+	// Validate cluster configuration
+	if cluster.Kind != KindCluster {
+		return nil, fmt.Errorf("invalid configuration: expected kind '%s', got '%s'", KindCluster, cluster.Kind)
+	}
+
+	if cluster.Name == "" {
+		return nil, fmt.Errorf("invalid configuration: cluster name cannot be empty")
+	}
+
+	// Set default values if not specified
+	if cluster.Metadata.Annotations == nil {
+		cluster.Metadata.Annotations = map[string]string{}
+	}
+	if cluster.Metadata.Labels == nil {
+		cluster.Metadata.Labels = map[string]string{}
+	}
+
+	cluster.Metadata.Labels["ohmykube.dev/cluster"] = cluster.Name
+	cluster.Metadata.Annotations["ohmykube.dev/created-at"] = time.Now().Format(time.RFC3339)
+	return &cluster, nil
+}
+
+// LoadCluster loads cluster information from clusterName
+func LoadCluster(name string) (*Cluster, error) {
 	clusterDir, err := ClusterDir(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cluster directory: %w", err)

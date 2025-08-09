@@ -30,6 +30,7 @@ var (
 	cni               string
 	csi               string
 	lb                string
+	configFile        string
 	// Node metadata options
 	masterLabels      []string
 	workerLabels      []string
@@ -46,7 +47,7 @@ var (
 	masterUploadFiles        []string
 	masterUploadDirs         []string
 
-	// Custom initialization options for worker nodes  
+	// Custom initialization options for worker nodes
 	workerHookPreSystemInit  []string
 	workerHookPostSystemInit []string
 	workerHookPreK8sInit     []string
@@ -66,18 +67,6 @@ var upCmd = &cobra.Command{
 		// Set up graceful shutdown handling
 		shutdownHandler := NewGracefulShutdownHandler()
 		defer shutdownHandler.Close()
-
-		// log.Infof("master:labels=%d,anno=%d,taints=%d\n",
-		// 	len(masterLabels), len(masterAnnotations), len(masterTaints))
-		// log.Infof("master:labels=%v,anno=%v,taints=%v\n",
-		// 	masterLabels, masterAnnotations, masterTaints)
-
-		// log.Infof("worker:labels=%d,anno=%d,taints=%d\n",
-		// 	len(workerLabels), len(workerAnnotations), len(workerTaints))
-		// log.Infof("worker:labels=%v,anno=%v,taints=%v\n",
-		// 	workerLabels, workerAnnotations, workerTaints)
-		// return nil
-
 		// Normalize and validate k8sVersion first
 		normalizedVersion, err := utils.NormalizeK8sVersion(k8sVersion)
 		if err != nil {
@@ -94,8 +83,22 @@ var upCmd = &cobra.Command{
 		}
 
 		var cls *config.Cluster
+
+		// Load cluster from config file if specified
+		if configFile != "" {
+			log.Infof("📄 Loading cluster configuration from file: %s", configFile)
+			loadedCluster, err := config.LoadClusterFromFile(configFile)
+			if err != nil {
+				return fmt.Errorf("failed to load cluster from config file: %w", err)
+			}
+			cls = loadedCluster
+			// Set cluster name from loaded configuration
+			clusterName = cls.Name
+			log.Infof("🏷️  Using cluster name from config file: %s", clusterName)
+		}
+
 		if config.CheckExists(clusterName) {
-			cls, err = config.Load(clusterName)
+			cls, err = config.LoadCluster(clusterName)
 			if err != nil {
 				log.Errorf("Failed to load cluster information: %v", err)
 				return fmt.Errorf("failed to load cluster information: %w", err)
@@ -187,7 +190,7 @@ var upCmd = &cobra.Command{
 			cfg.SetCNIType(cls.GetCNI())
 			cfg.SetCSIType(cls.GetCSI())
 			cfg.SetLBType(cls.GetLoadBalancer())
-			cfg.SetUpdateSystem(updateSystem)
+			cfg.SetUpdateSystem(cls.GetUpdateSystem())
 
 			log.Infof("🔄 Resuming cluster creation from previous state")
 		} else {
@@ -250,7 +253,11 @@ var upCmd = &cobra.Command{
 		initOptions.DisableSwap = !enableSwap // If enableSwap is true, DisableSwap is false
 		initOptions.ProxyMode = initializer.ProxyMode(proxyMode)
 		initOptions.K8SVersion = k8sVersion
-		initOptions.UpdateSystem = updateSystem
+		if cls != nil {
+			initOptions.UpdateSystem = cls.GetUpdateSystem()
+		} else {
+			initOptions.UpdateSystem = updateSystem
+		}
 
 		// Create cluster manager and pass options
 		manager, err := controller.NewManager(cfg, sshConfig, cls, nil)
@@ -277,6 +284,14 @@ var upCmd = &cobra.Command{
 			 You can either re-execute "ohmykube up" after the problem is fixed or directly.
 			 The process will resume from where it failed.`)
 			return err
+		}
+
+		// Set current cluster context after successful creation
+		if err := config.SetCurrentCluster(clusterName); err != nil {
+			log.Warningf("Failed to set current cluster context: %v", err)
+			// Don't return error as cluster creation was successful
+		} else {
+			log.Infof("✅ Set current cluster context to: %s", clusterName)
 		}
 
 		return nil
@@ -417,6 +432,7 @@ func parseNodeMetadata(labels, annotations, taints []string) (config.NodeMetadat
 
 func init() {
 	// Add command line parameters
+	upCmd.Flags().StringVarP(&configFile, "file", "f", "", "Path to cluster configuration file")
 	upCmd.Flags().IntVarP(&workersCount, "workers", "w", 2, "Number of worker nodes")
 	upCmd.Flags().IntVar(&masterMemory, "master-memory", 4, "Master node memory (GB)")
 	upCmd.Flags().IntVar(&masterCPU, "master-cpu", 2, "Master node CPU cores")

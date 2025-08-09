@@ -11,6 +11,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	downConfigFile string
+)
+
 var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Delete a k8s cluster",
@@ -20,13 +24,25 @@ var downCmd = &cobra.Command{
 		shutdownHandler := NewGracefulShutdownHandler()
 		defer shutdownHandler.Close()
 
+		// Load cluster from config file if specified
+		if downConfigFile != "" {
+			log.Infof("📄 Loading cluster configuration from file: %s", downConfigFile)
+			loadedCluster, err := configpkg.LoadClusterFromFile(downConfigFile)
+			if err != nil {
+				return fmt.Errorf("failed to load cluster from config file: %w", err)
+			}
+			// Set cluster name from loaded configuration
+			clusterName = loadedCluster.Name
+			log.Infof("🏷️  Using cluster name from config file: %s", clusterName)
+		}
+
 		sshConfig, err := ssh.NewSSHConfig(password, clusterName)
 		if err != nil {
 			return err
 		}
 
 		if provider == "" && configpkg.CheckExists(clusterName) {
-			clusterInfo, err := configpkg.Load(clusterName)
+			clusterInfo, err := configpkg.LoadCluster(clusterName)
 			if err != nil {
 				return fmt.Errorf("failed to load cluster information: %w", err)
 			}
@@ -75,5 +91,5 @@ var downCmd = &cobra.Command{
 }
 
 func init() {
-	// No specific flags at the moment
+	downCmd.Flags().StringVarP(&downConfigFile, "file", "f", "", "Path to cluster configuration file")
 }

@@ -19,7 +19,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Running the Application
 - `ohmykube up` - Create default cluster (1 master + 2 workers)
+  - `ohmykube up -f config.yaml` - Create cluster from configuration file
 - `ohmykube down` - Delete cluster
+  - `ohmykube down -f config.yaml` - Delete cluster specified in configuration file
+- `ohmykube config` - Generate cluster configuration template (outputs to `$clusterName.yaml`)
+  - `ohmykube config -o custom.yaml` - Specify custom output file
 - `ohmykube list` - List all nodes
 - `ohmykube status` - Check status of clusters
 - `ohmykube switch` - Set default context to specified cluster
@@ -34,17 +38,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Cluster Customization Options
 - `--workers N` - Number of worker nodes (default: 2)
-- `--k8s-version` - Kubernetes version to install
+- `--k8s-version` - Kubernetes version to install (default: v1.33.0)
 - `--cni cilium|flannel` - CNI plugin selection (default: flannel)
 - `--csi local-path|rook-ceph` - CSI plugin selection (default: local-path)
 - `--lb metallb` - Enable LoadBalancer with MetalLB (auto-sets proxy-mode to ipvs)
 - `--master-cpu/memory/disk` - Master node resource allocation
 - `--worker-cpu/memory/disk` - Worker node resource allocation
 - `--template` - Lima template (default: ubuntu-24.04)
+- `--update-system` - Update system packages before installation (global flag)
+- `--proxy-mode iptables|ipvs` - Kubernetes proxy mode (default: iptables, auto-set to ipvs with MetalLB)
+
+### Advanced Node Customization
+- `--master-labels key=value` - Labels for master nodes (repeatable)
+- `--worker-labels key=value` - Labels for worker nodes (repeatable)
+- `--master-annotations key=value` - Annotations for master nodes (repeatable)
+- `--worker-annotations key=value` - Annotations for worker nodes (repeatable)
+- `--master-taints key=value:effect` - Taints for master nodes (repeatable)
+- `--worker-taints key=value:effect` - Taints for worker nodes (repeatable)
+
+### Custom Initialization Hooks
+- `--master-hook-pre-system-init` - Scripts to run before system update on master
+- `--master-hook-post-system-init` - Scripts to run after system update on master
+- `--master-hook-pre-k8s-init` - Scripts to run before K8s install on master
+- `--master-hook-post-k8s-init` - Scripts to run after K8s install on master
+- `--master-upload-file local:remote[:mode[:owner]]` - Upload files to master nodes
+- `--master-upload-dir local:remote[:mode[:owner]]` - Upload directories to master nodes
+- Worker equivalents: `--worker-hook-*` and `--worker-upload-*`
 
 ### Environment Setup
 - Kubeconfig: `export KUBECONFIG=~/.kube/ohmykube-config`
 - Cluster state stored in: `~/.ohmykube/<cluster-name>/cluster.yaml`
+- Current cluster context: `~/.ohmykube/current-cluster`
+- SSH keys: `~/.ohmykube/<cluster-name>/ssh/`
 
 ## Architecture Overview
 
@@ -139,11 +164,36 @@ OhMyKube is a Kubernetes cluster management tool built on Lima VMs and kubeadm. 
 - Cluster specs use YAML serialization
 - State persisted to ~/.ohmykube/<cluster-name>/cluster.yaml
 - Default values handled in config package
+- Configuration consistency: stored cluster settings (UpdateSystem, networking) take precedence over CLI flags in `add` operations
 - Default configurations for system components in `pkg/config/default/`:
   - Kubeadm cluster/init configurations with network settings
   - Containerd runtime configurations (versions 1.7.24, 2.1.0)
   - IPVS proxy mode settings
   - MetalLB LoadBalancer configurations
+- Template generation: `pkg/config/template.go` provides comprehensive YAML templates with comments
+
+### Critical Implementation Patterns
+
+#### Configuration Consistency
+- **Problem**: CLI flags vs stored cluster configuration conflicts
+- **Solution**: Stored cluster configuration takes precedence in operations like `add`
+- **Key locations**: `up.go:193`, `add.go:71-92` use `cls.GetUpdateSystem()` instead of flag values
+- **Context management**: `up` command calls `config.SetCurrentCluster()` after successful creation
+
+#### Thread-Safe Cluster Operations
+- All cluster state modifications use `sync.RWMutex` for concurrent access
+- Node group operations are atomic and coordinated through cluster state
+- See `pkg/config/cluster.go` for mutex patterns
+
+#### Provider Abstraction Patterns
+- Interface-based design allows swapping VM backends
+- Current implementation: Lima only, but designed for cloud providers
+- Factory pattern in `pkg/provider/factory.go` for extensibility
+
+#### Error Handling and Resilience
+- Graceful shutdown handlers in all long-running operations
+- Resume capability: `up` command can continue from partial cluster state
+- Comprehensive validation before destructive operations
 
 ### Command Structure and Flow
 
@@ -152,10 +202,19 @@ OhMyKube is a Kubernetes cluster management tool built on Lima VMs and kubeadm. 
 - `cmd/ohmykube/app/root.go` - Cobra root command with global flags and subcommand registration
 - `cmd/ohmykube/app/*.go` - Individual subcommand implementations
 - Global state management for current cluster context via `config.GetCurrentCluster()`
+- Configuration file support via `-f --file` flags in `up`, `down` commands
+- Auto-context switching: `up` command sets current cluster context after successful creation
 
 #### Key Command Implementations
 - `up.go` - Cluster creation with graceful shutdown handling and validation
+  - Supports configuration file loading via `-f` flag
+  - Auto-sets current cluster context after successful creation
+  - Handles resume from partial cluster state
 - `down.go` - Cluster deletion with proper cleanup
+  - Supports configuration file loading via `-f` flag
+  - Auto-switches to next available cluster after deletion
 - `add.go` - Dynamic node addition to existing clusters
+  - Uses stored cluster configuration for consistency (UpdateSystem, networking, etc.)
 - `load.go` - Container image loading with runtime detection
 - `status.go` / `switch.go` - Multi-cluster management commands
+- `config.go` - Configuration template generation with dynamic file naming

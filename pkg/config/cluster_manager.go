@@ -126,7 +126,7 @@ type ClusterInfo struct {
 
 // GetClusterInfo returns detailed information about a cluster
 func GetClusterInfo(clusterName string) (*ClusterInfo, error) {
-	cluster, err := Load(clusterName)
+	cluster, err := LoadCluster(clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -183,12 +183,12 @@ func AutoSwitchAfterDeletion(deletedClusterName string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get ohmykube directory: %w", err)
 		}
-		
+
 		currentClusterFile := filepath.Join(ohmykubeDir, "current-cluster")
 		if err := os.Remove(currentClusterFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove current cluster file: %w", err)
 		}
-		
+
 		fmt.Printf("No clusters remaining. Current cluster setting cleared.\n")
 		return nil
 	}

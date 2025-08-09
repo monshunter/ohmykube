@@ -31,7 +31,7 @@ var listCmd = &cobra.Command{
 		var cls *config.Cluster
 		var err error
 		if config.CheckExists(clusterName) {
-			cls, err = config.Load(clusterName)
+			cls, err = config.LoadCluster(clusterName)
 			if err != nil {
 				log.Errorf("Failed to load cluster information: %v", err)
 				return fmt.Errorf("failed to load cluster information: %w", err)

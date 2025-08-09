@@ -59,7 +59,7 @@ Examples:
 		}
 
 		// Load cluster configuration
-		cluster, err := config.Load(clusterName)
+		cluster, err := config.LoadCluster(clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to load cluster configuration: %w", err)
 		}

@@ -23,7 +23,7 @@ var shellCmd = &cobra.Command{
 
 		nodeName := args[0]
 		// Load cluster information
-		cls, err := config.Load(clusterName)
+		cls, err := config.LoadCluster(clusterName)
 		if err != nil {
 			log.Errorf("Failed to load cluster information: %v", err)
 			return fmt.Errorf("failed to load cluster information: %w", err)
