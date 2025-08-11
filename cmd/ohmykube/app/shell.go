@@ -15,7 +15,7 @@ var shellCmd = &cobra.Command{
 	Aliases: []string{"sh"},
 	Short:   "Open an interactive shell to a virtual machine",
 	Long:    `Open an interactive shell to a virtual machine. If no name is provided, connects to the master node.`,
-	Args:    cobra.MinimumNArgs(1),
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Set up graceful shutdown handling
 		shutdownHandler := NewGracefulShutdownHandler()

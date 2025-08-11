@@ -115,9 +115,9 @@ func (m *MetalLBInstaller) cacheImages() error {
 
 	// Define MetalLB manifest source
 	source := cache.ImageSource{
-		Type:        "manifest",
-		ManifestURL: m.manifestURL,
-		Version:     m.Version,
+		Type:         "manifest",
+		ManifestFiles: []string{m.manifestURL},
+		Version:      m.Version,
 	}
 
 	// Cache images for all nodes in the cluster

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,12 @@ const (
 	ConditionTypeCSIInstalled      ConditionType = "CSIInstalled"
 	ConditionTypeLBInstalled       ConditionType = "LoadBalancerInstalled"
 	ConditionTypeClusterReady      ConditionType = "ClusterReady"
+
+	// Addon-related conditions
+	ConditionTypeAddonsInstalled ConditionType = "AddonsInstalled"
+	ConditionTypeAddonReady      ConditionType = "AddonReady"
+	ConditionTypeAddonInstalled  ConditionType = "AddonInstalled"
+	ConditionTypeAddonFailed     ConditionType = "AddonFailed"
 )
 
 type ConditionStatus string
@@ -455,6 +462,7 @@ type ClusterSpec struct {
 	Networking        NetworkingConfig `yaml:"networking,omitempty"`
 	Storage           StorageConfig    `yaml:"storage,omitempty"`
 	Nodes             NodesConfig      `yaml:"nodes,omitempty"`
+	Addons            []AddonSpec      `yaml:"addons,omitempty"` // Optional addon configurations
 }
 
 // NodeGroupMember represents a single node within a node group
@@ -485,6 +493,7 @@ type ClusterStatus struct {
 	Images     Images            `yaml:"images,omitempty"` // Cluster images (names correspond to global cache)
 	Nodes      []NodeGroupStatus `yaml:"nodes,omitempty"`  // New node group status
 	Conditions []Condition       `yaml:"conditions,omitempty"`
+	Addons     []AddonStatus     `yaml:"addons,omitempty"` // Addon status tracking
 }
 
 // Image represents a simple image reference
@@ -1543,3 +1552,248 @@ func GetRandomString(length int) string {
 }
 
 var letters = []byte("abcdefghijklmnopqrstuvwxyz1234567890")
+
+// Addon status management methods
+
+// SetAddonStatus sets the complete status for an addon
+func (c *Cluster) SetAddonStatus(addonName string, status AddonStatus) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Find and update existing status or append new one
+	for i, addonStatus := range c.Status.Addons {
+		if addonStatus.Name == addonName {
+			c.Status.Addons[i] = status
+			return
+		}
+	}
+
+	// Addon not found, append new one
+	c.Status.Addons = append(c.Status.Addons, status)
+}
+
+// GetAddonStatus gets the status for a specific addon
+func (c *Cluster) GetAddonStatus(addonName string) (*AddonStatus, bool) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	for _, addonStatus := range c.Status.Addons {
+		if addonStatus.Name == addonName {
+			return &addonStatus, true
+		}
+	}
+	return nil, false
+}
+
+// SetAddonPhase sets the phase for a specific addon with message and reason
+func (c *Cluster) SetAddonPhase(addonName string, phase AddonPhase, message, reason string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	now := time.Now()
+
+	// Find existing status
+	for i, addonStatus := range c.Status.Addons {
+		if addonStatus.Name == addonName {
+			c.Status.Addons[i].Phase = phase
+			c.Status.Addons[i].Message = message
+			c.Status.Addons[i].Reason = reason
+			c.Status.Addons[i].LastUpdateTime = &now
+			return
+		}
+	}
+
+	// Create new status if not found
+	newStatus := AddonStatus{
+		Name:           addonName,
+		Phase:          phase,
+		Message:        message,
+		Reason:         reason,
+		LastUpdateTime: &now,
+	}
+	c.Status.Addons = append(c.Status.Addons, newStatus)
+}
+
+// ListAddonStatuses returns all addon statuses
+func (c *Cluster) ListAddonStatuses() []AddonStatus {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	// Create a copy to avoid data races
+	statuses := make([]AddonStatus, len(c.Status.Addons))
+	copy(statuses, c.Status.Addons)
+	return statuses
+}
+
+// AreAllAddonsReady checks if all enabled addons are installed successfully
+func (c *Cluster) AreAllAddonsReady() bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	// Get enabled addons from spec
+	enabledAddons := make(map[string]bool)
+	for _, addonSpec := range c.Spec.Addons {
+		if addonSpec.IsEnabled() {
+			enabledAddons[addonSpec.Name] = true
+		}
+	}
+
+	// Check if all enabled addons are installed
+	for addonName := range enabledAddons {
+		found := false
+		for _, addonStatus := range c.Status.Addons {
+			if addonStatus.Name == addonName && addonStatus.Phase == AddonPhaseInstalled {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return len(enabledAddons) > 0 // Only return true if there are addons to check
+}
+
+// GetEnabledAddonSpecs returns all enabled addon specs from cluster configuration
+func (c *Cluster) GetEnabledAddonSpecs() []AddonSpec {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	var enabledAddons []AddonSpec
+	for _, addonSpec := range c.Spec.Addons {
+		if addonSpec.IsEnabled() {
+			enabledAddons = append(enabledAddons, addonSpec)
+		}
+	}
+	return enabledAddons
+}
+
+// AddCommandLineAddons merges command line addon specifications with existing cluster spec
+// This method only handles spec-level merging and deduplication based on addon names.
+// No validation is performed - use ValidateAllAddons() separately.
+func (c *Cluster) AddCommandLineAddons(addons []AddonSpec) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Create a map of existing addons for quick lookup
+	existingAddons := make(map[string]int) // name -> index in slice
+	for i, addon := range c.Spec.Addons {
+		existingAddons[addon.Name] = i
+	}
+
+	// Process each command line addon (no validation, pure merge)
+	for _, newAddon := range addons {
+		existingIndex, exists := existingAddons[newAddon.Name]
+
+		if !exists {
+			// New addon - add to spec
+			c.Spec.Addons = append(c.Spec.Addons, newAddon)
+			existingAddons[newAddon.Name] = len(c.Spec.Addons) - 1
+		} else {
+			// Addon already exists - replace with new spec (simple overwrite)
+			c.Spec.Addons[existingIndex] = newAddon
+		}
+	}
+}
+
+// GetAddonTasks analyzes current spec vs status to generate addon tasks for the manager
+func (c *Cluster) GetAddonTasks() []AddonTask {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	var tasks []AddonTask
+
+	// Process all addon specs to determine required operations
+	for _, spec := range c.Spec.Addons {
+		currentStatus, statusExists := c.GetAddonStatus(spec.Name)
+
+		task := AddonTask{
+			Name:     spec.Name,
+			Spec:     spec,
+			Priority: spec.Priority,
+		}
+
+		if statusExists {
+			task.CurrentStatus = currentStatus
+		}
+
+		// Determine operation based on spec and current status
+		task.Operation, task.Reason = c.DetermineAddonOperation(spec, currentStatus, statusExists)
+
+		// Only include tasks that require action or for tracking purposes
+		if task.Operation != AddonOperationNoChange || statusExists {
+			tasks = append(tasks, task)
+		}
+	}
+
+	// Sort tasks by priority (lower number = higher priority)
+	for i := 0; i < len(tasks)-1; i++ {
+		for j := i + 1; j < len(tasks); j++ {
+			if tasks[i].Priority > tasks[j].Priority {
+				tasks[i], tasks[j] = tasks[j], tasks[i]
+			}
+		}
+	}
+
+	return tasks
+}
+
+// ValidateAllAddons validates all addon specifications in the cluster
+// Returns an error that should terminate the program if any addon is invalid
+func (c *Cluster) ValidateAllAddons() error {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	for i, addon := range c.Spec.Addons {
+		// Use full validation for comprehensive checking
+		if err := addon.Validate(); err != nil {
+			return fmt.Errorf("addon %d (%s) validation failed: %w", i+1, addon.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// DetermineAddonOperation determines what operation should be performed on an addon
+func (c *Cluster) DetermineAddonOperation(spec AddonSpec, currentStatus *AddonStatus, statusExists bool) (AddonOperation, string) {
+	// If addon is disabled in spec
+	if !spec.IsEnabled() {
+		if !statusExists {
+			return AddonOperationNoChange, "addon is disabled and not installed"
+		}
+		if currentStatus.Phase == AddonPhaseReady || currentStatus.Phase == AddonPhaseInstalled {
+			return AddonOperationRemove, "addon disabled in spec"
+		}
+		return AddonOperationNoChange, "addon is disabled"
+	}
+
+	// If addon is enabled but not currently installed
+	if !statusExists || currentStatus.Phase == AddonPhaseRemoved || currentStatus.Phase == AddonPhaseFailed {
+		return AddonOperationInstall, "addon not currently installed"
+	}
+
+	// If addon is currently being processed
+	if currentStatus.Phase == AddonPhaseInstalling || currentStatus.Phase == AddonPhaseUpgrading || currentStatus.Phase == AddonPhaseRemoving {
+		return AddonOperationNoChange, fmt.Sprintf("addon is currently %s", strings.ToLower(string(currentStatus.Phase)))
+	}
+
+	// If addon is installed, check if update is needed
+	if currentStatus.Phase == AddonPhaseReady || currentStatus.Phase == AddonPhaseInstalled {
+		// Check version difference
+		if currentStatus.InstalledVersion != spec.Version {
+			return AddonOperationUpdate, fmt.Sprintf("version change from %s to %s", currentStatus.InstalledVersion, spec.Version)
+		}
+
+		// Check if desired version matches installed version
+		if currentStatus.DesiredVersion != spec.Version {
+			return AddonOperationUpdate, "spec version differs from installed version"
+		}
+
+		// TODO: Add more sophisticated config drift detection here
+		return AddonOperationNoChange, "addon is installed and up-to-date"
+	}
+
+	// Default to install for unknown states
+	return AddonOperationInstall, fmt.Sprintf("unknown current state: %s", currentStatus.Phase)
+}

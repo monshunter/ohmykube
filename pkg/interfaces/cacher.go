@@ -31,12 +31,20 @@ type ImageDiscovery interface {
 	GetRequiredImages(ctx context.Context, source ImageSource, sshRunner SSHRunner, controllerNode string) ([]string, error)
 }
 
+// ValuesFileManager provides methods to prepare values files for remote execution
+type ValuesFileManager interface {
+	// PrepareValuesFiles handles values files by uploading local files or downloading remote files
+	// Returns remote paths that can be used in helm/kubectl commands
+	PrepareValuesFiles(ctx context.Context, valuesFiles []string, sshRunner SSHRunner, controllerNode string, prefix string) ([]string, error)
+}
+
 // ImageSource defines where and how to discover required images
 type ImageSource struct {
-	Type        string            // "helm", "manifest", "kubeadm", "custom"
-	ChartName   string            // For helm charts
-	ChartRepo   string            // For helm charts
-	ChartValues map[string]string // For helm charts
-	ManifestURL string            // For kubernetes manifests
-	Version     string            // Version information
+	Type         string            // "helm", "manifest", "kubeadm", "custom"
+	ChartName    string            // For helm charts
+	ChartRepo    string            // For helm charts
+	ChartValues  map[string]string // For helm charts
+	ValuesFile   []string          // For helm charts
+	ManifestFiles []string          // For kubernetes manifests (supports URLs, local files, remote paths)
+	Version      string            // Version information
 }

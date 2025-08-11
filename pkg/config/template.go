@@ -154,5 +154,76 @@ spec:
         #       remotePath: /etc/worker-config.yml
         #       mode: "0644"
         #       owner: "root:root"
+
+  # Optional: Addon configurations (examples of common applications)
+  # addons:
+  #   # Prometheus monitoring stack (Helm) - Complete configuration example
+  #   - name: "prometheus"
+  #     type: "helm"
+  #     version: "15.18.0"
+  #     enabled: true
+  #     repo: "https://prometheus-community.github.io/helm-charts"
+  #     chart: "prometheus-community/kube-prometheus-stack"
+  #     namespace: "monitoring"
+  #     priority: 100
+  #     timeout: "600s"
+  #     values:
+  #       "grafana.adminPassword": "admin123"
+  #       "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage": "10Gi"
+  #       "grafana.persistence.enabled": "true"
+  #       "grafana.persistence.size": "1Gi"
+  #     labels:
+  #       category: "monitoring"
+  #       team: "platform"
+  #     dependencies: ["metrics-server"]
+  #     preInstall:
+  #       - "kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -"
+  #     postInstall:
+  #       - "kubectl -n monitoring wait --for=condition=available deployment/prometheus-kube-prometheus-prometheus-operator --timeout=300s"
+  #
+  #   # Metrics Server (Helm) - Basic configuration
+  #   - name: "metrics-server"
+  #     type: "helm"
+  #     version: "3.8.2"
+  #     enabled: true
+  #     repo: "https://kubernetes-sigs.github.io/metrics-server/"
+  #     chart: "metrics-server/metrics-server"
+  #     namespace: "kube-system"
+  #     priority: 50
+  #     values:
+  #       "args[0]": "--kubelet-insecure-tls"
+  #     # Example: using values files (supports multiple files)
+  #     # valuesFiles:
+  #     #   - "/path/to/values1.yaml"
+  #     #   - "https://example.com/values2.yaml"
+  #       "args[1]": "--kubelet-preferred-address-types=InternalIP"
+  #
+  #   # Ingress Nginx (Manifest) - Basic configuration
+  #   - name: "ingress-nginx"
+  #     type: "manifest"
+  #     version: "v1.5.1"
+  #     enabled: false
+  #     files:
+  #       - "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.5.1/deploy/static/provider/cloud/deploy.yaml"
+  #     namespace: "ingress-nginx"
+  #     priority: 200
+  #     timeout: "300s"
+  #
+  #   # Multi-file manifest example
+  #   - name: "custom-app"
+  #     type: "manifest"
+  #     version: "v1.0.0"
+  #     enabled: false
+  #     files:
+  #       - "/path/to/deployment.yaml"
+  #       - "/path/to/service.yaml"
+  #       - "/path/to/configmap.yaml"
+  #     namespace: "default"
+  #     priority: 300
+  #     dependencies: ["prometheus"]
+  #     preInstall:
+  #       - "kubectl create configmap app-config --from-literal=env=production --dry-run=client -o yaml | kubectl apply -f -"
+  #     postInstall:
+  #       - "kubectl rollout status deployment/custom-app --timeout=300s"
 `, clusterName, provider, updateSystem, template, template)
 }

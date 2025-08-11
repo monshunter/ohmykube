@@ -36,7 +36,7 @@ var addCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add one or more nodes",
 	Long:  `Add one or more worker nodes to an existing Kubernetes cluster`,
-	Args:  cobra.MinimumNArgs(0),
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Set up graceful shutdown handling
 		shutdownHandler := NewGracefulShutdownHandler()

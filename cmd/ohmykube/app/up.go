@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -54,6 +55,9 @@ var (
 	workerHookPostK8sInit    []string
 	workerUploadFiles        []string
 	workerUploadDirs         []string
+
+	// Addon configuration
+	addonsFlag []string // --addon (repeatable)
 )
 
 var upCmd = &cobra.Command{
@@ -63,6 +67,7 @@ var upCmd = &cobra.Command{
 - Optional CNI: flannel(default) or cilium
 - Optional CSI: local-path-provisioner(default) or rook-ceph
 - MetalLB as LoadBalancer implementation`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Set up graceful shutdown handling
 		shutdownHandler := NewGracefulShutdownHandler()
@@ -80,6 +85,13 @@ var upCmd = &cobra.Command{
 		if lb == "metallb" && proxyMode != "ipvs" {
 			log.Infof("MetalLB requires IPVS mode, automatically setting proxy-mode to 'ipvs'")
 			proxyMode = "ipvs"
+		}
+
+		// Process command line addons and add them to the cluster spec
+		addonSpecs, err := processAddonFlags()
+		if err != nil {
+			log.Errorf("❌ Invalid addon configuration: %v", err)
+			return fmt.Errorf("invalid addon configuration: %w", err)
 		}
 
 		var cls *config.Cluster
@@ -255,10 +267,27 @@ var upCmd = &cobra.Command{
 		initOptions.K8SVersion = k8sVersion
 		if cls != nil {
 			initOptions.UpdateSystem = cls.GetUpdateSystem()
+			// Add command line addons to cluster spec
+			if len(addonSpecs) > 0 {
+				cls.AddCommandLineAddons(addonSpecs)
+				log.Infof("🔌 Merged %d command line addon(s) into cluster spec", len(addonSpecs))
+			}
+
+			// Validate all addon specifications - terminate on errors
+			if err := cls.ValidateAllAddons(); err != nil {
+				return fmt.Errorf("addon validation failed: %w", err)
+			}
 		} else {
 			initOptions.UpdateSystem = updateSystem
+			// For new clusters, validate addon specifications if provided
+			if len(addonSpecs) > 0 {
+				// Create temporary cluster to validate addons
+				tempCluster := &config.Cluster{Spec: config.ClusterSpec{Addons: addonSpecs}}
+				if err := tempCluster.ValidateAllAddons(); err != nil {
+					return fmt.Errorf("addon validation failed: %w", err)
+				}
+			}
 		}
-
 		// Create cluster manager and pass options
 		manager, err := controller.NewManager(cfg, sshConfig, cls, nil)
 		if err != nil {
@@ -430,6 +459,27 @@ func parseNodeMetadata(labels, annotations, taints []string) (config.NodeMetadat
 	return metadata, nil
 }
 
+// processAddonFlags processes the --addon command line flags
+func processAddonFlags() ([]config.AddonSpec, error) {
+	var specs []config.AddonSpec
+
+	for _, addonJSON := range addonsFlag {
+		var addon config.AddonSpec
+		if err := json.Unmarshal([]byte(addonJSON), &addon); err != nil {
+			return nil, fmt.Errorf("invalid addon JSON: %s, error: %w", addonJSON, err)
+		}
+
+		// Validate addon spec (using minimal validation for command line)
+		if err := addon.ValidateMinimal(); err != nil {
+			return nil, fmt.Errorf("invalid addon spec: %w", err)
+		}
+
+		specs = append(specs, addon)
+	}
+
+	return specs, nil
+}
+
 func init() {
 	// Add command line parameters
 	upCmd.Flags().StringVarP(&configFile, "file", "f", "", "Path to cluster configuration file")
@@ -491,4 +541,8 @@ func init() {
 		`Files to upload to worker nodes (format: local_path:remote_path[:mode[:owner]]). Example: /tmp/config.yml:/etc/config.yml:0644:root:root`)
 	upCmd.Flags().StringArrayVar(&workerUploadDirs, "worker-upload-dir", []string{},
 		`Directories to upload to worker nodes (format: local_dir:remote_dir[:mode[:owner]]). Recursively copies entire directory`)
+
+	// Addon parameter
+	upCmd.Flags().StringSliceVar(&addonsFlag, "addon", nil,
+		`Add addon from JSON spec (repeatable). Format: '{"name":"app-name","type":"helm|manifest","repo":"...","chart":"...","version":"..."}' for helm or '{"name":"app-name","type":"manifest","url":"...","version":"..."}' for manifest`)
 }

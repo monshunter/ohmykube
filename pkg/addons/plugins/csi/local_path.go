@@ -71,9 +71,9 @@ func (l *LocalPathInstaller) cacheImages() error {
 
 	// Define local-path-provisioner manifest source
 	source := cache.ImageSource{
-		Type:        "manifest",
-		ManifestURL: l.manifestURL,
-		Version:     l.Version,
+		Type:         "manifest",
+		ManifestFiles: []string{l.manifestURL},
+		Version:      l.Version,
 	}
 
 	// Cache images for all nodes in the cluster

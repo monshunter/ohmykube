@@ -19,6 +19,7 @@ var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Delete a k8s cluster",
 	Long:  `Delete the created Kubernetes cluster and all related virtual machine resources`,
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Set up graceful shutdown handling
 		shutdownHandler := NewGracefulShutdownHandler()

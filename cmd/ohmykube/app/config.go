@@ -19,12 +19,13 @@ var configCmd = &cobra.Command{
 	Short: "Generate default cluster configuration file",
 	Long: `Generate a default cluster configuration file that can be used with 'ohmykube up -f'.
 The generated file contains all cluster settings in YAML format with detailed comments.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Set default template if empty
 		if template == "" {
 			template = "ubuntu-24.04"
 		}
-		
+
 		// Generate configuration file content with comments
 		content := config.GenerateConfigTemplate(clusterName, provider, template, updateSystem)
 
@@ -51,8 +52,7 @@ The generated file contains all cluster settings in YAML format with detailed co
 	},
 }
 
-
 func init() {
-	// Add output flag  
+	// Add output flag
 	configCmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output file path (default: $clusterName.yaml)")
 }
