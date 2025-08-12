@@ -274,6 +274,112 @@ func (c *Client) sftpUpload(localPath, remotePath string) error {
 	return nil
 }
 
+// UploadDirectory uploads a local directory to the remote server using SFTP protocol
+func (c *Client) UploadDirectory(localDirPath, remoteDirPath string) error {
+	log.Debugf("Starting SFTP directory upload: %s -> %s", localDirPath, remoteDirPath)
+	maxRetries := 3
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			log.Debugf("Retrying SFTP directory upload (attempt %d/%d)", i+1, maxRetries)
+		}
+
+		// Ensure connection
+		if err := c.Connect(); err != nil {
+			lastErr = err
+			if i < maxRetries-1 {
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			return lastErr
+		}
+
+		// Use SFTP protocol for directory transfer
+		if err := c.sftpUploadDirectory(localDirPath, remoteDirPath); err != nil {
+			lastErr = fmt.Errorf("failed to upload directory via SFTP: %w", err)
+			if i < maxRetries-1 {
+				log.Debugf("SFTP directory upload failed, retrying: %v", err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			return lastErr
+		}
+
+		log.Debugf("SFTP directory upload completed successfully")
+		return nil
+	}
+
+	return lastErr
+}
+
+// sftpUploadDirectory implements SFTP protocol for uploading directories recursively
+func (c *Client) sftpUploadDirectory(localDirPath, remoteDirPath string) error {
+	// Create SFTP client
+	sftpClient, err := sftp.NewClient(c.client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	// Ensure remote directory exists
+	if err := sftpClient.MkdirAll(remoteDirPath); err != nil {
+		return fmt.Errorf("failed to create remote directory: %w", err)
+	}
+
+	// Walk through local directory
+	return filepath.Walk(localDirPath, func(localFilePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate relative path from the base directory
+		relPath, err := filepath.Rel(localDirPath, localFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %w", err)
+		}
+
+		// Convert to remote path
+		remoteFilePath := filepath.Join(remoteDirPath, relPath)
+		
+		// Handle directories
+		if info.IsDir() {
+			if err := sftpClient.MkdirAll(remoteFilePath); err != nil {
+				return fmt.Errorf("failed to create remote directory %s: %w", remoteFilePath, err)
+			}
+			return nil
+		}
+
+		// Handle files
+		localFile, err := os.Open(localFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to open local file %s: %w", localFilePath, err)
+		}
+		defer localFile.Close()
+
+		// Create remote file
+		remoteFile, err := sftpClient.Create(remoteFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to create remote file %s: %w", remoteFilePath, err)
+		}
+		defer remoteFile.Close()
+
+		// Copy file content
+		log.Debugf("Uploading file: %s -> %s", localFilePath, remoteFilePath)
+		_, err = io.Copy(remoteFile, localFile)
+		if err != nil {
+			return fmt.Errorf("failed to copy file %s: %w", localFilePath, err)
+		}
+
+		// Set file permissions (best effort)
+		if err := sftpClient.Chmod(remoteFilePath, info.Mode()); err != nil {
+			log.Warningf("Failed to set remote file permissions for %s: %v", remoteFilePath, err)
+		}
+
+		return nil
+	})
+}
+
 // DownloadFile downloads a file from the remote server using SFTP protocol
 func (c *Client) DownloadFile(remotePath, localPath string) error {
 	log.Debugf("Starting SFTP download: %s -> %s", remotePath, localPath)

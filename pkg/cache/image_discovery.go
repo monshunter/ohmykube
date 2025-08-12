@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/monshunter/ohmykube/pkg/interfaces"
@@ -157,12 +158,41 @@ func (d *DefaultImageDiscovery) getManifestImages(ctx context.Context, source Im
 				return nil, fmt.Errorf("failed to download manifest from %s on controller node: %w", manifestFile, err)
 			}
 		} else {
-			// Assume it's a local file path - read it directly from local machine
-			content, err := os.ReadFile(manifestFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read local manifest file %s: %w", manifestFile, err)
+			// Check if it's a local file or directory
+			if info, err := os.Stat(manifestFile); err == nil {
+				if info.IsDir() {
+					// Handle directory - read all .yaml and .yml files recursively
+					var allContent strings.Builder
+					err := filepath.Walk(manifestFile, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						// Only process .yaml and .yml files
+						if !info.IsDir() && (strings.HasSuffix(strings.ToLower(path), ".yaml") || strings.HasSuffix(strings.ToLower(path), ".yml")) {
+							content, err := os.ReadFile(path)
+							if err != nil {
+								return fmt.Errorf("failed to read manifest file %s: %w", path, err)
+							}
+							allContent.WriteString(string(content))
+							allContent.WriteString("\n---\n") // Add YAML document separator
+						}
+						return nil
+					})
+					if err != nil {
+						return nil, fmt.Errorf("failed to read manifest directory %s: %w", manifestFile, err)
+					}
+					output = allContent.String()
+				} else {
+					// Handle single file
+					content, err := os.ReadFile(manifestFile)
+					if err != nil {
+						return nil, fmt.Errorf("failed to read local manifest file %s: %w", manifestFile, err)
+					}
+					output = string(content)
+				}
+			} else {
+				return nil, fmt.Errorf("failed to access manifest path %s: %w", manifestFile, err)
 			}
-			output = string(content)
 		}
 		
 		// Extract images from this manifest
@@ -238,18 +268,31 @@ func (m *DefaultValuesFileManager) prepareValuesFile(ctx context.Context, values
 		return remotePath, nil
 	}
 
-	// Check if it's a local file
-	if _, err := os.Stat(valuesFile); err == nil {
-		// Upload the local file to controller node
-		remotePath := fmt.Sprintf("/tmp/%s-values-%d.yaml", prefix, index)
+	// Check if it's a local file or directory
+	if info, err := os.Stat(valuesFile); err == nil {
+		if info.IsDir() {
+			// Handle directory upload
+			remotePath := fmt.Sprintf("/tmp/%s-values-%d", prefix, index)
 
-		log.Debugf("Uploading local values file from %s to %s on controller node", valuesFile, remotePath)
-		err := sshRunner.UploadFile(controllerNode, valuesFile, remotePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to upload values file %s: %w", valuesFile, err)
+			log.Debugf("Uploading local values directory from %s to %s on controller node", valuesFile, remotePath)
+			err := sshRunner.UploadDirectory(controllerNode, valuesFile, remotePath)
+			if err != nil {
+				return "", fmt.Errorf("failed to upload values directory %s: %w", valuesFile, err)
+			}
+
+			return remotePath, nil
+		} else {
+			// Handle single file upload
+			remotePath := fmt.Sprintf("/tmp/%s-values-%d.yaml", prefix, index)
+
+			log.Debugf("Uploading local values file from %s to %s on controller node", valuesFile, remotePath)
+			err := sshRunner.UploadFile(controllerNode, valuesFile, remotePath)
+			if err != nil {
+				return "", fmt.Errorf("failed to upload values file %s: %w", valuesFile, err)
+			}
+
+			return remotePath, nil
 		}
-
-		return remotePath, nil
 	}
 
 	// If it's neither a URL nor a local file, assume it's already a remote path

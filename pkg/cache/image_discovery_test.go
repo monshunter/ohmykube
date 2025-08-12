@@ -30,6 +30,10 @@ func (m *TestMockSSHRunner) UploadFile(nodeName, localPath, remotePath string) e
 	return nil
 }
 
+func (m *TestMockSSHRunner) UploadDirectory(nodeName, localDirPath, remoteDirPath string) error {
+	return nil
+}
+
 func (m *TestMockSSHRunner) DownloadFile(nodeName, remotePath, localPath string) error {
 	return nil
 }

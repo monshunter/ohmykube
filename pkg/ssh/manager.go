@@ -366,6 +366,16 @@ func (sm *SSHManager) UploadFile(nodeName, localPath, remotePath string) error {
 	return client.UploadFile(localPath, remotePath)
 }
 
+// UploadDirectory uploads a local directory to a remote node using proper SFTP protocol
+func (sm *SSHManager) UploadDirectory(nodeName, localDirPath, remoteDirPath string) error {
+	client, exists := sm.GetClient(nodeName)
+	if !exists {
+		return fmt.Errorf("SSH client for node %s does not exist", nodeName)
+	}
+
+	return client.UploadDirectory(localDirPath, remoteDirPath)
+}
+
 // DownloadFile downloads a file from a remote node to local path using proper SCP protocol
 func (sm *SSHManager) DownloadFile(nodeName, remotePath, localPath string) error {
 	client, exists := sm.GetClient(nodeName)

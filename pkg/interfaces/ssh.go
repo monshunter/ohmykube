@@ -19,6 +19,9 @@ type SSHFileTransfer interface {
 	// Upload files (local to remote)
 	UploadFile(nodeName string, localPath, remotePath string) error
 
+	// Upload directories (local to remote)
+	UploadDirectory(nodeName string, localDirPath, remoteDirPath string) error
+
 	// Download files (remote to local)
 	DownloadFile(nodeName string, remotePath, localPath string) error
 }
