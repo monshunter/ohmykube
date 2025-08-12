@@ -44,8 +44,63 @@ func (d *DefaultImageDiscovery) getHelmChartImages(ctx context.Context, source I
 		return nil, fmt.Errorf("failed to prepare values files: %w", err)
 	}
 
-	// Build the helm command script to run on controller node
-	script := `#!/bin/bash
+	var output string
+	
+	if source.IsLocalChart {
+		// For local charts, upload to controller node first, then template there
+		log.Debugf("Discovering local chart images on controller node: %s", source.ChartName)
+		
+		// Upload local chart to controller node
+		remoteChartPath, err := d.prepareLocalChart(ctx, source.ChartName, sshRunner, controllerNode)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare local chart: %w", err)
+		}
+		
+		// Build helm template command for remote execution on controller node
+		script := `#!/bin/bash
+set -e
+
+# Function to log with timestamp
+log_with_time() {
+    echo "[$(date '+%%Y-%%m-%%d %%H:%%M:%%S')] $1"
+}
+
+# Build values arguments
+VALUES_ARGS=""
+%s
+
+# Build values file arguments
+VALUES_FILE_ARGS=""
+%s
+
+# Template the local chart
+log_with_time "Templating local chart: %s with args: $VALUES_ARGS $VALUES_FILE_ARGS"
+helm template local-chart %s $VALUES_ARGS $VALUES_FILE_ARGS 2>&1
+`
+		
+		// Build values arguments
+		var valuesBuilder strings.Builder
+		for k, v := range source.ChartValues {
+			valuesBuilder.WriteString(fmt.Sprintf("VALUES_ARGS=\"$VALUES_ARGS --set %s=%s\"\n", k, v))
+		}
+
+		// Build values file arguments using remote paths
+		var valuesFileBuilder strings.Builder
+		for _, remoteValuesFile := range remoteValuesFiles {
+			valuesFileBuilder.WriteString(fmt.Sprintf("VALUES_FILE_ARGS=\"$VALUES_FILE_ARGS --values %s\"\n", remoteValuesFile))
+		}
+		
+		// Format the script for local charts
+		formattedScript := fmt.Sprintf(script, valuesBuilder.String(), valuesFileBuilder.String(), remoteChartPath, remoteChartPath)
+		
+		// Execute on controller node
+		output, err = sshRunner.RunCommand(controllerNode, formattedScript)
+		if err != nil {
+			return nil, fmt.Errorf("failed to template local helm chart on controller node: %w", err)
+		}
+	} else {
+		// For remote charts, add repo operations and execute on controller node
+		script := `#!/bin/bash
 set -e
 
 # Function to log with timestamp
@@ -79,32 +134,31 @@ VALUES_FILE_ARGS=""
 log_with_time "Templating chart: $CHART_NAME with args: $VALUES_ARGS $VALUES_FILE_ARGS"
 helm template %s %s $VALUES_ARGS $VALUES_FILE_ARGS 2>&1
 `
+		
+		// Build values arguments
+		var valuesBuilder strings.Builder
+		for k, v := range source.ChartValues {
+			valuesBuilder.WriteString(fmt.Sprintf("VALUES_ARGS=\"$VALUES_ARGS --set %s=%s\"\n", k, v))
+		}
 
-	// Build values arguments
-	var valuesBuilder strings.Builder
-	for k, v := range source.ChartValues {
-		valuesBuilder.WriteString(fmt.Sprintf("VALUES_ARGS=\"$VALUES_ARGS --set %s=%s\"\n", k, v))
-	}
+		// Build values file arguments using remote paths
+		var valuesFileBuilder strings.Builder
+		for _, remoteValuesFile := range remoteValuesFiles {
+			valuesFileBuilder.WriteString(fmt.Sprintf("VALUES_FILE_ARGS=\"$VALUES_FILE_ARGS --values %s\"\n", remoteValuesFile))
+		}
 
-	// Build values file arguments using remote paths
-	var valuesFileBuilder strings.Builder
-	for _, remoteValuesFile := range remoteValuesFiles {
-		valuesFileBuilder.WriteString(fmt.Sprintf("VALUES_FILE_ARGS=\"$VALUES_FILE_ARGS --values %s\"\n", remoteValuesFile))
-	}
-
-	// Build version argument
-	versionArg := ""
-	if source.Version != "" {
-		versionArg = fmt.Sprintf("--version %s", source.Version)
-	}
-
-	// Format the script
-	formattedScript := fmt.Sprintf(script, source.ChartRepo, source.ChartName, valuesBuilder.String(), valuesFileBuilder.String(), source.ChartName, versionArg)
-
-	// Execute on controller node
-	output, err := sshRunner.RunCommand(controllerNode, formattedScript)
-	if err != nil {
-		return nil, fmt.Errorf("failed to template helm chart on controller node: %w", err)
+		// Format the script for remote charts
+		versionArg := ""
+		if source.Version != "" {
+			versionArg = fmt.Sprintf("--version %s", source.Version)
+		}
+		formattedScript := fmt.Sprintf(script, source.ChartRepo, source.ChartName, valuesBuilder.String(), valuesFileBuilder.String(), source.ChartName, versionArg)
+		
+		// Execute on controller node
+		output, err = sshRunner.RunCommand(controllerNode, formattedScript)
+		if err != nil {
+			return nil, fmt.Errorf("failed to template helm chart on controller node: %w", err)
+		}
 	}
 
 	// Extract images from the templated output
@@ -115,6 +169,36 @@ helm template %s %s $VALUES_ARGS $VALUES_FILE_ARGS 2>&1
 func (d *DefaultImageDiscovery) prepareValuesFiles(ctx context.Context, valuesFiles []string, sshRunner SSHRunner, controllerNode string) ([]string, error) {
 	valuesFileManager := NewDefaultValuesFileManager()
 	return valuesFileManager.PrepareValuesFiles(ctx, valuesFiles, sshRunner, controllerNode, "helm-discovery")
+}
+
+// prepareLocalChart uploads a local chart to the controller node and returns the remote path
+func (d *DefaultImageDiscovery) prepareLocalChart(ctx context.Context, localChartPath string, sshRunner SSHRunner, controllerNode string) (string, error) {
+	// Generate remote chart path
+	remoteChartPath := "/tmp/helm-discovery-chart"
+	
+	// Check if it's a directory or file
+	if info, err := os.Stat(localChartPath); err == nil {
+		if info.IsDir() {
+			// Upload directory
+			log.Debugf("Uploading local chart directory from %s to %s on controller node", localChartPath, remoteChartPath)
+			err := sshRunner.UploadDirectory(controllerNode, localChartPath, remoteChartPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to upload chart directory %s: %w", localChartPath, err)
+			}
+			return remoteChartPath, nil
+		} else {
+			// Upload single file (chart package)
+			remoteChartFile := "/tmp/helm-discovery-chart.tgz"
+			log.Debugf("Uploading local chart package from %s to %s on controller node", localChartPath, remoteChartFile)
+			err := sshRunner.UploadFile(controllerNode, localChartPath, remoteChartFile)
+			if err != nil {
+				return "", fmt.Errorf("failed to upload chart package %s: %w", localChartPath, err)
+			}
+			return remoteChartFile, nil
+		}
+	} else {
+		return "", fmt.Errorf("local chart path does not exist: %s", localChartPath)
+	}
 }
 
 

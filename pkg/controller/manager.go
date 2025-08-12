@@ -307,11 +307,51 @@ func (m *Manager) CreateCluster() error {
 		log.Debugf("Skipping master initialization as it was already completed")
 	}
 
-	// 4. Download kubeconfig after master is ready - this allows debugging even if later steps fail
+	// 4. Execute worker join, CNI, CSI, and LB installation in parallel
+	stepIndex++
+	err := m.executeParallelSteps(progress, stepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to execute parallel steps: %w", err)
+	}
+
+	// Calculate the step index after parallel steps
+	// worker-join(4) + cni-install(5) + csi-install(6) + optional lb-install(7)
+	stepIndex += 3 // worker-join, cni-install, csi-install
+	if m.Config.LB == "metallb" && m.InitOptions.EnableIPVS() {
+		stepIndex++ // lb-install
+	}
+
+	// Mark cluster as ready
+	m.Cluster.SetCondition(config.ConditionTypeClusterReady, config.ConditionStatusTrue,
+		"ClusterReady", "Kubernetes cluster is ready for use")
+	m.Cluster.Status.Phase = config.ClusterPhaseRunning
+	m.Cluster.Save()
+
+	// 5. Install addons after cluster is fully ready (if there are any)
+	if len(addonSpecs) > 0 && !m.Cluster.HasCondition(config.ConditionTypeAddonsInstalled, config.ConditionStatusTrue) {
+		stepIndex++
+		progress.StartStep(stepIndex)
+		log.Debugf("Installing universal addons...")
+		err = m.InstallAddons()
+		if err != nil {
+			progress.FailStep(stepIndex, err)
+			m.Cluster.SetCondition(config.ConditionTypeAddonsInstalled, config.ConditionStatusFalse,
+				"AddonsInstallFailed", fmt.Sprintf("Failed to install addons: %v", err))
+			m.Cluster.Save()
+			return fmt.Errorf("failed to install addons: %w", err)
+		}
+		progress.CompleteStep(stepIndex)
+		m.Cluster.SetCondition(config.ConditionTypeAddonsInstalled, config.ConditionStatusTrue,
+			"AddonsInstalled", "All addons installed successfully")
+		m.Cluster.Save()
+	} else if len(addonSpecs) > 0 {
+		log.Debugf("Skipping addon installation as it was already completed")
+	}
+
+	// 6. Download kubeconfig after all components are ready
 	stepIndex++
 	progress.StartStep(stepIndex)
 	log.Debugf("Downloading kubeconfig to local...")
-	var err error
 	kubeconfigPath, err = m.SetupKubeconfig()
 	if err != nil {
 		// Don't fail the entire cluster creation if kubeconfig download fails
@@ -322,42 +362,6 @@ func (m *Manager) CreateCluster() error {
 	} else {
 		progress.CompleteStep(stepIndex)
 		log.Debugf("Kubeconfig downloaded successfully to: %s", kubeconfigPath)
-	}
-
-	// 5. Execute worker join, CNI, CSI, and LB installation in parallel
-	stepIndex++
-	err = m.executeParallelSteps(progress, stepIndex)
-	if err != nil {
-		return fmt.Errorf("failed to execute parallel steps: %w", err)
-	}
-
-	// Mark cluster as ready
-	m.Cluster.SetCondition(config.ConditionTypeClusterReady, config.ConditionStatusTrue,
-		"ClusterReady", "Kubernetes cluster is ready for use")
-	m.Cluster.Status.Phase = config.ClusterPhaseRunning
-	m.Cluster.Save()
-
-	// 6. Install addons after cluster is fully ready (if there are any)
-	if len(addonSpecs) > 0 && !m.Cluster.HasCondition(config.ConditionTypeAddonsInstalled, config.ConditionStatusTrue) {
-		// Calculate addon step index: vm-creation(0), auth-init(1), environment-init(2), master-init(3), parallel-steps(4-7), addon-install(this step)
-		addonStepIndex := stepIndex + 1
-		progress.StartStep(addonStepIndex)
-		log.Debugf("Installing universal addons...")
-		err = m.InstallAddons()
-		if err != nil {
-			progress.FailStep(addonStepIndex, err)
-			m.Cluster.SetCondition(config.ConditionTypeAddonsInstalled, config.ConditionStatusFalse,
-				"AddonsInstallFailed", fmt.Sprintf("Failed to install addons: %v", err))
-			m.Cluster.Save()
-			return fmt.Errorf("failed to install addons: %w", err)
-		}
-		progress.CompleteStep(addonStepIndex)
-		m.Cluster.SetCondition(config.ConditionTypeAddonsInstalled, config.ConditionStatusTrue,
-			"AddonsInstalled", "All addons installed successfully")
-		m.Cluster.Save()
-		stepIndex++ // Increment stepIndex for subsequent steps
-	} else if len(addonSpecs) > 0 {
-		log.Debugf("Skipping addon installation as it was already completed")
 	}
 
 	// Complete the progress
@@ -1675,11 +1679,11 @@ func (m *Manager) InstallAddons() error {
 	}
 
 	if len(actionTasks) == 0 {
-		log.Infof("✅ All addons are up-to-date, no actions needed")
+		log.Infof("✅ All addons are up-to-date")
 		return nil
 	}
 
-	log.Infof("🔌 Processing %d addon tasks...", len(actionTasks))
+	log.Debugf("Processing %d addon tasks...", len(actionTasks))
 
 	// Get master node for operations
 	masterNode := m.Cluster.GetMasterName()
@@ -1698,13 +1702,13 @@ func (m *Manager) InstallAddons() error {
 	// Start all addon installations in parallel
 	for _, task := range actionTasks {
 		go func(t config.AddonTask) {
-			log.Infof("🔌 Processing addon: %s (%s) - %s", t.Name, t.Operation, t.Reason)
-			
 			installer := addons.NewUniversalInstaller(m.sshRunner, masterNode, t.Spec, m.Cluster)
 			err := installer.ExecuteOperation(t.Operation, t.Reason)
 			
 			if err == nil {
-				log.Infof("✅ Addon %s processed successfully", t.Name)
+				log.Infof("✅ Addon %s installed successfully", t.Name)
+			} else {
+				log.Errorf("❌ Addon %s failed: %v", t.Name, err)
 			}
 			
 			results <- addonResult{name: t.Name, err: err}

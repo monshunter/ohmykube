@@ -3,6 +3,7 @@ package addons
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -61,7 +62,7 @@ func (u *UniversalInstaller) ExecuteOperation(operation config.AddonOperation, r
 
 // performInstall performs a fresh installation
 func (u *UniversalInstaller) performInstall(reason string) error {
-	log.Infof("Installing addon: %s (type: %s, version: %s) - %s", u.spec.Name, u.spec.Type, u.spec.Version, reason)
+	log.Debugf("Installing addon: %s (type: %s, version: %s) - %s", u.spec.Name, u.spec.Type, u.spec.Version, reason)
 
 	// 1. Set initial status
 	u.setAddonPhase(config.AddonPhaseInstalling, "Starting installation", "Installing")
@@ -72,14 +73,14 @@ func (u *UniversalInstaller) performInstall(reason string) error {
 		return fmt.Errorf("pre-install hook failed: %w", err)
 	}
 
-	// 3. Cache images
+	// 3. Cache images (before file preparation to use original local paths)
 	u.setAddonPhase(config.AddonPhaseInstalling, "Caching images", "CachingImages")
 	if err := u.cacheImages(); err != nil {
 		log.Warningf("Failed to cache images for %s: %v", u.spec.Name, err)
 	}
 
-	// 4. Prepare files (upload local files or download remote files)
-	if (len(u.spec.ValuesFiles) > 0 && u.spec.Type == "helm") || (len(u.spec.Files) > 0 && u.spec.Type == "manifest") {
+	// 4. Prepare files (upload local files or download remote files) - after image caching
+	if (len(u.spec.ValuesFiles) > 0 && u.spec.Type == "helm") || (len(u.spec.Files) > 0 && u.spec.Type == "manifest") || u.isLocalChart() {
 		u.setAddonPhase(config.AddonPhaseInstalling, "Preparing files", "PreparingFiles")
 		if err := u.prepareFiles(); err != nil {
 			u.setAddonPhase(config.AddonPhaseFailed, fmt.Sprintf("Failed to prepare files: %v", err), "PrepareFilesFailed")
@@ -201,19 +202,22 @@ func (u *UniversalInstaller) performRemove(reason string) error {
 
 // installHelm installs a Helm chart
 func (u *UniversalInstaller) installHelm() error {
-	// 1. Add Helm repository
-	repoName := u.getRepoName()
-	addRepoCmd := fmt.Sprintf(`helm repo add %s %s || true && helm repo update`, repoName, u.spec.Repo)
+	// Handle remote charts (add repository)
+	if !u.isLocalChart() {
+		// 1. Add Helm repository
+		repoName := u.getRepoName()
+		addRepoCmd := fmt.Sprintf(`helm repo add %s %s || true && helm repo update`, repoName, u.spec.Repo)
 
-	_, err := u.sshRunner.RunCommand(u.controllerNode, addRepoCmd)
-	if err != nil {
-		return fmt.Errorf("failed to add helm repository: %w", err)
+		_, err := u.sshRunner.RunCommand(u.controllerNode, addRepoCmd)
+		if err != nil {
+			return fmt.Errorf("failed to add helm repository: %w", err)
+		}
 	}
 
 	// 2. Build helm install command
 	installCmd := u.buildHelmInstallCommand()
 
-	_, err = u.sshRunner.RunCommand(u.controllerNode, installCmd)
+	_, err := u.sshRunner.RunCommand(u.controllerNode, installCmd)
 	if err != nil {
 		return fmt.Errorf("failed to install helm chart: %w", err)
 	}
@@ -223,38 +227,73 @@ func (u *UniversalInstaller) installHelm() error {
 
 // buildHelmInstallCommand builds the helm install command
 func (u *UniversalInstaller) buildHelmInstallCommand() string {
-	repoName := u.getRepoName()
 	chartName := u.spec.Chart
 
-	// Use repo name prefix if chart doesn't already include it
-	if !strings.Contains(chartName, "/") {
-		chartName = fmt.Sprintf("%s/%s", repoName, chartName)
-	}
+	// Handle local vs remote charts
+	if u.isLocalChart() {
+		// For local charts, use the chart path directly (already uploaded to remote)
+		cmd := fmt.Sprintf("helm install %s %s", u.spec.Name, chartName)
+		
+		// Only add version for remote charts
+		// For local charts, version is controlled by Chart.yaml in the chart directory
+		
+		// Add namespace
+		if u.spec.Namespace != "" {
+			cmd += fmt.Sprintf(" --namespace %s --create-namespace", u.spec.Namespace)
+		}
+		
+		// Add values files
+		for _, valuesFile := range u.spec.ValuesFiles {
+			cmd += fmt.Sprintf(" --values %s", valuesFile)
+		}
 
-	cmd := fmt.Sprintf("helm install %s %s --version %s", u.spec.Name, chartName, u.spec.Version)
+		// Add values
+		for key, value := range u.spec.Values {
+			cmd += fmt.Sprintf(" --set %s=%s", key, value)
+		}
 
-	// Add namespace
-	if u.spec.Namespace != "" {
-		cmd += fmt.Sprintf(" --namespace %s --create-namespace", u.spec.Namespace)
-	}
-	// Add values files
-	for _, valuesFile := range u.spec.ValuesFiles {
-		cmd += fmt.Sprintf(" --values %s", valuesFile)
-	}
+		// Add timeout
+		timeout := u.spec.Timeout
+		if timeout == "" {
+			timeout = "300s"
+		}
+		cmd += fmt.Sprintf(" --wait --timeout %s", timeout)
+		
+		return cmd
+	} else {
+		// Handle remote charts
+		repoName := u.getRepoName()
 
-	// Add values
-	for key, value := range u.spec.Values {
-		cmd += fmt.Sprintf(" --set %s=%s", key, value)
-	}
+		// Use repo name prefix if chart doesn't already include it
+		if !strings.Contains(chartName, "/") {
+			chartName = fmt.Sprintf("%s/%s", repoName, chartName)
+		}
 
-	// Add timeout
-	timeout := u.spec.Timeout
-	if timeout == "" {
-		timeout = "300s"
-	}
-	cmd += fmt.Sprintf(" --wait --timeout %s", timeout)
+		cmd := fmt.Sprintf("helm install %s %s --version %s", u.spec.Name, chartName, u.spec.Version)
+		
+		// Add namespace
+		if u.spec.Namespace != "" {
+			cmd += fmt.Sprintf(" --namespace %s --create-namespace", u.spec.Namespace)
+		}
+		// Add values files
+		for _, valuesFile := range u.spec.ValuesFiles {
+			cmd += fmt.Sprintf(" --values %s", valuesFile)
+		}
 
-	return cmd
+		// Add values
+		for key, value := range u.spec.Values {
+			cmd += fmt.Sprintf(" --set %s=%s", key, value)
+		}
+
+		// Add timeout
+		timeout := u.spec.Timeout
+		if timeout == "" {
+			timeout = "300s"
+		}
+		cmd += fmt.Sprintf(" --wait --timeout %s", timeout)
+		
+		return cmd
+	}
 }
 
 // getRepoName extracts or generates a repository name
@@ -400,12 +439,13 @@ func (u *UniversalInstaller) cacheImages() error {
 	switch u.spec.Type {
 	case "helm":
 		source = interfaces.ImageSource{
-			Type:        "helm",
-			ChartName:   u.spec.Chart,
-			ChartRepo:   u.spec.Repo,
-			Version:     u.spec.Version,
-			ChartValues: u.spec.Values,
-			ValuesFile:  u.spec.ValuesFiles,
+			Type:         "helm",
+			ChartName:    u.spec.Chart,
+			ChartRepo:    u.spec.Repo,
+			Version:      u.spec.Version,
+			ChartValues:  u.spec.Values,
+			ValuesFile:   u.spec.ValuesFiles,
+			IsLocalChart: u.isLocalChart(),
 		}
 	case "manifest":
 		source = interfaces.ImageSource{
@@ -531,6 +571,17 @@ func (u *UniversalInstaller) prepareFiles() error {
 		log.Debugf("Prepared %d values files for helm addon %s", len(remoteValuesFiles), u.spec.Name)
 	}
 
+	// Prepare local helm charts
+	if u.spec.Type == "helm" && u.isLocalChart() {
+		remoteChartPath, err := u.prepareLocalChart(ctx, fileManager)
+		if err != nil {
+			return fmt.Errorf("failed to prepare local chart: %w", err)
+		}
+		// Update chart path to remote path
+		u.spec.Chart = remoteChartPath
+		log.Debugf("Prepared local chart for helm addon %s: %s", u.spec.Name, remoteChartPath)
+	}
+
 	// Prepare manifest files for manifest addons
 	if u.spec.Type == "manifest" && len(u.spec.Files) > 0 {
 		remoteManifestFiles, err := fileManager.PrepareValuesFiles(ctx, u.spec.Files, u.sshRunner, u.controllerNode, fmt.Sprintf("addon-%s-manifest", u.spec.Name))
@@ -542,4 +593,41 @@ func (u *UniversalInstaller) prepareFiles() error {
 	}
 
 	return nil
+}
+
+// isLocalChart determines if the current spec uses a local chart
+func (u *UniversalInstaller) isLocalChart() bool {
+	return u.spec.IsLocalChart()
+}
+
+// prepareLocalChart handles uploading local charts to the controller node
+func (u *UniversalInstaller) prepareLocalChart(ctx context.Context, fileManager interfaces.ValuesFileManager) (string, error) {
+	localChartPath := u.spec.Chart
+	
+	// Generate remote chart path
+	remoteChartPath := fmt.Sprintf("/tmp/addon-%s-chart", u.spec.Name)
+	
+	// Check if it's a directory or file
+	if info, err := os.Stat(localChartPath); err == nil {
+		if info.IsDir() {
+			// Upload directory
+			log.Debugf("Uploading local chart directory from %s to %s on controller node", localChartPath, remoteChartPath)
+			err := u.sshRunner.UploadDirectory(u.controllerNode, localChartPath, remoteChartPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to upload chart directory %s: %w", localChartPath, err)
+			}
+			return remoteChartPath, nil
+		} else {
+			// Upload single file (chart package)
+			remoteChartFile := fmt.Sprintf("/tmp/addon-%s-chart.tgz", u.spec.Name)
+			log.Debugf("Uploading local chart package from %s to %s on controller node", localChartPath, remoteChartFile)
+			err := u.sshRunner.UploadFile(u.controllerNode, localChartPath, remoteChartFile)
+			if err != nil {
+				return "", fmt.Errorf("failed to upload chart package %s: %w", localChartPath, err)
+			}
+			return remoteChartFile, nil
+		}
+	} else {
+		return "", fmt.Errorf("local chart path does not exist: %s", localChartPath)
+	}
 }

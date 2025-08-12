@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -17,9 +19,9 @@ type AddonSpec struct {
 	Files []string `json:"files,omitempty" yaml:"files,omitempty"` // Manifest file paths/URLs
 
 	// Helm type fields
-	Repo       string            `json:"repo,omitempty" yaml:"repo,omitempty"`             // Helm repository URL
-	Chart      string            `json:"chart,omitempty" yaml:"chart,omitempty"`           // Helm chart name
-	Values     map[string]string `json:"values,omitempty" yaml:"values,omitempty"`         // Helm values overrides
+	Repo        string            `json:"repo,omitempty" yaml:"repo,omitempty"`               // Helm repository URL
+	Chart       string            `json:"chart,omitempty" yaml:"chart,omitempty"`             // Helm chart name
+	Values      map[string]string `json:"values,omitempty" yaml:"values,omitempty"`           // Helm values overrides
 	ValuesFiles []string          `json:"valuesFiles,omitempty" yaml:"valuesFiles,omitempty"` // Values file paths (supports multiple files)
 
 	// Advanced configuration fields (full customization options in config files)
@@ -43,8 +45,12 @@ func (a *AddonSpec) ValidateMinimal() error {
 
 	switch a.Type {
 	case "helm":
-		if a.Repo == "" || a.Chart == "" {
-			return fmt.Errorf("repo and chart are required for helm type addon")
+		if a.Chart == "" {
+			return fmt.Errorf("chart is required for helm type addon")
+		}
+		// repo is only required for remote charts (not local charts)
+		if !a.IsLocalChart() && a.Repo == "" {
+			return fmt.Errorf("repo is required for remote helm charts")
 		}
 	case "manifest":
 		if len(a.Files) == 0 {
@@ -85,16 +91,40 @@ func (a *AddonSpec) IsEnabled() bool {
 	return *a.Enabled
 }
 
+// IsLocalChart determines if the chart field refers to a local chart path
+func (a *AddonSpec) IsLocalChart() bool {
+	if a.Type != "helm" || a.Chart == "" {
+		return false
+	}
+
+	// Check if chart path starts with / or ./ or ../ (Unix paths)
+	if strings.HasPrefix(a.Chart, "/") || strings.HasPrefix(a.Chart, "./") || strings.HasPrefix(a.Chart, "../") {
+		return true
+	}
+
+	// Check if chart path contains : (Windows drive letter like C:)
+	if strings.Contains(a.Chart, ":") && !strings.HasPrefix(a.Chart, "http") {
+		return true
+	}
+
+	// Check if it's a relative path that exists locally
+	if _, err := os.Stat(a.Chart); err == nil {
+		return true
+	}
+
+	return false
+}
+
 // Equals compares two AddonSpec for content equality (excluding metadata like labels/annotations)
 func (a *AddonSpec) Equals(other *AddonSpec) bool {
 	if a.Name != other.Name || a.Type != other.Type || a.Version != other.Version {
 		return false
 	}
-	
+
 	if a.IsEnabled() != other.IsEnabled() {
 		return false
 	}
-	
+
 	// Compare type-specific fields
 	switch a.Type {
 	case "helm":
@@ -115,22 +145,22 @@ func (a *AddonSpec) Equals(other *AddonSpec) bool {
 			return false
 		}
 	}
-	
+
 	// Compare advanced configuration
 	if a.Namespace != other.Namespace || a.Priority != other.Priority || a.Timeout != other.Timeout {
 		return false
 	}
-	
+
 	// Compare dependencies
 	if !stringSliceEquals(a.Dependencies, other.Dependencies) {
 		return false
 	}
-	
+
 	// Compare pre/post install commands
 	if !stringSliceEquals(a.PreInstall, other.PreInstall) || !stringSliceEquals(a.PostInstall, other.PostInstall) {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -140,22 +170,22 @@ func (a *AddonSpec) HasMajorChanges(other *AddonSpec) bool {
 	if a.Type != other.Type {
 		return true
 	}
-	
+
 	// Namespace change requires reinstallation
 	if a.Namespace != other.Namespace {
 		return true
 	}
-	
+
 	// For helm, changing repo or chart requires reinstallation
 	if a.Type == "helm" && (a.Repo != other.Repo || a.Chart != other.Chart) {
 		return true
 	}
-	
+
 	// For manifest, changing URL requires reinstallation
 	if a.Type == "manifest" && !stringSliceEquals(a.Files, other.Files) {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -205,20 +235,20 @@ const (
 type AddonOperation string
 
 const (
-	AddonOperationInstall   AddonOperation = "Install"   // Install new addon
-	AddonOperationUpdate    AddonOperation = "Update"    // Update existing addon
-	AddonOperationRemove    AddonOperation = "Remove"    // Remove addon (when disabled)
-	AddonOperationNoChange  AddonOperation = "NoChange"  // Keep current state (no changes detected)
+	AddonOperationInstall  AddonOperation = "Install"  // Install new addon
+	AddonOperationUpdate   AddonOperation = "Update"   // Update existing addon
+	AddonOperationRemove   AddonOperation = "Remove"   // Remove addon (when disabled)
+	AddonOperationNoChange AddonOperation = "NoChange" // Keep current state (no changes detected)
 )
 
 // AddonTask describes a specific operation to be performed on an addon
 type AddonTask struct {
 	Name          string         `json:"name"`
-	Operation     AddonOperation `json:"operation"`     // Install, Update, Remove, NoChange
-	Spec          AddonSpec      `json:"spec"`          // Current desired spec
+	Operation     AddonOperation `json:"operation"`               // Install, Update, Remove, NoChange
+	Spec          AddonSpec      `json:"spec"`                    // Current desired spec
 	CurrentStatus *AddonStatus   `json:"currentStatus,omitempty"` // Current installation status
-	Reason        string         `json:"reason"`        // Why this operation is needed
-	Priority      int            `json:"priority"`      // Task priority (from spec)
+	Reason        string         `json:"reason"`                  // Why this operation is needed
+	Priority      int            `json:"priority"`                // Task priority (from spec)
 }
 
 // AddonResource tracks K8s resources created by an addon
@@ -227,8 +257,8 @@ type AddonResource struct {
 	Kind       string `yaml:"kind,omitempty"`
 	Name       string `yaml:"name,omitempty"`
 	Namespace  string `yaml:"namespace,omitempty"`
-	UID        string `yaml:"uid,omitempty"`      // K8s resource UID
-	Created    bool   `yaml:"created,omitempty"`  // Whether created
+	UID        string `yaml:"uid,omitempty"`     // K8s resource UID
+	Created    bool   `yaml:"created,omitempty"` // Whether created
 }
 
 // AddonStatus represents the runtime status of an addon

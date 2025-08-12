@@ -47,4 +47,5 @@ type ImageSource struct {
 	ValuesFile   []string          // For helm charts
 	ManifestFiles []string          // For kubernetes manifests (supports URLs, local files, remote paths)
 	Version      string            // Version information
+	IsLocalChart bool              // True if ChartName is a local chart path (for helm type)
 }

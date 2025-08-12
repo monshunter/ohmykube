@@ -257,18 +257,34 @@ func (c *Client) sftpUpload(localPath, remotePath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %w", err)
 	}
-	defer remoteFile.Close()
 
 	// Copy file using io.Copy (much faster and simpler)
 	log.Debugf("Uploading file: name=%s,size=%s", localInfo.Name(), utils.FormatSize(localInfo.Size()))
 	_, err = io.Copy(remoteFile, localFile)
 	if err != nil {
+		remoteFile.Close()
 		return fmt.Errorf("failed to copy file: %w", err)
 	}
 
-	// Set file permissions (best effort)
-	if err := sftpClient.Chmod(remotePath, localInfo.Mode()); err != nil {
-		log.Warningf("Failed to set remote file permissions: %v", err)
+	// Close the file before setting permissions
+	if err := remoteFile.Close(); err != nil {
+		log.Warningf("Failed to close remote file: %v", err)
+		return fmt.Errorf("failed to close remote file: %w", err)
+	}
+
+	// Verify file was uploaded successfully and set permissions
+	remoteInfo, statErr := sftpClient.Stat(remotePath)
+	if statErr != nil {
+		return fmt.Errorf("file upload verification failed, remote file not found: %w", statErr)
+	}
+
+	// Only attempt to set permissions if file exists and we have a valid mode
+	if localInfo.Mode().IsRegular() {
+		if err := sftpClient.Chmod(remotePath, localInfo.Mode()); err != nil {
+			log.Debugf("Failed to set remote file permissions (non-critical): local=%s, remote=%s, err=%v", localPath, remotePath, err)
+		} else {
+			log.Debugf("Successfully set permissions for remote file: %s (size: %s)", remotePath, utils.FormatSize(remoteInfo.Size()))
+		}
 	}
 
 	return nil
@@ -341,7 +357,7 @@ func (c *Client) sftpUploadDirectory(localDirPath, remoteDirPath string) error {
 
 		// Convert to remote path
 		remoteFilePath := filepath.Join(remoteDirPath, relPath)
-		
+
 		// Handle directories
 		if info.IsDir() {
 			if err := sftpClient.MkdirAll(remoteFilePath); err != nil {
