@@ -169,7 +169,6 @@ var upCmd = &cobra.Command{
 		}
 		// Create cluster configuration
 		var cfg *config.Config
-
 		if cls != nil {
 			// Use existing cluster configuration for resume
 			// Get template from existing node groups (use master template as default)
@@ -179,12 +178,15 @@ var upCmd = &cobra.Command{
 			} else if len(cls.Spec.Nodes.Workers) > 0 {
 				existingTemplate = cls.Spec.Nodes.Workers[0].Template
 			}
-
+			if cls.GetProxyMode() != "" {
+				proxyMode = cls.GetProxyMode()
+			}
 			cfg = &config.Config{
-				Name:     cls.Name,
-				Provider: cls.Spec.Provider,
-				Template: existingTemplate,
-				Parallel: parallel, // Allow override from command line
+				ProxyMode: proxyMode,
+				Name:      cls.Name,
+				Provider:  cls.Spec.Provider,
+				Template:  existingTemplate,
+				Parallel:  parallel, // Allow override from command line
 				Master: config.Resource{
 					CPU:    masterCPU,    // Allow override from command line
 					Memory: masterMemory, // Allow override from command line
