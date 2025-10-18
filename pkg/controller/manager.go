@@ -79,7 +79,7 @@ func NewManager(cfg *config.Config, sshConfig *ssh.SSHConfig, cls *config.Cluste
 		Cluster:      cls,
 		InitOptions:  initializer.DefaultInitOptions(),
 		KubeManager: kube.NewManager(sshRunner, cfg.KubernetesVersion,
-			cls.GetMasterName(), cls.GetProxyMode()),
+			cls.GetMasterName(), cls.GetProxyMode(), cls.Metadata.Name),
 	}
 
 	return manager, nil

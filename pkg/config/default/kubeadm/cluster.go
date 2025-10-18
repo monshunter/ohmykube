@@ -8,7 +8,7 @@ apiVersion: kubeadm.k8s.io/v1beta4
 caCertificateValidityPeriod: 87600h0m0s
 certificateValidityPeriod: 8760h0m0s
 certificatesDir: /etc/kubernetes/pki
-clusterName: kubernetes
+clusterName: %s
 controllerManager: {}
 dns: {}
 encryptionAlgorithm: RSA-2048
@@ -32,7 +32,7 @@ apiServer:
   timeoutForControlPlane: 4m0s
 apiVersion: kubeadm.k8s.io/v1beta3
 certificatesDir: /etc/kubernetes/pki
-clusterName: kubernetes
+clusterName: %s
 controllerManager: {}
 dns: {}
 etcd:
@@ -53,7 +53,7 @@ apiServer:
   timeoutForControlPlane: 4m0s
 apiVersion: kubeadm.k8s.io/v1beta3
 certificatesDir: /etc/kubernetes/pki
-clusterName: kubernetes
+clusterName: %s
 controllerManager: {}
 dns: {}
 etcd:

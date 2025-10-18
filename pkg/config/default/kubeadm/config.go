@@ -40,10 +40,10 @@ type Config struct {
 }
 
 // NewConfig creates a new configuration instance with default values
-func NewConfig(version string, proxyMode string, advertiseAddress string) *Config {
+func NewConfig(version string, proxyMode string, advertiseAddress string, clusterName string) *Config {
 	return &Config{
 		InitConfig:      loadInitConfig(advertiseAddress, version),
-		ClusterConfig:   loadClusterConfig(version),
+		ClusterConfig:   loadClusterConfig(version, clusterName),
 		KubeletConfig:   loadKubeletConfig(),
 		KubeProxyConfig: loadKubeProxyConfig(proxyMode),
 	}
@@ -61,7 +61,7 @@ func LoadFromFile(filePath string) (*Config, error) {
 
 // LoadFromBytes loads configuration from byte data
 func LoadFromBytes(data []byte) (*Config, error) {
-	config := NewConfig("", "", "")
+	config := NewConfig("", "", "", "")
 
 	// Split data into multiple YAML documents
 	docs, err := splitYAMLDocuments(data)
@@ -98,7 +98,7 @@ func LoadFromBytes(data []byte) (*Config, error) {
 
 // MergeWith merges another configuration with the current one
 func (c *Config) MergeWith(other *Config) *Config {
-	result := NewConfig("", "", "")
+	result := NewConfig("", "", "", "")
 
 	// Merge each configuration section
 	if other.InitConfig != nil {
@@ -297,9 +297,12 @@ func loadInitConfig(advertiseAddress string, k8sVersion string) YAMLDocument {
 }
 
 // loadClusterConfig loads the default ClusterConfiguration configuration
-func loadClusterConfig(k8sVersion string) YAMLDocument {
+func loadClusterConfig(k8sVersion string, clusterName string) YAMLDocument {
 	if k8sVersion == "" {
 		k8sVersion = "v1.33.0"
+	}
+	if clusterName == "" {
+		clusterName = "kubernetes"
 	}
 	template := CLUSTER_CONFIG_V1_BETA_4
 	ver := strings.TrimLeft(k8sVersion, "v")
@@ -310,7 +313,7 @@ func loadClusterConfig(k8sVersion string) YAMLDocument {
 		template = CLUSTER_CONFIG_V1_BETA_3_124
 	}
 
-	yamlStr := fmt.Sprintf(template, k8sVersion)
+	yamlStr := fmt.Sprintf(template, clusterName, k8sVersion)
 	var doc YAMLDocument
 	yaml.Unmarshal([]byte(yamlStr), &doc)
 	return doc
@@ -337,9 +340,9 @@ func loadKubeProxyConfig(proxyMode string) YAMLDocument {
 }
 
 // GenerateKubeadmConfig generates kubeadm config and saves it to a temporary file
-func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode string, advertiseAddress string) (string, error) {
+func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode string, advertiseAddress string, clusterName string) (string, error) {
 	// Create base config
-	config := NewConfig(k8sVersion, proxyMode, advertiseAddress)
+	config := NewConfig(k8sVersion, proxyMode, advertiseAddress, clusterName)
 
 	// If custom config exists, load and merge it
 	if customConfigPath != "" {
@@ -380,7 +383,7 @@ func GenerateKubeadmConfig(k8sVersion string, customConfigPath string, proxyMode
 // LoadAndMergeConfigs loads and merges multiple config files
 func LoadAndMergeConfigs(configPaths []string) (*Config, error) {
 	if len(configPaths) == 0 {
-		return NewConfig("", "", ""), nil
+		return NewConfig("", "", "", ""), nil
 	}
 
 	// Load first config as base
@@ -404,5 +407,5 @@ func LoadAndMergeConfigs(configPaths []string) (*Config, error) {
 
 // GetDefaultConfig gets the default kubeadm config
 func GetDefaultConfig() *Config {
-	return NewConfig("", "", "")
+	return NewConfig("", "", "", "")
 }

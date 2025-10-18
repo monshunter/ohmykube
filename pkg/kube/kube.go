@@ -23,6 +23,7 @@ type ImageSource struct {
 // Manager stores kubeadm configuration
 type Manager struct {
 	sshRunner         interfaces.SSHRunner
+	ClusterName       string
 	MasterNode        string
 	PodCIDR           string
 	ServiceCIDR       string
@@ -34,9 +35,10 @@ type Manager struct {
 
 // NewManager creates a new kubeadm configuration
 func NewManager(sshManager interfaces.SSHRunner, k8sVersion string,
-	masterNode string, proxyMode string) *Manager {
+	masterNode string, proxyMode string, clusterName string) *Manager {
 	return &Manager{
 		sshRunner:         sshManager,
+		ClusterName:       clusterName,
 		MasterNode:        masterNode,
 		PodCIDR:           "10.244.0.0/16",
 		ServiceCIDR:       "10.96.0.0/12",
@@ -66,6 +68,7 @@ func (k *Manager) InitMaster() error {
 		k.CustomConfigPath,
 		k.ProxyMode,
 		masterIP,
+		k.ClusterName,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to generate kubeadm configuration: %w", err)
@@ -144,7 +147,7 @@ func (k *Manager) GetKubeconfig(clusterName string) (string, error) {
 	}
 
 	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
-	if err := os.WriteFile(kubeconfigPath, []byte(output), 0644); err != nil {
+	if err := os.WriteFile(kubeconfigPath, []byte(processKubeconfig(output, clusterName)), 0644); err != nil {
 		return "", fmt.Errorf("failed to write kubeconfig file: %w", err)
 	}
 
@@ -221,7 +224,7 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 	}
 
 	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
-	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0644); err != nil {
+	if err := os.WriteFile(kubeconfigPath, []byte(processKubeconfig(kubeconfigContent, clusterName)), 0644); err != nil {
 		return "", fmt.Errorf("failed to save kubeconfig file: %w", err)
 	}
 
@@ -231,4 +234,15 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 		kubeconfigPath = strings.Replace(kubeconfigPath, homeDir, "~", 1)
 	}
 	return kubeconfigPath, nil
+}
+
+func processKubeconfig(kubeconfigContent string, clusterName string) string {
+	// Replace kubernetes-admin with {clusterName}-admin to avoid conflicts
+	// when merging multiple cluster kubeconfigs
+	processedConfig := strings.ReplaceAll(kubeconfigContent, "kubernetes-admin", clusterName+"-admin")
+	// Also replace standalone "kubernetes" cluster references if they still exist
+	// We need to be careful not to replace "kubernetes" in URLs or other contexts
+	processedConfig = strings.ReplaceAll(processedConfig, "name: kubernetes\n", "name: "+clusterName+"\n")
+	processedConfig = strings.ReplaceAll(processedConfig, "cluster: kubernetes\n", "cluster: "+clusterName+"\n")
+	return processedConfig
 }
