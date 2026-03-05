@@ -101,6 +101,5 @@ localk8s
 /bin
 /debug*
 # AI
-.claude
 CLAUDE.local.md
 .local
