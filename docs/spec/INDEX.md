@@ -15,6 +15,7 @@
 | 文档 | 版本 | 状态 | 更新日期 |
 |------|------|------|----------|
 | [Addon 系统设计](./addon-system-design.md) | 1.0 | active | 2026-03-05 |
+| [MetalLB IP 地址范围设计](./metallb-ip-range.md) | 1.1 | draft | 2026-03-05 |
 
 ## 缓存系统
 

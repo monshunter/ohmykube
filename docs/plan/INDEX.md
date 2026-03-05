@@ -5,4 +5,8 @@
 
 ---
 
-*暂无计划文档*
+## 1 草稿（Draft）
+
+| 计划 | 文件 | 版本 | 更新日期 |
+|------|------|------|----------|
+| [MetalLB IP 地址范围可配置化](./metallb-ip-range/) | [implementation](./metallb-ip-range/implementation.md) / [checklist](./metallb-ip-range/implementation-checklist.md) | 1.1 | 2026-03-05 |

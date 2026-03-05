@@ -1,0 +1,11 @@
+apiVersion: agent.context/v1alpha1
+kind: PlanContext
+metadata:
+  name: metallb-ip-range
+spec:
+  defaultTarget: backend
+  targets:
+    backend:
+      plan: ./implementation.md
+      checklist: ./implementation-checklist.md
+      spec: ../../spec/metallb-ip-range.md
