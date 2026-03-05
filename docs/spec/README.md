@@ -29,6 +29,7 @@ docs/spec/
 |------|------|
 | `draft` | 草稿，尚未正式生效 |
 | `active` | 生效中，当前有效版本 |
+| `completed` | 已完成，进入维护或归档状态 |
 | `superseded` | 已被取代，需注明新文档路径 |
 | `deprecated` | 已废弃，不再适用 |
 

@@ -8,6 +8,7 @@
 
 | 日期 | Commit Message | 标签 |
 |------|----------------|------|
+| [2026-03-05](2026-03-05.md) | `docs(spec): add project requirements, addon system, and image cache design documents` | #docs |
 | [2026-03-05](2026-03-05.md) | `chore: adapt agent skills and docs templates to ohmykube project structure` | #chore |
 | [2026-03-05](2026-03-05.md) | `chore: add agent skills and multi-AI-tool configuration` | #chore |
 | [2026-03-05](2026-03-05.md) | `docs: initialize documentation directory structure` | #docs |
