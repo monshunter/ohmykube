@@ -546,5 +546,5 @@ func init() {
 
 	// Addon parameter
 	upCmd.Flags().StringSliceVar(&addonsFlag, "addon", nil,
-		`Add addon from JSON spec (repeatable). Format: '{"name":"app-name","type":"helm|manifest","repo":"...","chart":"...","version":"..."}' for helm or '{"name":"app-name","type":"manifest","url":"...","version":"..."}' for manifest`)
+		`Add addon from JSON spec (repeatable). Format: '{"name":"app-name","type":"helm|manifest","repo":"...","chart":"...","version":"..."}' for helm or '{"name":"app-name","type":"manifest","files":["..."],"version":"..."}' for manifest`)
 }
