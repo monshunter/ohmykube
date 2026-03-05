@@ -22,7 +22,7 @@ Execute checklist-driven development with mandatory Red-Green-Refactor cycles.
 - `--file <path>`: checklist markdown file
 - `--test-checklist <path>`: associated test checklist with `<!-- phase-mapping: -->` annotations
 - `--references <p1>,<p2>,...`: comma-separated markdown references (plan/spec/test-plan)
-- `--section <prefix>`: Phase prefix (e.g., `W1.Auth`) to scope execution to a single checklist section
+- `--section <prefix>`: Phase prefix (e.g., `W1.Provider`) to scope execution to a single checklist section
 
 Rules:
 
@@ -34,7 +34,7 @@ Rules:
 
 When `--section <prefix>` is provided, `/tdd` operates in **section-scoped mode**:
 
-1. **Section matching**: Find the `## ` heading line that starts with `## {prefix}` (e.g., `## W1.Auth:`). Process only the checkbox items (`- [ ] ...` / `- [x] ...`) between that heading and the next `## ` heading (or end of file).
+1. **Section matching**: Find the `## ` heading line that starts with `## {prefix}` (e.g., `## W1.Provider:`). Process only the checkbox items (`- [ ] ...` / `- [x] ...`) between that heading and the next `## ` heading (or end of file).
 2. **Step 2 (lifecycle status) is skipped**. The caller (e.g., `/implement` lead agent) is responsible for lifecycle management.
 3. **Step 3 (select next item)** only considers items within the matched section.
 4. **Steps 4-8** are unchanged (Red-Green-Refactor + immediate checklist update).
@@ -145,7 +145,7 @@ When `--test-checklist` is provided and the current implementation phase is comp
 Phase completion detection:
 
 - Sequential mode: the implementation checklist is grouped by `## N` sections (e.g., `## 1 Phase 1`, `## 2 Phase 2`). When the last unchecked item in a section is marked complete, Step 9 triggers.
-- Parallel mode (`--section`): the section is identified by the `--section` prefix (e.g., `W1.Auth`). The phase-mapping uses Wave/Phase IDs: `<!-- phase-mapping: W1.Auth -->`.
+- Parallel mode (`--section`): the section is identified by the `--section` prefix (e.g., `W1.Provider`). The phase-mapping uses Wave/Phase IDs: `<!-- phase-mapping: W1.Provider -->`.
 - Test checklist items reference the `<!-- phase-mapping: {id} -->` annotation immediately following each `## ` heading in the test checklist.
 
 ### Step 10: Completion lifecycle sync

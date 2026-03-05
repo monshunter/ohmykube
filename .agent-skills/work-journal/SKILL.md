@@ -20,12 +20,13 @@ Before proceeding, analyze the uncommitted changes to determine if they should b
 
 1. Run `git diff --stat HEAD` to see all changed files
 2. Group files by logical area (module/component):
-   - `internal/controller/` - Controller logic
-   - `internal/apiserver/` - API Server
-   - `cmd/cli/` - CLI tool
-   - `test/scenarios/` - Test framework
-   - `web-ui/` - Frontend
-   - `config/` - Configuration (associate with the component it configures)
+   - `cmd/ohmykube/` - CLI 命令入口
+   - `pkg/provider/` - VM Provider
+   - `pkg/initializer/` - 集群初始化
+   - `pkg/addons/` - Addon 系统
+   - `pkg/config/` - 配置管理
+   - `pkg/cache/`, `pkg/ssh/`, `pkg/kube/`, `pkg/utils/` - 基础设施
+   - `test/` - 测试
    - `docs/` - Documentation
 
 3. **If changes span 2+ distinct areas with different scopes**, ask user:

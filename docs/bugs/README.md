@@ -23,17 +23,17 @@
 
 ## 3 模块枚举
 
-`模块` 字段必须使用以下枚举值（不使用展示名如 `API Server`、`Web UI`）：
+`模块` 字段必须使用以下枚举值（不使用展示名如 `VM Provider`、`Addon System`）：
 
 | 枚举值 | 说明 |
 |--------|------|
-| `controller` | Controller 组件 |
-| `api-server` | API Server 组件 |
-| `webhook` | Webhook 组件 |
-| `cli` | 命令行工具 |
-| `ui` | Web 前端 |
-| `schema` | CRD/Proto 定义 |
-| `infra` | 基础设施 |
+| `cli` | CLI 命令 (cmd/) |
+| `provider` | VM Provider (pkg/provider/) |
+| `config` | 配置管理 (pkg/config/) |
+| `addons` | Addon 系统 (pkg/addons/) |
+| `initializer` | 集群初始化 (pkg/initializer/) |
+| `cache` | 镜像/包缓存 (pkg/cache/) |
+| `infra` | 基础设施 (pkg/ssh/, pkg/kube/, pkg/utils/) |
 | `test` | 测试框架 |
 
 ## 4 严重度定义

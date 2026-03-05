@@ -1,6 +1,6 @@
 ---
 name: create-doc
-description: "IMPORTANT: Invoke this skill automatically when creating any document under docs/. Do NOT create documents in docs/ without invoking this skill first. Create project documentation with proper formatting and index updates. Use when creating spec documents, plans, reports, or API docs. Triggers on /create-doc or when asked to create documentation in docs/ directory."
+description: "IMPORTANT: Invoke this skill automatically when creating any document under docs/. Do NOT create documents in docs/ without invoking this skill first. Create project documentation with proper formatting and index updates. Use when creating spec documents, plans, reports, or discussion docs. Triggers on /create-doc or when asked to create documentation in docs/ directory."
 ---
 
 # Create Documentation Skill
@@ -20,7 +20,6 @@ If not, run `/init-docs` first to initialize the documentation structure.
 | Implementation/Refactor/Test plans | `docs/plan/${subject}/` | Work plans with checklists |
 | Code review/Validation reports | `docs/reports/` | Review results, validation |
 | Agent analysis discussions | `docs/discuss/` | Analysis, decision records |
-| API definitions | `docs/apis/` | Interface specifications |
 | Work journals | `docs/work-journal/` | Daily progress (use /work-journal) |
 | Bug records | `docs/bugs/` | Bug diagnosis records (use /bug-report) |
 
@@ -36,7 +35,6 @@ If not, run `/init-docs` first to initialize the documentation structure.
 | Implementation/Test plans | `docs/plan/README.md` |
 | Code review/Validation reports | `docs/reports/README.md` |
 | Agent analysis discussions | `docs/discuss/README.md` |
-| API definitions | `docs/apis/README.md` |
 | Bug records | `docs/bugs/README.md` (prefer using `/bug-report` skill) |
 
 The README contains: naming conventions, template format, checklist.
@@ -87,7 +85,7 @@ New documents default to `draft`. Field order is fixed and must not be rearrange
 **context.yaml** must be generated with the plan. Minimal template:
 
 ```yaml
-apiVersion: ferry.agent.context/v1alpha1
+apiVersion: agent.context/v1alpha1
 kind: PlanContext
 metadata:
   name: ${subject}

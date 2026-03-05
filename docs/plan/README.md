@@ -100,17 +100,16 @@ docs/plan/
 
 | Phase | 描述 | Agent 角色 | 依赖 | 文件范围 | 预估项数 |
 |-------|------|-----------|------|----------|----------|
-| W0.Design | 接口契约确认 | lead | — | docs/ | 3 |
-| W1.Auth | 认证基础设施 | apiserver-auth | W0 | internal/apiserver/auth/ | 6 |
-| W1.Frontend | 前端登录页 | frontend | W0 | ui/src/ | 5 |
-| W1.Config | 配置与 RBAC | config | W0 | config/ | 4 |
-| W2.Service | Service 层集成 | apiserver-service | W1.Auth | internal/apiserver/grpc/, internal/apiserver/http/ | 5 |
-| W2.Test | 场景测试 | test | W1.Auth, W1.Frontend | test/scenarios/ | 6 |
+| W0.Design | 方案设计 | lead | — | docs/ | 3 |
+| W1.Provider | VM Provider 实现 | provider | W0 | pkg/provider/ | 5 |
+| W1.Config | 配置管理 | config | W0 | pkg/config/ | 4 |
+| W2.Init | 集群初始化集成 | initializer | W1.Provider, W1.Config | pkg/initializer/ | 5 |
+| W2.Test | 测试 | test | W1.Provider | test/ | 4 |
 | W3.Verify | 端到端验收 | lead | W2.* | — | 3 |
 
 ## 4 实施步骤
 
-### W0.Design: 接口契约确认
+### W0.Design: 方案设计
 <!-- agent: lead -->
 <!-- files: docs/ -->
 <!-- depends-on: — -->
@@ -120,13 +119,13 @@ docs/plan/
 
 具体步骤描述。
 
-### W1.Auth: 认证基础设施
-<!-- agent: apiserver-auth -->
-<!-- files: internal/apiserver/auth/** -->
+### W1.Provider: VM Provider 实现
+<!-- agent: provider -->
+<!-- files: pkg/provider/** -->
 <!-- depends-on: W0 -->
-<!-- est-items: 6 -->
+<!-- est-items: 5 -->
 
-#### W1.Auth.1 任务描述
+#### W1.Provider.1 任务描述
 
 具体步骤描述。
 
@@ -152,36 +151,30 @@ docs/plan/
 
 **关联计划**: [计划文档](./implementation.md)
 
-## W0.Design: 接口契约确认 [lead]
+## W0.Design: 方案设计 [lead]
 
-- [ ] W0.Design.1 冻结接口契约与错误语义（文档）
+- [ ] W0.Design.1 冻结接口契约与设计方案（文档）
 - [ ] W0.Design.2 产出角色拆分与依赖图
-- [ ] W0.Design.3 冻结验收标准与回归范围
+- [ ] W0.Design.3 冻结验收标准
 
-## W1.Auth: 认证基础设施 [apiserver-auth]
+## W1.Provider: VM Provider 实现 [provider]
 
-- [ ] W1.Auth.1 HTTP 客户端工厂
-- [ ] W1.Auth.2 OIDC Discovery Resolver
-- [ ] W1.Auth.3 OIDC JWKS Resolver
+- [ ] W1.Provider.1 Lima YAML 配置生成
+- [ ] W1.Provider.2 VM 生命周期管理
 
-## W1.Frontend: 前端登录页 [frontend]（与 W1.Auth 并行）
-
-- [ ] W1.Frontend.1 Auth Context
-- [ ] W1.Frontend.2 登录页组件
-
-## W1.Config: 配置与 RBAC [config]（与 W1.Auth 并行）
+## W1.Config: 配置管理 [config]（与 W1.Provider 并行）
 
 - [ ] W1.Config.1 配置校验
-- [ ] W1.Config.2 RBAC 更新
+- [ ] W1.Config.2 默认值处理
 
-## W2.Service: Service 层集成 [apiserver-service]
+## W2.Init: 集群初始化集成 [initializer]
 
-- [ ] W2.Service.1 gRPC 集成
-- [ ] W2.Service.2 HTTP 集成
+- [ ] W2.Init.1 kubeadm 集成
+- [ ] W2.Init.2 CNI 安装
 
-## W2.Test: 场景测试 [test]（与 W2.Service 并行）
+## W2.Test: 测试 [test]（与 W2.Init 并行）
 
-- [ ] W2.Test.1 测试场景编写
+- [ ] W2.Test.1 测试用例编写
 - [ ] W2.Test.2 测试运行与验证
 
 ## W3.Verify: 端到端验收 [lead]
@@ -219,8 +212,8 @@ docs/plan/
 **并行模式**（实施 checklist 按 `## W{n}.{Phase}` 分组）：
 
 ```markdown
-## 1 密码模块测试
-<!-- phase-mapping: W1.Auth -->
+## 1 Provider 模块测试
+<!-- phase-mapping: W1.Provider -->
 
 - [ ] 1.1 Argon2id 哈希测试
 - [ ] 1.2 密码验证测试
@@ -255,7 +248,7 @@ docs/plan/
 ### 6.1 最小模板
 
 ```yaml
-apiVersion: ferry.agent.context/v1alpha1
+apiVersion: agent.context/v1alpha1
 kind: PlanContext
 metadata:
   name: ${subject}
@@ -271,7 +264,7 @@ spec:
 含测试计划的模板：
 
 ```yaml
-apiVersion: ferry.agent.context/v1alpha1
+apiVersion: agent.context/v1alpha1
 kind: PlanContext
 metadata:
   name: ${subject}
@@ -290,7 +283,7 @@ spec:
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `apiVersion` | 是 | 固定 `ferry.agent.context/v1alpha1` |
+| `apiVersion` | 是 | 固定 `agent.context/v1alpha1` |
 | `kind` | 是 | 固定 `PlanContext` |
 | `metadata.name` | 是 | 计划标识，与目录名一致 |
 | `spec.defaultTarget` | 是 | 默认执行目标 |

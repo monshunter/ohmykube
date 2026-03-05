@@ -8,7 +8,6 @@
 | [计划文档](./plan/) | 实施计划、Checklist | [INDEX](./plan/INDEX.md) |
 | [审查报告](./reports/) | Review、评估报告 | [INDEX](./reports/INDEX.md) |
 | [讨论存档](./discuss/) | Agent 分析讨论 | [INDEX](./discuss/INDEX.md) |
-| [API 定义](./apis/) | 接口定义（JSON） | [INDEX](./apis/INDEX.md) |
 | [工作日志](./work-journal/) | 开发日志 | [INDEX](./work-journal/INDEX.md) |
 | [Bug 知识库](./bugs/) | Bug 诊断记录与模式库 | [INDEX](./bugs/INDEX.md) |
 

@@ -355,7 +355,7 @@ def scan_directory_targets(
                 targets[target_name] = target
 
     # --- Standalone files (no checklist pair) ---
-    # e.g., acceptance.md, review-checklist.md, controller-webhook-plan.md
+    # e.g., acceptance.md, review-checklist.md, provider-network-plan.md
     standalone_targets = {}
     uncovered_standalone_files = []  # standalone plan docs to add as references
 
@@ -444,7 +444,7 @@ def scan_directory_targets(
             targets[name] = target
 
     # Add uncovered standalone files as references to the default target
-    # e.g., controller-webhook-plan.md in events-and-metrics,
+    # e.g., provider-bootstrap-plan.md in cluster-bootstrap,
     # test-completion-plan.md in template, implementation.md without checklist
     if uncovered_standalone_files and targets:
         # Find the best target to attach references to
@@ -504,7 +504,7 @@ def format_yaml(dir_name: str, config: dict) -> str:
     requiring PyYAML as a dependency.
     """
     lines = [
-        "apiVersion: ferry.agent.context/v1alpha1",
+        "apiVersion: agent.context/v1alpha1",
         "kind: PlanContext",
         "metadata:",
         f"  name: {dir_name}",

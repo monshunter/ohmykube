@@ -114,8 +114,8 @@ All of the following must be true for parallel mode:
 
 1. Plan Header `执行模式` is `parallel`.
 2. Plan document contains structured DAG metadata in HTML comments under `### W{n}.{Phase}:` headings:
-   - `<!-- agent: {role} -->` — role ID from `CLAUDE.md` §6.1
-   - `<!-- depends-on: {deps} -->` — comma-separated Phase prefixes (e.g., `W1.Schema, W1.Auth`)
+   - `<!-- agent: {role} -->` — role ID from `AGENTS.md` §5.1
+   - `<!-- depends-on: {deps} -->` — comma-separated Phase prefixes (e.g., `W1.Provider, W1.Config`)
 3. Runtime has `TeamCreate` and `Task` tools available.
 
 If any condition is not met → **sequential path** (Step 6A). Report the reason to the user.
@@ -126,7 +126,7 @@ When parallel eligible:
 
 1. Find all `### W{n}.{Phase}: ...` headings in the plan document.
 2. For each heading, extract HTML comments: `agent`, `depends-on`.
-3. Group phases by Wave number (e.g., `W1` = `[W1.Schema, W1.Auth, W1.Config, W1.Deploy]`).
+3. Group phases by Wave number (e.g., `W1` = `[W1.Provider, W1.Config]`).
 4. Build dependency edges from `depends-on` values.
 
 #### 5.3 Determine current Wave
@@ -189,13 +189,13 @@ For each incomplete phase in the current Wave:
 2. **Task** — spawn a teammate agent:
    - `subagent_type`: `general-purpose`
    - `team_name`: the team name from 6B.1
-   - `name`: the `agent` role ID (e.g., `apiserver-auth`, `apiserver-infra`, `config`)
+   - `name`: the `agent` role ID (e.g., `provider`, `initializer`, `config`)
    - `mode`: `bypassPermissions`
    - `prompt`: Include the following in the teammate prompt:
      - The checklist file path, references, and section prefix
      - Instruction to invoke `/tdd --file {checklist} --section {phase-prefix} --references {refs}`
      - The plan document content for the relevant section (so the teammate has full context)
-     - File ownership boundaries from `CLAUDE.md` §6.1
+     - File ownership boundaries from `AGENTS.md` §5.1
    - `run_in_background`: `true` (to allow parallel spawning)
 
 3. Spawn all teammates for the same Wave **in a single message** (parallel tool calls).

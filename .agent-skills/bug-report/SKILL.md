@@ -51,7 +51,7 @@ If `investigation.json` exists (current directory or user-provided path), normal
 
 If no `investigation.json` is available, or the artifact is missing required fields, collect interactively from the user:
 - One-line title
-- Module (must be enum: `controller` / `api-server` / `webhook` / `cli` / `ui` / `schema` / `infra` / `test`)
+- Module (must be enum: `cli` / `provider` / `config` / `addons` / `initializer` / `cache` / `infra` / `test`)
 - Severity (`critical` / `high` / `medium` / `low`)
 - Status (`open` / `investigating` / `resolved`)
 - Symptom description
@@ -59,11 +59,11 @@ If no `investigation.json` is available, or the artifact is missing required fie
 - Root cause analysis (if resolved)
 - Fix details (if resolved)
 - Verification details (if resolved)
-- Related commit title (if resolved), e.g. `fix(api-server): subject (BUG-NNNN)`
+- Related commit title (if resolved), e.g. `fix(provider): subject (BUG-NNNN)`
 
 **Validation gates before writing**:
-- Module value must exactly match enum values: `controller` / `api-server` / `webhook` / `cli` / `ui` / `schema` / `infra` / `test`
-- Explicitly reject display names such as `API Server`, `Web UI`, `Controller`, and ask for enum value
+- Module value must exactly match enum values: `cli` / `provider` / `config` / `addons` / `initializer` / `cache` / `infra` / `test`
+- Explicitly reject display names such as `VM Provider`, `Addon System`, `CLI`, and ask for enum value
 - Status must be one of `open` / `investigating` / `resolved`
 
 ### Step 4: Create Bug record
@@ -85,12 +85,12 @@ Add a new row to the appropriate module table in `docs/bugs/INDEX.md`:
 ```
 
 **Module-to-table mapping** (use the table section heading):
-- `controller` → Controller
-- `api-server` → API Server
-- `webhook` → Webhook
 - `cli` → CLI
-- `ui` → Web UI
-- `schema` → Schema
+- `provider` → Provider
+- `config` → Config
+- `addons` → Addons
+- `initializer` → Initializer
+- `cache` → Cache
 - `infra` → Infra
 - `test` → Test
 
@@ -151,7 +151,7 @@ Compatibility note: this skill supports both nested format (`investigation.failu
 - [ ] Allocate Bug ID from INDEX.md (verify no conflict)
 - [ ] Collect Bug information (artifact import or interactive)
 - [ ] Validate module field uses enum value (not display name)
-- [ ] Reject display names for module field (`API Server`, `Web UI`, etc.)
+- [ ] Reject display names for module field (`VM Provider`, `Addon System`, etc.)
 - [ ] Validate status constraints (resolved requires root cause/fix/verification/Related commit title)
 - [ ] Run sanitization check (no secrets in record)
 - [ ] Create `docs/bugs/BUG-NNNN.md`

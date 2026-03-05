@@ -33,7 +33,7 @@ except ImportError:
     )
     sys.exit(2)
 
-REQUIRED_API_VERSION = "ferry.agent.context/v1alpha1"
+REQUIRED_API_VERSION = "agent.context/v1alpha1"
 REQUIRED_KIND = "PlanContext"
 
 

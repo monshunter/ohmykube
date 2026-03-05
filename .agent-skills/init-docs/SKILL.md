@@ -30,9 +30,6 @@ docs/
 ├── reports/
 │   ├── README.md          # Report specification
 │   └── INDEX.md           # Report index (empty)
-├── apis/
-│   ├── README.md          # API doc specification
-│   └── INDEX.md           # API index (empty)
 ├── discuss/
 │   ├── README.md          # Discussion specification
 │   └── INDEX.md           # Discussion index (empty)
@@ -63,7 +60,6 @@ For each subdirectory, create README.md and INDEX.md from templates:
 | `plan/` | [plan-readme.md](./templates/plan-readme.md) | [plan-index.md](./templates/plan-index.md) |
 | `spec/` | [spec-readme.md](./templates/spec-readme.md) | [spec-index.md](./templates/spec-index.md) |
 | `reports/` | [reports-readme.md](./templates/reports-readme.md) | [reports-index.md](./templates/reports-index.md) |
-| `apis/` | [apis-readme.md](./templates/apis-readme.md) | [apis-index.md](./templates/apis-index.md) |
 | `discuss/` | [discuss-readme.md](./templates/discuss-readme.md) | [discuss-index.md](./templates/discuss-index.md) |
 | `bugs/` | [bugs-readme.md](./templates/bugs-readme.md) | [bugs-index.md](./templates/bugs-index.md) + [bugs-patterns.md](./templates/bugs-patterns.md) |
 
