@@ -64,6 +64,7 @@ type Config struct {
 	CNI               string
 	CSI               string
 	LB                string
+	LBAddressRange    string
 	UpdateSystem      bool
 	OutputFormat      string
 	// Node metadata configurations
@@ -116,6 +117,10 @@ func (c *Config) SetCSIType(csiType string) {
 
 func (c *Config) SetLBType(lbType string) {
 	c.LB = lbType
+}
+
+func (c *Config) SetLBAddressRange(addrRange string) {
+	c.LBAddressRange = addrRange
 }
 
 func (c *Config) SetUpdateSystem(updateSystem bool) {

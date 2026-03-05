@@ -56,6 +56,10 @@ spec:
     
     # Load balancer: metallb (optional, leave empty to disable)
     # loadbalancer: metallb
+
+    # MetalLB IP address range (format: "startIP-endIP")
+    # If not specified, auto-derived from control node IP (.200-.250)
+    # lbAddressRange: "192.168.64.200-192.168.64.210"
   
   # Storage configuration
   storage:

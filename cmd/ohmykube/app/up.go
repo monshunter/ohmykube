@@ -56,6 +56,9 @@ var (
 	workerUploadFiles        []string
 	workerUploadDirs         []string
 
+	// LB address range
+	lbAddressRange string
+
 	// Addon configuration
 	addonsFlag []string // --addon (repeatable)
 )
@@ -158,6 +161,11 @@ var upCmd = &cobra.Command{
 			}
 		}
 
+		effectiveLB := effectiveLBForRangeValidation(lb, cls)
+		if err := validateLBRangeConstraintWith(effectiveLB, lbAddressRange, cmd.Flags().Changed("lb")); err != nil {
+			return err
+		}
+
 		sshConfig, err := ssh.NewSSHConfig(password, clusterName)
 		if err != nil {
 			return err
@@ -206,6 +214,16 @@ var upCmd = &cobra.Command{
 			cfg.SetLBType(cls.GetLoadBalancer())
 			cfg.SetUpdateSystem(cls.GetUpdateSystem())
 
+			// Handle LB address range for resume
+			resumeRange, rangeErr := prepareLBAddressRange(lbAddressRange, cls)
+			if rangeErr != nil {
+				return fmt.Errorf("invalid --lb-range: %w", rangeErr)
+			}
+			if resumeRange != "" {
+				cfg.SetLBAddressRange(resumeRange)
+				cls.SetLBAddressRange(resumeRange)
+			}
+
 			log.Infof("🔄 Resuming cluster creation from previous state")
 		} else {
 			// Create new cluster configuration
@@ -230,6 +248,15 @@ var upCmd = &cobra.Command{
 			cfg.SetLBType(lb)
 			cfg.SetCSIType(csi)
 			cfg.SetParallel(parallel)
+
+			// Normalize and set LB address range for new cluster
+			if lbAddressRange != "" {
+				normalizedRange, rangeErr := prepareLBAddressRange(lbAddressRange, nil)
+				if rangeErr != nil {
+					return fmt.Errorf("invalid --lb-range: %w", rangeErr)
+				}
+				cfg.SetLBAddressRange(normalizedRange)
+			}
 
 			// Parse and set node metadata
 			masterMetadata, err := parseNodeMetadata(masterLabels, masterAnnotations, masterTaints)
@@ -335,6 +362,62 @@ func validateLBProxyModeCompatibility(lb, proxyMode string) error {
 		return fmt.Errorf("MetalLB requires IPVS proxy mode, but proxy-mode is set to '%s'. MetalLB will not work properly with iptables mode", proxyMode)
 	}
 	return nil
+}
+
+// prepareLBAddressRange normalizes and validates the LB range for a new cluster.
+// If existingCluster is non-nil, it applies resume semantics (persisted value takes priority).
+// Returns the final normalized range to use (may be empty if not specified).
+func prepareLBAddressRange(input string, existingCluster *config.Cluster) (string, error) {
+	if existingCluster != nil {
+		persisted := existingCluster.GetLBAddressRange()
+		if persisted != "" {
+			if input != "" {
+				normalized, err := normalizeAndValidateLBAddressRange(input)
+				if err == nil && normalized != persisted {
+					log.Warningf("Ignoring --lb-range %q: cluster already has persisted range %q", input, persisted)
+				}
+			}
+			return persisted, nil
+		}
+		// No persisted value; fall through to use CLI input if provided
+	}
+	if input == "" {
+		return "", nil
+	}
+	return normalizeAndValidateLBAddressRange(input)
+}
+
+// validateLBRangeConstraint returns an error when --lb-range is specified but --lb is not metallb.
+func validateLBRangeConstraint() error {
+	return validateLBRangeConstraintWith(lb, lbAddressRange, true)
+}
+
+func validateLBRangeConstraintWith(lbType, addrRange string, lbExplicit bool) error {
+	addrRange = strings.TrimSpace(addrRange)
+
+	if lbExplicit && lbType == "metallb" && addrRange == "" {
+		return fmt.Errorf("--lb-range is required when --lb metallb is specified")
+	}
+
+	if addrRange != "" && lbType != "metallb" {
+		return fmt.Errorf("--lb-range can only be used with --lb metallb, got --lb %q", lbType)
+	}
+	return nil
+}
+
+func effectiveLBForRangeValidation(flagLB string, cls *config.Cluster) string {
+	if cls != nil {
+		if clusterLB := cls.GetLoadBalancer(); clusterLB != "" {
+			return clusterLB
+		}
+	}
+	return flagLB
+}
+
+// normalizeAndValidateLBAddressRange validates and normalizes an LB address range.
+// Accepts "startIP-endIP" or "startIP - endIP", returns "startIP - endIP".
+func normalizeAndValidateLBAddressRange(input string) (string, error) {
+	return utils.NormalizeAndValidateIPv4Range(input)
 }
 
 // isValidClusterConfig validates that a cluster configuration is complete and valid
@@ -501,6 +584,8 @@ func init() {
 		"CSI type to install (local-path-provisioner, rook-ceph, none)")
 	upCmd.Flags().StringVar(&lb, "lb", "",
 		`LoadBalancer (only "metallb" is supported for now, automatically sets proxy-mode to ipvs), leave empty to disable`)
+	upCmd.Flags().StringVar(&lbAddressRange, "lb-range", "",
+		`MetalLB IP address range (format: "startIP-endIP", e.g. "192.168.64.200-192.168.64.210")`)
 
 	// Node metadata flags
 	upCmd.Flags().StringArrayVar(&masterLabels, "master-labels", []string{},

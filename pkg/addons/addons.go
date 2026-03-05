@@ -148,11 +148,16 @@ func (m *Manager) InstallLB() error {
 		"Installing", "Installing MetalLB LoadBalancer")
 
 	// Use MetalLB installer
-	metallbInstaller := lb.NewMetalLBInstaller(m.sshRunner, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP())
+	metallbInstaller := lb.NewMetalLBInstaller(m.sshRunner, m.Cluster.GetMasterName(), m.Cluster.GetMasterIP(), m.Cluster.GetLBAddressRange())
 	if err := metallbInstaller.Install(); err != nil {
 		m.Cluster.SetCondition(config.ConditionTypeLBInstalled, config.ConditionStatusFalse,
 			"InstallationFailed", fmt.Sprintf("Failed to install MetalLB: %v", err))
 		return fmt.Errorf("failed to install MetalLB: %w", err)
+	}
+
+	// Persist auto-derived range back to cluster if not already set
+	if m.Cluster.GetLBAddressRange() == "" {
+		m.Cluster.SetLBAddressRange(metallbInstaller.GetAllocatedRange())
 	}
 
 	// Set condition to success

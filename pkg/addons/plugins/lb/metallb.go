@@ -9,6 +9,7 @@ import (
 	"github.com/monshunter/ohmykube/pkg/config/default/metallb"
 	"github.com/monshunter/ohmykube/pkg/interfaces"
 	"github.com/monshunter/ohmykube/pkg/log"
+	"github.com/monshunter/ohmykube/pkg/utils"
 )
 
 // MetalLBInstaller used for installing and configuring MetalLB load balancer
@@ -16,20 +17,28 @@ type MetalLBInstaller struct {
 	sshRunner      interfaces.SSHRunner
 	controllerNode string
 	controllerIP   string
+	addressRange   string // user-specified or persisted range
+	allocatedRange string // final range used after normalization
 	Version        string
 	manifestURL    string
 }
 
 // NewMetalLBInstaller creates a new MetalLB installer
-func NewMetalLBInstaller(sshRunner interfaces.SSHRunner, controllerNode string, controllerIP string) *MetalLBInstaller {
+func NewMetalLBInstaller(sshRunner interfaces.SSHRunner, controllerNode, controllerIP, addressRange string) *MetalLBInstaller {
 	installer := &MetalLBInstaller{
 		sshRunner:      sshRunner,
 		controllerNode: controllerNode,
 		controllerIP:   controllerIP,
+		addressRange:   addressRange,
 		Version:        "v0.14.9",
 	}
 	installer.manifestURL = fmt.Sprintf("https://raw.githubusercontent.com/metallb/metallb/%s/config/manifests/metallb-native.yaml", installer.Version)
 	return installer
+}
+
+// GetAllocatedRange returns the final allocated IP range after installation.
+func (m *MetalLBInstaller) GetAllocatedRange() string {
+	return m.allocatedRange
 }
 
 // Install installs MetalLB load balancer
@@ -64,6 +73,7 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 	if err != nil {
 		return fmt.Errorf("failed to get MetalLB address range: %w", err)
 	}
+	m.allocatedRange = ipRange
 
 	// Import configuration template
 	configYAML := strings.Replace(metallb.CONFIG_YAML, "# - 192.168.64.200 - 192.168.64.250", fmt.Sprintf("- %s", ipRange), 1)
@@ -86,21 +96,28 @@ kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app
 	return nil
 }
 
-// getMetalLBAddressRange gets suitable IP address range for MetalLB
+// normalizeAndValidateRange validates and normalizes an IP address range.
+func normalizeAndValidateRange(input string) (string, error) {
+	return utils.NormalizeAndValidateIPv4Range(input)
+}
+
+// getMetalLBAddressRange gets suitable IP address range for MetalLB.
+// If addressRange is set, it validates and normalizes it.
+// Otherwise, it auto-derives from the controller IP.
 func (m *MetalLBInstaller) getMetalLBAddressRange() (string, error) {
-	// Parse IP address
+	if m.addressRange != "" {
+		return normalizeAndValidateRange(m.addressRange)
+	}
+
+	// Auto-derive from controller IP
 	ipParts := strings.Split(m.controllerIP, ".")
 	if len(ipParts) != 4 {
 		return "", fmt.Errorf("invalid IP address format: %s", m.controllerIP)
 	}
 
-	// Use a range of IP addresses in the same subnet as LoadBalancer IP pool
-	// Example: 192.168.64.100 -> 192.168.64.200-192.168.64.250
 	prefix := strings.Join(ipParts[:3], ".")
-	startIP := 200
-	endIP := 250
-
-	return fmt.Sprintf("%s.%d - %s.%d", prefix, startIP, prefix, endIP), nil
+	derived := fmt.Sprintf("%s.200 - %s.250", prefix, prefix)
+	return normalizeAndValidateRange(derived)
 }
 
 // cacheImages caches required MetalLB images before installation
@@ -115,9 +132,9 @@ func (m *MetalLBInstaller) cacheImages() error {
 
 	// Define MetalLB manifest source
 	source := cache.ImageSource{
-		Type:         "manifest",
+		Type:          "manifest",
 		ManifestFiles: []string{m.manifestURL},
-		Version:      m.Version,
+		Version:       m.Version,
 	}
 
 	// Cache images for all nodes in the cluster

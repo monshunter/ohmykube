@@ -413,11 +413,12 @@ type Cluster struct {
 
 // NetworkingConfig defines networking configuration for the cluster
 type NetworkingConfig struct {
-	ProxyMode     string `yaml:"proxyMode,omitempty"`
-	CNI           string `yaml:"cni,omitempty"`
-	PodSubnet     string `yaml:"podSubnet,omitempty"`
-	ServiceSubnet string `yaml:"serviceSubnet,omitempty"`
-	LoadBalancer  string `yaml:"loadbalancer,omitempty"`
+	ProxyMode      string `yaml:"proxyMode,omitempty"`
+	CNI            string `yaml:"cni,omitempty"`
+	PodSubnet      string `yaml:"podSubnet,omitempty"`
+	ServiceSubnet  string `yaml:"serviceSubnet,omitempty"`
+	LoadBalancer   string `yaml:"loadbalancer,omitempty"`
+	LBAddressRange string `yaml:"lbAddressRange,omitempty"`
 }
 
 // StorageConfig defines storage configuration for the cluster
@@ -549,11 +550,12 @@ func NewCluster(config *Config) *Cluster {
 			Provider:          config.Provider,
 			UpdateSystem:      config.UpdateSystem,
 			Networking: NetworkingConfig{
-				ProxyMode:     config.ProxyMode,
-				CNI:           config.CNI,
-				PodSubnet:     "10.244.0.0/16", // Default pod subnet
-				ServiceSubnet: "10.96.0.0/12",  // Default service subnet
-				LoadBalancer:  config.LB,
+				ProxyMode:      config.ProxyMode,
+				CNI:            config.CNI,
+				PodSubnet:      "10.244.0.0/16", // Default pod subnet
+				ServiceSubnet:  "10.96.0.0/12",  // Default service subnet
+				LoadBalancer:   config.LB,
+				LBAddressRange: config.LBAddressRange,
 			},
 			Storage: StorageConfig{
 				CSI: config.CSI,
@@ -893,6 +895,18 @@ func (c *Cluster) GetLoadBalancer() string {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 	return c.Spec.Networking.LoadBalancer
+}
+
+func (c *Cluster) GetLBAddressRange() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	return c.Spec.Networking.LBAddressRange
+}
+
+func (c *Cluster) SetLBAddressRange(addrRange string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.Spec.Networking.LBAddressRange = addrRange
 }
 
 // GetUpdateSystem returns the update system setting
