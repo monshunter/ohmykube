@@ -76,3 +76,15 @@ func TestOhMyKubeLimaHome(t *testing.T) {
 		t.Errorf("Expected Lima home to be an absolute path, got '%s'", limaHome)
 	}
 }
+
+func TestVMNetworksUseUnmanagedSocketVMNet(t *testing.T) {
+	if !strings.Contains(vmNetworks, `"lima": "user-v2"`) {
+		t.Fatalf("expected VM networks to include user-v2, got %s", vmNetworks)
+	}
+	if !strings.Contains(vmNetworks, `"socket": "/var/run/socket_vmnet"`) {
+		t.Fatalf("expected VM networks to use the running socket_vmnet daemon, got %s", vmNetworks)
+	}
+	if strings.Contains(vmNetworks, `"lima": "shared"`) {
+		t.Fatalf("expected VM networks not to start a second managed shared daemon, got %s", vmNetworks)
+	}
+}

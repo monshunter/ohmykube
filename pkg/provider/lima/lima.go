@@ -25,6 +25,8 @@ type LimaProvider struct {
 	option *options.Options
 }
 
+const vmNetworks = `.networks = [{"lima": "user-v2"}, {"socket": "/var/run/socket_vmnet", "interface": "eth1"}]`
+
 // NewLimaProvider creates a new LimaProvider
 func NewLimaProvider(opt *options.Options) (*LimaProvider, error) {
 	// Ensure limactl is installed
@@ -163,19 +165,13 @@ func (c *LimaProvider) Create(name string, args ...any) error {
 	cpusStr := strconv.Itoa(cpus)
 	memoryStr := strconv.Itoa(memory)
 	diskStr := strconv.Itoa(disk)
-	// shared network interface
-	const networks = `.networks = [{"lima": "user-v2"}, {"lima": "shared", "interface": "eth1"}]`
-
-	// vzNAT network interface
-	// networksYqStrings := `networks=[{"lima": "user-v2"}, {"vzNAT": true, "interface": "eth1"}]`
 	cmd := c.createLimactlCommand("start", c.option.Template,
 		"--name", name,
 		"--cpus", cpusStr,
 		"--memory", memoryStr,
 		"--disk", diskStr,
 		// "--mount-type", "virtiofs",
-		// "--network", "vzNAT",
-		"--set", networks,
+		"--set", vmNetworks,
 		"--plain",
 		"--tty=false",
 	)

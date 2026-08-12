@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08
+
+| 日期 | Commit Message | 标签 |
+|------|----------------|------|
+| [2026-08-12](2026-08-12.md) | `fix(provider): use unmanaged socket_vmnet network (BUG-0002)` | #fix |
+
 ## 2026-03
 
 | 日期 | Commit Message | 标签 |

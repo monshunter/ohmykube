@@ -12,6 +12,7 @@
 
 | ID | 标题 | 严重度 | 状态 | 发现日期 | 关联 Commit |
 |----|------|--------|------|----------|-------------|
+| [BUG-0002](./BUG-0002.md) | Lima managed 与 unmanaged `socket_vmnet` 模式冲突导致集群网络不可达 | high | resolved | 2026-08-12 | `fix(provider): use unmanaged socket_vmnet network (BUG-0002)` |
 
 ## Config
 
