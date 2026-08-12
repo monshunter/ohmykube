@@ -93,6 +93,22 @@ ohmykube shell ohmykube-worker-2
 
 ```
 
+### Registry 访问
+
+为所有运行中的节点配置 Registry endpoint，例如宿主机上的 HTTP Registry：
+
+```bash
+ohmykube registry configure 192.168.10.86:5052 --plain-http
+```
+
+不再使用该 endpoint 时，从所有运行中的节点删除配置：
+
+```bash
+ohmykube registry remove 192.168.10.86:5052
+```
+
+任一运行节点更新失败时，命令整体失败。Registry endpoint 必须使用不含 URL scheme 和 path 的 `HOST:PORT` 格式。
+
 ### 自定义 Kubeadm 配置(未支持，开发中)
 
 您可以提供自定义的 kubeadm 配置文件来覆盖默认设置。支持以下部分：

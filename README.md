@@ -93,6 +93,22 @@ ohmykube shell ohmykube-worker-2
 
 ```
 
+### Registry Access
+
+Configure every running node to use a registry endpoint, for example a plain HTTP registry on the host:
+
+```bash
+ohmykube registry configure 192.168.10.86:5052 --plain-http
+```
+
+Remove the endpoint configuration from every running node when it is no longer needed:
+
+```bash
+ohmykube registry remove 192.168.10.86:5052
+```
+
+Both commands fail if any running node cannot be updated. The registry endpoint must use `HOST:PORT` without a URL scheme or path.
+
 ### Custom Kubeadm Configuration (not supported yet, but coming soon)
 
 You can provide a custom kubeadm configuration file to override the default settings. The following sections are supported:

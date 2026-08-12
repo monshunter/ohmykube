@@ -118,16 +118,24 @@ func (l *ImageLoader) LoadImageToNodes(imageName string, nodes []string, skipArc
 		}
 	}
 
-	if successCount == 0 {
-		return fmt.Errorf("failed to load image to any nodes: %v", lastError)
+	if err := validateLoadResult(successCount, totalNodes, lastError); err != nil {
+		return err
 	}
 
-	if successCount < len(nodes) {
-		log.Warningf("Image loaded to %d/%d nodes", successCount, len(nodes))
-	} else {
-		log.Infof("🎉 Successfully loaded image '%s' to all %d nodes", imageName, successCount)
-	}
+	log.Infof("🎉 Successfully loaded image '%s' to all %d nodes", imageName, successCount)
+	return nil
+}
 
+func validateLoadResult(successCount, totalNodes int, lastError error) error {
+	if totalNodes == 0 {
+		return fmt.Errorf("no target nodes selected")
+	}
+	if successCount != totalNodes {
+		if lastError != nil {
+			return fmt.Errorf("loaded image to %d/%d nodes: %w", successCount, totalNodes, lastError)
+		}
+		return fmt.Errorf("loaded image to %d/%d nodes", successCount, totalNodes)
+	}
 	return nil
 }
 

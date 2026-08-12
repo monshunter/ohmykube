@@ -147,7 +147,7 @@ func (k *Manager) GetKubeconfig(clusterName string) (string, error) {
 	}
 
 	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
-	if err := os.WriteFile(kubeconfigPath, []byte(processKubeconfig(output, clusterName)), 0644); err != nil {
+	if err := writeKubeconfig(kubeconfigPath, []byte(processKubeconfig(output, clusterName))); err != nil {
 		return "", fmt.Errorf("failed to write kubeconfig file: %w", err)
 	}
 
@@ -224,7 +224,7 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 	}
 
 	kubeconfigPath := filepath.Join(clusterDir, "kubeconfig")
-	if err := os.WriteFile(kubeconfigPath, []byte(processKubeconfig(kubeconfigContent, clusterName)), 0644); err != nil {
+	if err := writeKubeconfig(kubeconfigPath, []byte(processKubeconfig(kubeconfigContent, clusterName))); err != nil {
 		return "", fmt.Errorf("failed to save kubeconfig file: %w", err)
 	}
 
@@ -234,6 +234,24 @@ func (k *Manager) DownloadKubeConfig(clusterName string, remotePath string) (str
 		kubeconfigPath = strings.Replace(kubeconfigPath, homeDir, "~", 1)
 	}
 	return kubeconfigPath, nil
+}
+
+func writeKubeconfig(path string, content []byte) (err error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	if err := file.Chmod(0600); err != nil {
+		return err
+	}
+	_, err = file.Write(content)
+	return err
 }
 
 func processKubeconfig(kubeconfigContent string, clusterName string) string {
